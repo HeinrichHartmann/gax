@@ -11,6 +11,7 @@ from .frontmatter import SheetConfig, format_content
 from .formats import get_format
 from . import auth
 from .gdoc import doc
+from .mail import mail
 
 
 @click.group()
@@ -145,8 +146,9 @@ def init(url: str, tab: str, fmt: str):
         sys.exit(1)
 
 
-# Register doc command group
+# Register doc and mail command groups
 main.add_command(doc)
+main.add_command(mail)
 
 
 if __name__ == "__main__":

@@ -10,11 +10,12 @@ CONFIG_DIR = Path.home() / ".config" / "gax"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
 TOKEN_FILE = CONFIG_DIR / "token.json"
 
-# Scopes needed for Google Sheets and Docs
+# Scopes needed for Google Sheets, Docs, and Gmail
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/documents.readonly",
+    "https://www.googleapis.com/auth/gmail.readonly",
 ]
 
 # Default OAuth client credentials (public client for CLI apps)

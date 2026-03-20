@@ -1,0 +1,322 @@
+"""Gmail sync for gax.
+
+Implements pull command for archiving email threads as multipart markdown (ADR 004).
+"""
+
+import base64
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+import click
+from googleapiclient.discovery import build
+
+from .auth import get_authenticated_credentials
+from .store import store_blob
+
+
+@dataclass
+class Attachment:
+    """Email attachment metadata."""
+    name: str
+    size: int
+    mime_type: str
+    url: str  # file:// URL to CAS blob
+
+
+@dataclass
+class Message:
+    """A single email message."""
+    message_id: str
+    thread_id: str
+    from_addr: str
+    to_addr: str
+    subject: str
+    date: str  # ISO format
+    body: str
+    attachments: list[Attachment] = field(default_factory=list)
+
+
+@dataclass
+class Section:
+    """A section of a multipart mail document."""
+    title: str
+    source: str
+    time: str
+    thread_id: str
+    section: int
+    section_title: str
+    from_addr: str
+    to_addr: str
+    date: str
+    content: str
+    attachments: list[Attachment] = field(default_factory=list)
+    content_length: Optional[int] = None
+
+
+# =============================================================================
+# Multipart format functions
+# =============================================================================
+
+def needs_content_length(content: str) -> bool:
+    """Check if content needs content-length header."""
+    return '\n---\n' in content or content.startswith('---\n') or content.endswith('\n---')
+
+
+def format_section(section: Section) -> str:
+    """Format a single section as YAML header + markdown body."""
+    lines = [
+        '---',
+        f'title: {section.title}',
+        f'source: {section.source}',
+        f'time: {section.time}',
+        f'thread_id: {section.thread_id}',
+        f'section: {section.section}',
+        f'section_title: {section.section_title}',
+        f'from: {section.from_addr}',
+        f'to: {section.to_addr}',
+        f'date: {section.date}',
+    ]
+
+    if section.attachments:
+        lines.append('attachments:')
+        for att in section.attachments:
+            lines.append(f'  - name: {att.name}')
+            lines.append(f'    size: {att.size}')
+            lines.append(f'    url: {att.url}')
+
+    content = section.content
+    if needs_content_length(content):
+        content_bytes = content.encode('utf-8')
+        lines.append(f'content-length: {len(content_bytes)}')
+
+    lines.append('---')
+    return '\n'.join(lines) + '\n' + content
+
+
+def format_multipart(sections: list[Section]) -> str:
+    """Assemble sections into multipart markdown string."""
+    return ''.join(format_section(s) for s in sections)
+
+
+# =============================================================================
+# Gmail API functions
+# =============================================================================
+
+def extract_thread_id(url_or_id: str) -> str:
+    """Extract thread ID from Gmail URL or return as-is."""
+    # Gmail URL format: https://mail.google.com/mail/u/0/#inbox/FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV
+    # or: https://mail.google.com/mail/u/0/#label/..../FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV
+    match = re.search(r'#[^/]+/([A-Za-z0-9]+)$', url_or_id)
+    if match:
+        return match.group(1)
+
+    # Already an ID
+    if re.fullmatch(r'[A-Za-z0-9]+', url_or_id):
+        return url_or_id
+
+    raise ValueError(f"Cannot extract thread ID from: {url_or_id}")
+
+
+def _get_header(headers: list, name: str) -> str:
+    """Get header value by name."""
+    for h in headers:
+        if h['name'].lower() == name.lower():
+            return h['value']
+    return ''
+
+
+def _decode_body(part: dict) -> str:
+    """Decode message body from base64."""
+    if 'data' in part.get('body', {}):
+        data = part['body']['data']
+        # Gmail uses URL-safe base64
+        return base64.urlsafe_b64decode(data).decode('utf-8', errors='replace')
+    return ''
+
+
+def _extract_text_body(payload: dict) -> str:
+    """Extract plain text body from message payload."""
+    mime_type = payload.get('mimeType', '')
+
+    if mime_type == 'text/plain':
+        return _decode_body(payload)
+
+    if mime_type.startswith('multipart/'):
+        parts = payload.get('parts', [])
+        for part in parts:
+            # Prefer text/plain
+            if part.get('mimeType') == 'text/plain':
+                return _decode_body(part)
+        # Fallback to first text part
+        for part in parts:
+            result = _extract_text_body(part)
+            if result:
+                return result
+
+    return ''
+
+
+def _extract_attachments(payload: dict, message_id: str, service) -> list[Attachment]:
+    """Extract and store attachments from message payload."""
+    attachments = []
+
+    def process_part(part: dict):
+        filename = part.get('filename', '')
+        if not filename:
+            return
+
+        body = part.get('body', {})
+        attachment_id = body.get('attachmentId')
+        size = body.get('size', 0)
+        mime_type = part.get('mimeType', 'application/octet-stream')
+
+        if attachment_id:
+            # Fetch attachment data
+            att_data = service.users().messages().attachments().get(
+                userId='me',
+                messageId=message_id,
+                id=attachment_id
+            ).execute()
+
+            data = base64.urlsafe_b64decode(att_data['data'])
+
+            # Store in CAS
+            url = store_blob(
+                data=data,
+                original_name=filename,
+                mime_type=mime_type,
+                source_message_id=message_id,
+            )
+
+            attachments.append(Attachment(
+                name=filename,
+                size=len(data),
+                mime_type=mime_type,
+                url=url,
+            ))
+
+    def walk_parts(part: dict):
+        process_part(part)
+        for subpart in part.get('parts', []):
+            walk_parts(subpart)
+
+    walk_parts(payload)
+    return attachments
+
+
+def pull_thread(thread_id: str) -> list[Section]:
+    """Fetch thread from Gmail API and return list of sections."""
+    creds = get_authenticated_credentials()
+    service = build('gmail', 'v1', credentials=creds)
+
+    # Fetch thread with full message content
+    thread = service.users().threads().get(
+        userId='me',
+        id=thread_id,
+        format='full',
+    ).execute()
+
+    messages = thread.get('messages', [])
+    if not messages:
+        raise ValueError(f"No messages found in thread {thread_id}")
+
+    # Get subject from first message
+    first_headers = messages[0].get('payload', {}).get('headers', [])
+    subject = _get_header(first_headers, 'Subject') or 'No Subject'
+
+    time_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    source_url = f'https://mail.google.com/mail/u/0/#inbox/{thread_id}'
+
+    sections = []
+
+    for i, msg in enumerate(messages, start=1):
+        payload = msg.get('payload', {})
+        headers = payload.get('headers', [])
+
+        from_addr = _get_header(headers, 'From')
+        to_addr = _get_header(headers, 'To')
+        date_str = _get_header(headers, 'Date')
+        msg_id = msg.get('id', '')
+
+        # Parse date to ISO format
+        try:
+            from email.utils import parsedate_to_datetime
+            date_dt = parsedate_to_datetime(date_str)
+            date_iso = date_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        except (ValueError, TypeError):
+            date_iso = date_str
+
+        # Extract body
+        body = _extract_text_body(payload)
+
+        # Extract attachments
+        attachments = _extract_attachments(payload, msg_id, service)
+
+        # Create section title from sender
+        sender_name = from_addr.split('<')[0].strip().strip('"') or from_addr
+        section_title = f"From {sender_name}"
+
+        sections.append(Section(
+            title=subject,
+            source=source_url,
+            time=time_str,
+            thread_id=thread_id,
+            section=i,
+            section_title=section_title,
+            from_addr=from_addr,
+            to_addr=to_addr,
+            date=date_iso,
+            content=body.strip(),
+            attachments=attachments,
+        ))
+
+    return sections
+
+
+# =============================================================================
+# CLI commands
+# =============================================================================
+
+@click.group()
+def mail():
+    """Gmail operations"""
+    pass
+
+
+@mail.command()
+@click.argument('url_or_id')
+@click.option('--output', '-o', type=click.Path(path_type=Path), help='Output file (default: <subject>_<thread-id>.mail.gax)')
+def pull(url_or_id: str, output: Optional[Path]):
+    """Pull an email thread to a local .mail.gax file."""
+    try:
+        thread_id = extract_thread_id(url_or_id)
+
+        click.echo(f'Fetching thread: {thread_id}')
+        sections = pull_thread(thread_id)
+        content = format_multipart(sections)
+
+        if output:
+            file_path = output
+        else:
+            # Generate filename from subject
+            safe_subject = re.sub(r'[<>:"/\\|?*]', '-', sections[0].title)
+            safe_subject = re.sub(r'\s+', '_', safe_subject)[:50]
+            file_path = Path(f'{safe_subject}_{thread_id}.mail.gax')
+
+        file_path.write_text(content, encoding='utf-8')
+        click.echo(f'Created: {file_path}')
+        click.echo(f'Subject: {sections[0].title}')
+        click.echo(f'Messages: {len(sections)}')
+
+        # Report attachments
+        total_attachments = sum(len(s.attachments) for s in sections)
+        if total_attachments:
+            click.echo(f'Attachments: {total_attachments}')
+
+    except Exception as e:
+        click.echo(f'Error: {e}', err=True)
+        sys.exit(1)
