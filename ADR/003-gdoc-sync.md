@@ -25,12 +25,6 @@ gax gdoc pull <file>             # Re-fetch from source URL in frontmatter
 gax gdoc push <file>             # Future: upload changes (not in v1)
 ```
 
-Additional convenience commands:
-
-```
-gax gdoc cat <url>               # Print multipart markdown to stdout
-```
-
 ### File Format
 
 Uses the multipart YAML-markdown format (ADR 002). Each tab becomes a self-contained section with repeated document metadata:

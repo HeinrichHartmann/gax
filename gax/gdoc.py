@@ -316,18 +316,3 @@ def pull(file: Path):
         sys.exit(1)
 
 
-@gdoc.command()
-@click.argument('url')
-def cat(url: str):
-    """Print a Google Doc as multipart markdown to stdout."""
-    try:
-        document_id = extract_doc_id(url)
-        source_url = f'https://docs.google.com/document/d/{document_id}/edit'
-
-        sections = pull_doc(document_id, source_url)
-        content = format_multipart(sections)
-        click.echo(content)
-
-    except Exception as e:
-        click.echo(f'Error: {e}', err=True)
-        sys.exit(1)
