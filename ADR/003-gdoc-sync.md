@@ -193,17 +193,22 @@ The project timeline should be adjusted to account for
 the new requirements from stakeholders...
 
 ---
+title: Project Plan
+source: https://docs.google.com/document/d/xyz789/edit
+time: 2026-03-20T10:00:00Z
 section: 1
 section_type: comments
+section_title: Overview (Comments)
 ---
-* L23 - 2026-03-15 - alice@example.com
+* [AAAAjB7] 2026-03-15 - alice@example.com
   > "...timeline should be adjusted to account for..."
   Need to verify this with PM before finalizing.
 
-* L45 - 2026-03-14 - bob@example.com
+* [AAAAkC9] 2026-03-14 - bob@example.com [RESOLVED]
   > "...API integration completed by Q2..."
-  ↳ alice@example.com: Agreed, marking resolved.
-  [RESOLVED]
+  Looks good but verify with PM.
+  ↳ [AAAAkD1] 2026-03-15 - alice@example.com
+    Agreed, marking resolved.
 
 ---
 title: Project Plan
@@ -217,10 +222,14 @@ section_title: Budget
 Budget allocation for Q2...
 
 ---
+title: Project Plan
+source: https://docs.google.com/document/d/xyz789/edit
+time: 2026-03-20T10:00:00Z
 section: 2
 section_type: comments
+section_title: Budget (Comments)
 ---
-* L8 - 2026-03-10 - carol@example.com
+* [AAAAmF3] 2026-03-10 - carol@example.com
   > "...budget allocation..."
   Can we get more detail here?
 ```
@@ -228,26 +237,27 @@ section_type: comments
 **Comment format:**
 
 ```
-* L{line} - {date} - {author}
+* [{id}] {date} - {author} [RESOLVED]
   > "{quoted context}"
   {comment message}
-  ↳ {reply author}: {reply message}
-  [RESOLVED]
+  ↳ [{reply_id}] {date} - {reply_author}
+    {reply message}
 ```
 
-- `L{line}` - Line number in the rendered markdown section
+- `{id}` - Google Docs comment/reply ID (stable reference)
 - `{date}` - ISO date (YYYY-MM-DD)
 - `{author}` - Email address of commenter
 - `> "{quoted context}"` - Text that was highlighted/selected for the comment
-- `↳` - Prefix for reply threads
-- `[RESOLVED]` - Tag for resolved comments (at end of comment block)
+- `[RESOLVED]` - Tag for resolved comments (on same line as author)
+- `↳` - Prefix for reply threads (replies have their own ID and date)
 
 **Key properties:**
 
-- Comments section uses `section_type: comments` to distinguish from content
-- Comments section has minimal header (just `section` and `section_type`)
+- Comments section is self-contained with full metadata (like content sections)
+- Uses `section_type: comments` to distinguish from content
+- `section_title` appends "(Comments)" to tab name
 - Comments section only emitted if tab has comments
-- Line numbers reference post-conversion markdown, not original Google Doc
+- Comment IDs from Google Docs API enable stable references
 - Read-only: comments are informational, not round-trippable
 
 ## Consequences
@@ -267,7 +277,6 @@ section_type: comments
 - Some formatting loss in conversion
 - Additional OAuth scope required (users may need to re-auth)
 - Repeated metadata adds some verbosity for multi-tab docs
-- Comment line numbers may drift if document is edited after sync
 
 ## Dependencies
 
