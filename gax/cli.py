@@ -120,16 +120,24 @@ def push(file: Path, with_formulas: bool):
 @click.argument("url")
 @click.argument("tab")
 @click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output file (default: <tab>.sheet.gax)",
+)
+@click.option(
     "--format", "fmt", default="csv", help="Output format: csv, tsv, psv, json, jsonl"
 )
-def clone(url: str, tab: str, fmt: str):
-    """Clone a Google Sheet tab to stdout (redirect to .sheet.gax file)."""
+def clone(url: str, tab: str, output: Path | None, fmt: str):
+    """Clone a Google Sheet tab to a local .sheet.gax file."""
     try:
         # Parse spreadsheet ID from URL
         match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
         if not match:
             raise ValueError(f"Could not parse spreadsheet ID from URL: {url}")
         spreadsheet_id = match.group(1)
+
+        click.echo(f"Fetching: {spreadsheet_id} / {tab}")
 
         # Fetch data
         client = GSheetClient()
@@ -147,7 +155,22 @@ def clone(url: str, tab: str, fmt: str):
         )
 
         content = format_content(config, data)
-        click.echo(content)
+
+        # Determine output file
+        if output:
+            file_path = output
+        else:
+            safe_name = re.sub(r'[<>:"/\\|?*]', "-", tab)
+            safe_name = re.sub(r"\s+", "_", safe_name)
+            file_path = Path(f"{safe_name}.sheet.gax")
+
+        if file_path.exists():
+            click.echo(f"Error: File already exists: {file_path}", err=True)
+            sys.exit(1)
+
+        file_path.write_text(content, encoding="utf-8")
+        click.echo(f"Created: {file_path}")
+        click.echo(f"Rows: {len(df)}")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
