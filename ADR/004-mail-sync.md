@@ -39,77 +39,76 @@ Key differences from Docs/Sheets:
 ### Commands
 
 ```
-gax mail clone <url-or-id>           # Clone thread to new .mail.gax file
-gax mail pull <file>                 # Update existing .mail.gax with new messages
-gax mail sync [LABEL] [OPTIONS]      # Sync threads from label to folder
-gax mail search <query> [--limit N]  # Search and list threads (TSV output)
+gax mail labels                          # List available labels → TSV
+gax mail search <query> [--limit N]        # List threads → TSV
+gax mail clone <id>                      # Clone single thread → file
+gax mail clone <query> --to <folder>     # Clone search results → folder
+gax mail pull <file-or-folder>           # Update file or folder
 ```
 
-### Search Command
+### labels
 
+List all Gmail labels:
+```bash
+gax mail labels
 ```
-gax mail search <query> [--limit N]
+
+Output (TSV):
+```
+id	name	type
+INBOX	Inbox	system
+Label_123	Work	user
 ```
 
-**Query:** Gmail native syntax (from:, to:, subject:, after:, has:attachment, etc.)
+### search
 
-**Output:** TSV (tab-separated) to stdout - machine and human readable:
+Search threads matching query (TSV to stdout):
+```bash
+gax mail search "label:Inbox"
+gax mail search "from:alice after:2025/01/01"
+gax mail search "has:attachment filename:pdf"
+```
+
+Output:
 ```
 thread_id	date	from	subject
 19d0bed1cddbab6d	2026-03-20	alice@example.com	Re: Project Update
-19d0bd2ac8c2f21d	2026-03-19	bob@example.com	Meeting Notes
 ```
 
-**Workflow:**
+Uses Gmail query syntax. Can add `--format jsonl` later if needed.
+
+### clone
+
+**Single thread:**
 ```bash
-# Search and preview
-gax mail search "from:alice"
-
-# Search and pull matching threads
-gax mail search "from:alice" | tail -n +2 | cut -f1 | xargs -I{} gax mail pull {}
+gax mail clone 19d0bed1cddbab6d
+gax mail clone "https://mail.google.com/..."
 ```
+Creates: `<subject>_<thread-id>.mail.gax`
 
-**Note:** Can add `--format jsonl` later if needed.
-
-### Sync Command
-
-```
-gax mail sync [LABEL] [--last DURATION | --since DATE] [--limit N]
-```
-
-**Arguments:**
-- `LABEL`: Gmail label (default: `Inbox`)
-
-**Options:**
-- `--last DURATION`: Fetch threads from last N days/hours (e.g., `3d`, `24h`)
-- `--since DATE`: Fetch threads since date (e.g., `2025-01-03`)
-- `--limit N`: Maximum threads to fetch (default: `100`)
-
-**Behavior:**
-1. Query Gmail for threads matching label and time filter
-2. Warn if more threads available than limit
-3. Create `<Label>/` directory
-4. For each thread, create `<date>-<from>-<subject>.mail.gax`
-5. Skip threads already present (by thread_id in filename)
-
-**Filename format:**
-```
-<Label>/<date>-<from>-<subject>.mail.gax
-```
-
-Examples:
-```
-Inbox/2026-03-20-alice@example.com-Project_Update.mail.gax
-Work/2025-01-15-bob@company.com-Q1_Report.mail.gax
-```
-
-**Examples:**
+**Multiple threads (query):**
 ```bash
-gax mail sync                           # Inbox, last 100
-gax mail sync --last 7d                 # Inbox, last week
-gax mail sync Work --since 2025-01-01   # Work label since Jan 1
-gax mail sync --limit 500               # Inbox, up to 500
+gax mail clone "label:Inbox" --to Inbox
+gax mail clone "from:alice" --to Alice --limit 50
+gax mail clone "subject:invoice after:2025/01/01" --to Invoices
 ```
+Creates: `<folder>/<date>-<from>-<subject>.mail.gax`
+
+Skips already-cloned threads. Warns if more available than limit.
+
+### pull
+
+**Single file:**
+```bash
+gax mail pull thread.mail.gax
+```
+Re-fetches thread, updates with new messages.
+
+**Folder:**
+```bash
+gax mail pull Inbox/
+```
+Scans folder for `.mail.gax` files, re-fetches each thread, updates with new messages.
 
 ### File Format
 

@@ -302,100 +302,276 @@ def mail():
 
 
 @mail.command()
-@click.argument('url_or_id')
-@click.option('--output', '-o', type=click.Path(path_type=Path), help='Output file (default: <subject>_<thread-id>.mail.gax)')
-def clone(url_or_id: str, output: Optional[Path]):
-    """Clone an email thread to a local .mail.gax file."""
+def labels():
+    """List Gmail labels (TSV output)."""
     try:
-        thread_id = extract_thread_id(url_or_id)
+        creds = get_authenticated_credentials()
+        service = build('gmail', 'v1', credentials=creds)
 
-        click.echo(f'Fetching thread: {thread_id}')
-        sections = pull_thread(thread_id)
-        content = format_multipart(sections)
+        result = service.users().labels().list(userId='me').execute()
+        labels_list = result.get('labels', [])
 
-        if output:
-            file_path = output
-        else:
-            # Generate filename from subject
-            safe_subject = re.sub(r'[<>:"/\\|?*]', '-', sections[0].title)
-            safe_subject = re.sub(r'\s+', '_', safe_subject)[:50]
-            file_path = Path(f'{safe_subject}_{thread_id}.mail.gax')
+        # Print header
+        click.echo('id\tname\ttype')
 
-        if file_path.exists():
-            click.echo(f'Error: File already exists: {file_path}', err=True)
-            click.echo('Use "gax mail pull" to update an existing file.', err=True)
-            sys.exit(1)
+        # Sort: system labels first, then user labels alphabetically
+        system_labels = [l for l in labels_list if l.get('type') == 'system']
+        user_labels = [l for l in labels_list if l.get('type') == 'user']
 
-        file_path.write_text(content, encoding='utf-8')
-        click.echo(f'Created: {file_path}')
-        click.echo(f'Subject: {sections[0].title}')
-        click.echo(f'Messages: {len(sections)}')
+        system_labels.sort(key=lambda l: l.get('name', ''))
+        user_labels.sort(key=lambda l: l.get('name', ''))
 
-        # Report attachments
-        total_attachments = sum(len(s.attachments) for s in sections)
-        if total_attachments:
-            click.echo(f'Attachments: {total_attachments}')
+        for label in system_labels + user_labels:
+            label_id = label.get('id', '')
+            name = label.get('name', '')
+            label_type = label.get('type', '')
+            click.echo(f'{label_id}\t{name}\t{label_type}')
 
     except Exception as e:
         click.echo(f'Error: {e}', err=True)
         sys.exit(1)
+
+
+def _is_thread_id(value: str) -> bool:
+    """Check if value looks like a thread ID (vs a search query)."""
+    # Gmail URL
+    if 'mail.google.com' in value:
+        return True
+    # Pure hex string (typical thread ID)
+    if re.fullmatch(r'[0-9a-f]{16}', value):
+        return True
+    # Alphanumeric ID (Gmail web IDs)
+    if re.fullmatch(r'[A-Za-z0-9]{20,}', value):
+        return True
+    # Numeric thread ID from popout URLs
+    if re.fullmatch(r'\d{15,}', value):
+        return True
+    return False
 
 
 @mail.command()
-@click.argument('file', type=click.Path(exists=True, path_type=Path))
-def pull(file: Path):
-    """Pull latest messages for an existing .mail.gax thread."""
+@click.argument('query_or_id')
+@click.option('--to', 'folder', type=click.Path(path_type=Path), help='Clone to folder (bulk mode)')
+@click.option('--output', '-o', type=click.Path(path_type=Path), help='Output file (single thread mode)')
+@click.option('--limit', default=100, help='Maximum threads to clone in bulk mode (default: 100)')
+def clone(query_or_id: str, folder: Optional[Path], output: Optional[Path], limit: int):
+    """Clone email thread(s) to local .mail.gax file(s).
+
+    Single thread mode (ID or URL):
+
+        gax mail clone 19d0bed1cddbab6d
+        gax mail clone "https://mail.google.com/..."
+
+    Bulk mode (query with --to):
+
+        gax mail clone "label:Inbox" --to Inbox/
+        gax mail clone "from:alice" --to Alice/ --limit 50
+    """
     try:
-        content = file.read_text(encoding='utf-8')
+        # Detect single thread vs search query
+        if _is_thread_id(query_or_id) and not folder:
+            # Single thread mode
+            thread_id = extract_thread_id(query_or_id)
 
-        # Extract thread_id from file
-        match = re.search(r'^thread_id:\s*(\S+)', content, re.MULTILINE)
-        if not match:
-            click.echo('Error: No thread_id found in file', err=True)
-            sys.exit(1)
+            click.echo(f'Fetching thread: {thread_id}')
+            sections = pull_thread(thread_id)
+            content = format_multipart(sections)
 
-        thread_id = match.group(1)
+            if output:
+                file_path = output
+            else:
+                # Generate filename from subject
+                safe_subject = re.sub(r'[<>:"/\\|?*]', '-', sections[0].title)
+                safe_subject = re.sub(r'\s+', '_', safe_subject)[:50]
+                file_path = Path(f'{safe_subject}_{thread_id}.mail.gax')
 
-        # Count existing messages
-        old_count = len(re.findall(r'^section:\s*\d+', content, re.MULTILINE))
+            if file_path.exists():
+                click.echo(f'Error: File already exists: {file_path}', err=True)
+                click.echo('Use "gax mail pull" to update an existing file.', err=True)
+                sys.exit(1)
 
-        click.echo(f'Updating thread: {thread_id}')
-        sections = pull_thread(thread_id)
-        new_content = format_multipart(sections)
+            file_path.write_text(content, encoding='utf-8')
+            click.echo(f'Created: {file_path}')
+            click.echo(f'Subject: {sections[0].title}')
+            click.echo(f'Messages: {len(sections)}')
 
-        new_count = len(sections)
+            # Report attachments
+            total_attachments = sum(len(s.attachments) for s in sections)
+            if total_attachments:
+                click.echo(f'Attachments: {total_attachments}')
 
-        file.write_text(new_content, encoding='utf-8')
-        click.echo(f'Updated: {file}')
-        click.echo(f'Messages: {old_count} -> {new_count}')
+        else:
+            # Bulk mode: search query -> folder
+            if not folder:
+                click.echo('Error: Use --to <folder> for bulk cloning with a search query', err=True)
+                click.echo('Or provide a thread ID/URL for single thread mode.', err=True)
+                sys.exit(1)
 
-        if new_count > old_count:
-            click.echo(f'New messages: {new_count - old_count}')
+            creds = get_authenticated_credentials()
+            service = build('gmail', 'v1', credentials=creds)
+
+            # Search threads
+            click.echo(f'Searching: {query_or_id}')
+            threads = []
+            page_token = None
+
+            while len(threads) < limit:
+                batch_size = min(100, limit - len(threads))
+                result = service.users().threads().list(
+                    userId='me',
+                    q=query_or_id,
+                    maxResults=batch_size,
+                    pageToken=page_token,
+                ).execute()
+
+                batch = result.get('threads', [])
+                threads.extend(batch)
+
+                page_token = result.get('nextPageToken')
+                if not page_token or not batch:
+                    break
+
+            threads = threads[:limit]
+
+            if not threads:
+                click.echo('No threads found.')
+                return
+
+            # Check if more available
+            total_estimate = result.get('resultSizeEstimate', 0)
+            if total_estimate > limit:
+                click.echo(f'Warning: Found ~{total_estimate} threads, cloning first {limit}. Use --limit to clone more.', err=True)
+
+            click.echo(f'Found {len(threads)} threads')
+
+            # Create folder
+            folder.mkdir(parents=True, exist_ok=True)
+
+            # Get already cloned thread IDs
+            existing_ids = _get_existing_thread_ids(folder)
+
+            # Clone each thread
+            cloned = 0
+            skipped = 0
+
+            for thread_info in threads:
+                thread_id = thread_info['id']
+
+                if thread_id in existing_ids:
+                    skipped += 1
+                    continue
+
+                try:
+                    sections = pull_thread(thread_id)
+                    content = format_multipart(sections)
+
+                    # Get first message info for filename
+                    first = sections[0]
+                    filename = _make_filename(first.date, first.from_addr, first.title, thread_id)
+                    file_path = folder / filename
+
+                    # Avoid overwriting (add thread_id suffix if collision)
+                    if file_path.exists():
+                        base = file_path.stem
+                        file_path = folder / f'{base}_{thread_id}.mail.gax'
+
+                    file_path.write_text(content, encoding='utf-8')
+                    cloned += 1
+                    click.echo(f'  {filename}')
+
+                except Exception as e:
+                    click.echo(f'  Error cloning {thread_id}: {e}', err=True)
+
+            click.echo(f'Cloned: {cloned}, Skipped: {skipped} (already present)')
 
     except Exception as e:
         click.echo(f'Error: {e}', err=True)
         sys.exit(1)
 
 
-def _parse_duration(duration: str) -> int:
-    """Parse duration string like '3d' or '24h' to seconds."""
-    match = re.match(r'^(\d+)([dhm])$', duration.lower())
+def _pull_single_file(file_path: Path) -> tuple[int, int]:
+    """Pull updates for a single .mail.gax file. Returns (old_count, new_count)."""
+    content = file_path.read_text(encoding='utf-8')
+
+    # Extract thread_id from file
+    match = re.search(r'^thread_id:\s*(\S+)', content, re.MULTILINE)
     if not match:
-        raise ValueError(f"Invalid duration format: {duration}. Use e.g., '3d', '24h', '30m'")
+        raise ValueError(f'No thread_id found in {file_path}')
 
-    value = int(match.group(1))
-    unit = match.group(2)
+    thread_id = match.group(1)
 
-    if unit == 'd':
-        return value * 86400
-    elif unit == 'h':
-        return value * 3600
-    elif unit == 'm':
-        return value * 60
-    return value
+    # Count existing messages
+    old_count = len(re.findall(r'^section:\s*\d+', content, re.MULTILINE))
+
+    sections = pull_thread(thread_id)
+    new_content = format_multipart(sections)
+
+    new_count = len(sections)
+
+    file_path.write_text(new_content, encoding='utf-8')
+    return old_count, new_count
 
 
-def _make_filename(date_str: str, from_addr: str, subject: str, thread_id: str) -> str:
+@mail.command()
+@click.argument('path', type=click.Path(exists=True, path_type=Path))
+def pull(path: Path):
+    """Pull latest messages for .mail.gax file(s).
+
+    Single file:
+
+        gax mail pull thread.mail.gax
+
+    Folder (updates all .mail.gax files):
+
+        gax mail pull Inbox/
+    """
+    try:
+        if path.is_file():
+            # Single file mode
+            click.echo(f'Updating: {path}')
+            old_count, new_count = _pull_single_file(path)
+            click.echo(f'Messages: {old_count} -> {new_count}')
+            if new_count > old_count:
+                click.echo(f'New messages: {new_count - old_count}')
+
+        elif path.is_dir():
+            # Folder mode: update all .mail.gax files
+            files = list(path.glob('*.mail.gax'))
+            if not files:
+                click.echo(f'No .mail.gax files found in {path}')
+                return
+
+            click.echo(f'Updating {len(files)} files in {path}/')
+            updated = 0
+            errors = 0
+            total_new = 0
+
+            for file_path in sorted(files):
+                try:
+                    old_count, new_count = _pull_single_file(file_path)
+                    updated += 1
+                    new_messages = new_count - old_count
+                    if new_messages > 0:
+                        total_new += new_messages
+                        click.echo(f'  {file_path.name}: +{new_messages} messages')
+                except Exception as e:
+                    errors += 1
+                    click.echo(f'  {file_path.name}: Error - {e}', err=True)
+
+            click.echo(f'Updated: {updated}, Errors: {errors}')
+            if total_new > 0:
+                click.echo(f'Total new messages: {total_new}')
+
+        else:
+            click.echo(f'Error: {path} is not a file or directory', err=True)
+            sys.exit(1)
+
+    except Exception as e:
+        click.echo(f'Error: {e}', err=True)
+        sys.exit(1)
+
+
+def _make_filename(date_str: str, from_addr: str, subject: str, _thread_id: str) -> str:
     """Create filename: date-from-subject.mail.gax"""
     # Extract date (YYYY-MM-DD)
     try:
@@ -426,48 +602,6 @@ def _make_filename(date_str: str, from_addr: str, subject: str, thread_id: str) 
     return f'{date_part}-{from_part}-{subject_part}.mail.gax'
 
 
-def _list_threads(label: str, query: str, max_results: int) -> tuple[list[dict], int]:
-    """List threads matching label and query. Returns (threads, total_estimate)."""
-    creds = get_authenticated_credentials()
-    service = build('gmail', 'v1', credentials=creds)
-
-    # Build query
-    full_query = f'label:{label}'
-    if query:
-        full_query = f'{full_query} {query}'
-
-    # First, get estimate of total
-    result = service.users().threads().list(
-        userId='me',
-        q=full_query,
-        maxResults=1,
-    ).execute()
-
-    total_estimate = result.get('resultSizeEstimate', 0)
-
-    # Now fetch up to max_results
-    threads = []
-    page_token = None
-
-    while len(threads) < max_results:
-        batch_size = min(100, max_results - len(threads))
-        result = service.users().threads().list(
-            userId='me',
-            q=full_query,
-            maxResults=batch_size,
-            pageToken=page_token,
-        ).execute()
-
-        batch = result.get('threads', [])
-        threads.extend(batch)
-
-        page_token = result.get('nextPageToken')
-        if not page_token or not batch:
-            break
-
-    return threads[:max_results], total_estimate
-
-
 def _get_existing_thread_ids(folder: Path) -> set[str]:
     """Get thread IDs already synced to folder."""
     if not folder.exists():
@@ -485,87 +619,6 @@ def _get_existing_thread_ids(folder: Path) -> set[str]:
             pass
 
     return thread_ids
-
-
-@mail.command()
-@click.argument('label', default='Inbox')
-@click.option('--last', 'last_duration', help='Fetch threads from last N days/hours (e.g., 3d, 24h)')
-@click.option('--since', 'since_date', help='Fetch threads since date (e.g., 2025-01-03)')
-@click.option('--limit', default=100, help='Maximum threads to fetch (default: 100)')
-def sync(label: str, last_duration: Optional[str], since_date: Optional[str], limit: int):
-    """Sync threads from a Gmail label to a local folder."""
-    try:
-        # Build time query
-        query = ''
-        if last_duration:
-            seconds = _parse_duration(last_duration)
-            from datetime import datetime, timedelta
-            since = datetime.now() - timedelta(seconds=seconds)
-            query = f'after:{since.strftime("%Y/%m/%d")}'
-        elif since_date:
-            # Convert YYYY-MM-DD to YYYY/MM/DD for Gmail
-            query = f'after:{since_date.replace("-", "/")}'
-
-        click.echo(f'Syncing label: {label}')
-        if query:
-            click.echo(f'Query: {query}')
-
-        # List threads
-        threads, total_estimate = _list_threads(label, query, limit)
-
-        if total_estimate > limit:
-            click.echo(f'Warning: Found ~{total_estimate} threads, fetching first {limit}. Use --limit to fetch more.', err=True)
-
-        if not threads:
-            click.echo('No threads found.')
-            return
-
-        click.echo(f'Found {len(threads)} threads')
-
-        # Create folder
-        folder = Path(label)
-        folder.mkdir(exist_ok=True)
-
-        # Get already synced thread IDs
-        existing_ids = _get_existing_thread_ids(folder)
-
-        # Sync each thread
-        synced = 0
-        skipped = 0
-
-        for thread_info in threads:
-            thread_id = thread_info['id']
-
-            if thread_id in existing_ids:
-                skipped += 1
-                continue
-
-            try:
-                sections = pull_thread(thread_id)
-                content = format_multipart(sections)
-
-                # Get first message info for filename
-                first = sections[0]
-                filename = _make_filename(first.date, first.from_addr, first.title, thread_id)
-                file_path = folder / filename
-
-                # Avoid overwriting (add thread_id suffix if collision)
-                if file_path.exists():
-                    base = file_path.stem
-                    file_path = folder / f'{base}_{thread_id}.mail.gax'
-
-                file_path.write_text(content, encoding='utf-8')
-                synced += 1
-                click.echo(f'  {filename}')
-
-            except Exception as e:
-                click.echo(f'  Error syncing {thread_id}: {e}', err=True)
-
-        click.echo(f'Synced: {synced}, Skipped: {skipped} (already present)')
-
-    except Exception as e:
-        click.echo(f'Error: {e}', err=True)
-        sys.exit(1)
 
 
 def _get_thread_summary(thread_id: str, service) -> dict:
@@ -633,6 +686,7 @@ def search(query: str, limit: int):
         # Search threads
         threads = []
         page_token = None
+        total_estimate = 0
 
         while len(threads) < limit:
             batch_size = min(100, limit - len(threads))
@@ -643,6 +697,7 @@ def search(query: str, limit: int):
                 pageToken=page_token,
             ).execute()
 
+            total_estimate = result.get('resultSizeEstimate', 0)
             batch = result.get('threads', [])
             threads.extend(batch)
 
@@ -657,7 +712,6 @@ def search(query: str, limit: int):
             sys.exit(1)
 
         # Check if more available
-        total_estimate = result.get('resultSizeEstimate', 0)
         if total_estimate > limit:
             click.echo(f'# Found ~{total_estimate} threads, showing first {limit}', err=True)
 
