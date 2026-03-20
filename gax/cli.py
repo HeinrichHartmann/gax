@@ -10,7 +10,7 @@ from .gsheet.client import GSheetClient
 from .frontmatter import SheetConfig, format_content
 from .formats import get_format
 from . import auth
-from .gdoc import gdoc
+from .gdoc import doc
 
 
 @click.group()
@@ -79,12 +79,12 @@ def logout():
 # --- GSheet commands ---
 
 @main.group()
-def gsheet():
+def sheet():
     """Google Sheets operations"""
     pass
 
 
-@gsheet.command()
+@sheet.command()
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def pull(file: Path):
     """Pull data from Google Sheets to local file."""
@@ -96,7 +96,7 @@ def pull(file: Path):
         sys.exit(1)
 
 
-@gsheet.command()
+@sheet.command()
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))")
 def push(file: Path, with_formulas: bool):
@@ -109,7 +109,7 @@ def push(file: Path, with_formulas: bool):
         sys.exit(1)
 
 
-@gsheet.command()
+@sheet.command()
 @click.argument("url")
 @click.argument("tab")
 @click.option("--format", "fmt", default="csv", help="Output format: csv, tsv, psv, json, jsonl")
@@ -145,8 +145,8 @@ def init(url: str, tab: str, fmt: str):
         sys.exit(1)
 
 
-# Register gdoc command group
-main.add_command(gdoc)
+# Register doc command group
+main.add_command(doc)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ Implemented
 We need a simple way to sync Google Sheets data with local files for version control and scripting. The tool should be extensible to support multiple output formats and potentially other Google services in the future.
 
 ## Decision
-Create `gax` CLI with subcommands, starting with `gax gsheet pull/push`.
+Create `gax` CLI with subcommands, starting with `gax sheet pull/push`.
 
 ## Architecture
 
@@ -107,7 +107,8 @@ Google Sheets formatting (colors, fonts, borders, conditional formatting) lives 
 
 ### Additional Google Services
 ```bash
-gax gdrive pull/push    # Google Drive files
-gax gcal list/add       # Google Calendar
-gax gmail search/send   # Gmail
+gax doc clone/pull      # Google Docs (implemented - see ADR 003)
+gax drive pull/push     # Google Drive files
+gax cal list/add        # Google Calendar
+gax mail search/send    # Gmail
 ```

@@ -17,9 +17,12 @@ gax auth login
 gax auth status
 gax auth logout
 
-gax gsheet pull <file>
-gax gsheet push <file> [--with-formulas]
-gax gsheet init <url> <tab> [--format FORMAT]
+gax sheet pull <file>
+gax sheet push <file> [--with-formulas]
+gax sheet init <url> <tab> [--format FORMAT]
+
+gax doc clone <url>
+gax doc pull <file>
 ```
 
 ## COMMANDS
@@ -37,18 +40,28 @@ gax gsheet init <url> <tab> [--format FORMAT]
 
 ### Google Sheets
 
-**gax gsheet pull** *file*
+**gax sheet pull** *file*
 : Pull data from Google Sheets to local file. Reads spreadsheet ID and tab from file frontmatter.
 
-**gax gsheet push** *file* [**--with-formulas**]
+**gax sheet push** *file* [**--with-formulas**]
 : Push local file data to Google Sheets. With `--with-formulas`, cell values starting with `=` are interpreted as formulas.
 
-**gax gsheet init** *url* *tab* [**--format** *FORMAT*]
+**gax sheet init** *url* *tab* [**--format** *FORMAT*]
 : Initialize a new `.sheet.gax` file from a Google Sheets URL. Outputs to stdout.
 
-## FILE FORMAT
+### Google Docs
 
-Files use YAML frontmatter followed by data:
+**gax doc clone** *url*
+: Clone a Google Doc to a local `.doc.gax` file. Uses multipart YAML-markdown format (see ADR 002).
+
+**gax doc pull** *file*
+: Pull latest content from Google Docs. Reads source URL from file frontmatter.
+
+## FILE FORMATS
+
+### Sheets (`.sheet.gax`)
+
+YAML frontmatter followed by tabular data:
 
 ```
 ---
@@ -62,47 +75,72 @@ Date,Type,Amount
 2025-12-18,Expense,-5000
 ```
 
-### Frontmatter Fields
+### Docs (`.doc.gax`)
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| spreadsheet_id | yes | Google Sheets document ID |
-| tab | yes | Sheet/tab name |
-| format | yes | Data format (see FORMATS) |
-| url | no | Full URL (informational) |
-| range | no | Cell range (default: all) |
+Multipart YAML-markdown format. Each section (tab) is self-contained:
 
-## FORMATS
+```
+---
+title: My Document
+source: https://docs.google.com/document/d/xxx/edit
+time: 2026-03-20T10:00:00Z
+section: 1
+section_title: Overview
+---
+# Overview
 
-| Format | Extension | Description |
-|--------|-----------|-------------|
-| csv | .sheet.gax | Comma-separated values |
-| tsv | .sheet.gax | Tab-separated values |
-| psv | .sheet.gax | Pipe-separated values |
-| json | .sheet.gax | JSON array of objects |
-| jsonl | .sheet.gax | JSON lines |
-| markdown | .sheet.gax | Markdown table |
+Document content here...
+```
+
+See ADR 002 for full multipart format specification.
+
+## FORMATS (Sheets)
+
+| Format | Description |
+|--------|-------------|
+| csv | Comma-separated values |
+| tsv | Tab-separated values |
+| psv | Pipe-separated values |
+| json | JSON array of objects |
+| jsonl | JSON lines |
+| markdown | Markdown table |
 
 ## EXAMPLES
+
+### Sheets
 
 Initialize from existing sheet:
 
 ```
-gax gsheet init "https://docs.google.com/spreadsheets/d/16f1.../edit" \
+gax sheet init "https://docs.google.com/spreadsheets/d/16f1.../edit" \
     Actuals --format csv > budget.sheet.gax
 ```
 
 Pull latest data:
 
 ```
-gax gsheet pull budget.sheet.gax
+gax sheet pull budget.sheet.gax
 ```
 
 Edit locally and push:
 
 ```
 vim budget.sheet.gax
-gax gsheet push budget.sheet.gax --with-formulas
+gax sheet push budget.sheet.gax --with-formulas
+```
+
+### Docs
+
+Clone a Google Doc:
+
+```
+gax doc clone "https://docs.google.com/document/d/1ky1.../edit"
+```
+
+Pull latest changes:
+
+```
+gax doc pull My_Document.doc.gax
 ```
 
 ## FILES
@@ -128,8 +166,8 @@ gax gsheet push budget.sheet.gax --with-formulas
 ## SEE ALSO
 
 - DESIGN.md - Architecture and design decisions
-- https://docs.google.com/spreadsheets - Google Sheets
-- https://github.com/burnash/gspread - gspread library
+- ADR/002-multipart-markdown-format.md - Multipart format spec
+- ADR/003-gdoc-sync.md - Google Docs sync design
 
 ## AUTHORS
 

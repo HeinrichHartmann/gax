@@ -244,16 +244,16 @@ def pull_doc(document_id: str, source_url: str) -> list[Section]:
 # =============================================================================
 
 @click.group()
-def gdoc():
+def doc():
     """Google Docs operations"""
     pass
 
 
-@gdoc.command()
+@doc.command()
 @click.argument('url')
 @click.option('--output', '-o', type=click.Path(path_type=Path), help='Output file (default: <title>.doc.gax)')
-def init(url: str, output: Optional[Path]):
-    """Initialize a .doc.gax file from a Google Docs URL."""
+def clone(url: str, output: Optional[Path]):
+    """Clone a Google Doc to a local .doc.gax file."""
     try:
         document_id = extract_doc_id(url)
         source_url = f'https://docs.google.com/document/d/{document_id}/edit'
@@ -284,7 +284,7 @@ def init(url: str, output: Optional[Path]):
         sys.exit(1)
 
 
-@gdoc.command()
+@doc.command()
 @click.argument('file', type=click.Path(exists=True, path_type=Path))
 def pull(file: Path):
     """Pull latest content from Google Docs to local file."""

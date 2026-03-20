@@ -17,12 +17,10 @@ Key differences from Sheets:
 
 ### Commands
 
-Following the gsheet pattern:
-
 ```
-gax gdoc init <url>              # Create new .doc.gax file from URL
-gax gdoc pull <file>             # Re-fetch from source URL in frontmatter
-gax gdoc push <file>             # Future: upload changes (not in v1)
+gax doc clone <url>             # Create new .doc.gax file from URL
+gax doc pull <file>             # Re-fetch from source URL in frontmatter
+gax doc push <file>             # Future: upload changes (not in v1)
 ```
 
 ### File Format
@@ -163,7 +161,7 @@ This keeps simple documents clean while handling edge cases safely.
 
 ### Push (Future)
 
-`gax gdoc push` is significantly harder than pull:
+`gax doc push` is significantly harder than pull:
 - Need to map markdown back to Docs API structures
 - Handle insertions, deletions, formatting
 - Conflict resolution
