@@ -2,7 +2,13 @@
 
 ## NAME
 
-**gax** - sync Google Sheets with local files
+**gax** - human and machine-readable sync for Google Workspace
+
+## DESCRIPTION
+
+**gax** enables humans and AI agents to collaborate on data in Google Workspace (Sheets, Docs, Calendar, Gmail). It syncs documents to local files that are both human-readable and machine-readable, with YAML metadata headers.
+
+See DESIGN.md for the full vision.
 
 ## SYNOPSIS
 
@@ -15,10 +21,6 @@ gax gsheet pull <file>
 gax gsheet push <file> [--with-formulas]
 gax gsheet init <url> <tab> [--format FORMAT]
 ```
-
-## DESCRIPTION
-
-**gax** synchronizes Google Sheets data with local `.sheet.gax` files, enabling version control and local editing of spreadsheet data. Data is synced without affecting Google Sheets formatting (colors, fonts, borders).
 
 ## COMMANDS
 
