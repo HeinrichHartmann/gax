@@ -27,6 +27,28 @@ class Section:
     section_title: str  # Title of this section/tab
     content: str  # Markdown content
     content_length: Optional[int] = None  # Only set if content contains ---
+    section_type: Optional[str] = None  # 'comments' for comment sections
+
+
+@dataclass
+class Comment:
+    """A comment from Google Docs."""
+    comment_id: str
+    author: str
+    date: str  # YYYY-MM-DD
+    quoted_text: str
+    content: str
+    resolved: bool
+    replies: list['CommentReply']
+
+
+@dataclass
+class CommentReply:
+    """A reply to a comment."""
+    reply_id: str
+    author: str
+    date: str  # YYYY-MM-DD
+    content: str
 
 
 # =============================================================================
@@ -46,8 +68,12 @@ def format_section(section: Section) -> str:
         f'source: {section.source}',
         f'time: {section.time}',
         f'section: {section.section}',
-        f'section_title: {section.section_title}',
     ]
+
+    if section.section_type:
+        lines.append(f'section_type: {section.section_type}')
+
+    lines.append(f'section_title: {section.section_title}')
 
     content = section.content
     if needs_content_length(content):
@@ -240,6 +266,125 @@ def pull_doc(document_id: str, source_url: str) -> list[Section]:
 
 
 # =============================================================================
+# Comments functions
+# =============================================================================
+
+def fetch_comments(document_id: str) -> list[Comment]:
+    """Fetch comments from Google Drive API."""
+    creds = get_authenticated_credentials()
+    service = build('drive', 'v3', credentials=creds)
+
+    comments = []
+    page_token = None
+
+    while True:
+        result = service.comments().list(
+            fileId=document_id,
+            fields='comments(id,author,createdTime,quotedFileContent,content,resolved,replies(id,author,createdTime,content)),nextPageToken',
+            pageToken=page_token,
+        ).execute()
+
+        for c in result.get('comments', []):
+            # Parse date
+            created = c.get('createdTime', '')
+            date = created[:10] if created else ''
+
+            # Author email
+            author = c.get('author', {}).get('emailAddress', '')
+            if not author:
+                author = c.get('author', {}).get('displayName', 'Unknown')
+
+            # Quoted text
+            quoted = c.get('quotedFileContent', {}).get('value', '')
+
+            # Replies
+            replies = []
+            for r in c.get('replies', []):
+                r_created = r.get('createdTime', '')
+                r_date = r_created[:10] if r_created else ''
+                r_author = r.get('author', {}).get('emailAddress', '')
+                if not r_author:
+                    r_author = r.get('author', {}).get('displayName', 'Unknown')
+
+                replies.append(CommentReply(
+                    reply_id=r.get('id', ''),
+                    author=r_author,
+                    date=r_date,
+                    content=r.get('content', ''),
+                ))
+
+            comments.append(Comment(
+                comment_id=c.get('id', ''),
+                author=author,
+                date=date,
+                quoted_text=quoted,
+                content=c.get('content', ''),
+                resolved=c.get('resolved', False),
+                replies=replies,
+            ))
+
+        page_token = result.get('nextPageToken')
+        if not page_token:
+            break
+
+    return comments
+
+
+def format_comment(comment: Comment) -> str:
+    """Format a single comment as markdown."""
+    lines = []
+
+    # Main comment line
+    resolved_tag = ' [RESOLVED]' if comment.resolved else ''
+    lines.append(f'* [{comment.comment_id}] {comment.date} - {comment.author}{resolved_tag}')
+
+    # Quoted context
+    if comment.quoted_text:
+        # Truncate long quotes
+        quoted = comment.quoted_text
+        if len(quoted) > 80:
+            quoted = quoted[:77] + '...'
+        lines.append(f'  > "{quoted}"')
+
+    # Comment content
+    for line in comment.content.split('\n'):
+        lines.append(f'  {line}')
+
+    # Replies
+    for reply in comment.replies:
+        lines.append(f'  ↳ [{reply.reply_id}] {reply.date} - {reply.author}')
+        for line in reply.content.split('\n'):
+            lines.append(f'    {line}')
+
+    return '\n'.join(lines)
+
+
+def format_comments_section(
+    comments: list[Comment],
+    title: str,
+    source: str,
+    time_str: str,
+    section_num: int,
+    section_title: str,
+) -> Section:
+    """Format comments as a multipart section."""
+    content_lines = []
+    for comment in comments:
+        content_lines.append(format_comment(comment))
+        content_lines.append('')
+
+    return Section(
+        title=title,
+        source=source,
+        time=time_str,
+        section=section_num,
+        section_type='comments',
+        section_title=f'{section_title} (Comments)',
+        content='\n'.join(content_lines).strip(),
+    )
+
+
+# =============================================================================
 # CLI commands
 # =============================================================================
 
@@ -249,10 +394,43 @@ def doc():
     pass
 
 
+def _add_comments_to_sections(
+    sections: list[Section],
+    document_id: str,
+) -> list[Section]:
+    """Fetch comments and interleave comment sections after each content section."""
+    comments = fetch_comments(document_id)
+    if not comments:
+        return sections
+
+    # For now, we don't have per-tab comment mapping from Drive API,
+    # so we add all comments after the first section
+    # (Google Docs comments are document-wide, not tab-specific)
+    result = []
+    first_section = sections[0]
+
+    result.append(first_section)
+    result.append(format_comments_section(
+        comments=comments,
+        title=first_section.title,
+        source=first_section.source,
+        time_str=first_section.time,
+        section_num=first_section.section,
+        section_title=first_section.section_title,
+    ))
+
+    # Add remaining content sections (if multi-tab)
+    for section in sections[1:]:
+        result.append(section)
+
+    return result
+
+
 @doc.command()
 @click.argument('url')
 @click.option('--output', '-o', type=click.Path(path_type=Path), help='Output file (default: <title>.doc.gax)')
-def clone(url: str, output: Optional[Path]):
+@click.option('--with-comments', is_flag=True, help='Include document comments as separate sections')
+def clone(url: str, output: Optional[Path], with_comments: bool):
     """Clone a Google Doc to a local .doc.gax file."""
     try:
         document_id = extract_doc_id(url)
@@ -260,6 +438,11 @@ def clone(url: str, output: Optional[Path]):
 
         click.echo(f'Fetching: {document_id}')
         sections = pull_doc(document_id, source_url)
+
+        if with_comments:
+            click.echo('Fetching comments...')
+            sections = _add_comments_to_sections(sections, document_id)
+
         content = format_multipart(sections)
 
         if output:
@@ -286,7 +469,8 @@ def clone(url: str, output: Optional[Path]):
 
 @doc.command()
 @click.argument('file', type=click.Path(exists=True, path_type=Path))
-def pull(file: Path):
+@click.option('--with-comments', is_flag=True, help='Include document comments as separate sections')
+def pull(file: Path, with_comments: bool):
     """Pull latest content from Google Docs to local file."""
     try:
         content = file.read_text(encoding='utf-8')
@@ -305,6 +489,11 @@ def pull(file: Path):
         click.echo(f'Pulling: {document_id}')
 
         new_sections = pull_doc(document_id, source_url)
+
+        if with_comments:
+            click.echo('Fetching comments...')
+            new_sections = _add_comments_to_sections(new_sections, document_id)
+
         new_content = format_multipart(new_sections)
 
         file.write_text(new_content, encoding='utf-8')
