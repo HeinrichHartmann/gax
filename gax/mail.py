@@ -525,3 +525,113 @@ def sync(label: str, last_duration: Optional[str], since_date: Optional[str], li
     except Exception as e:
         click.echo(f'Error: {e}', err=True)
         sys.exit(1)
+
+
+def _get_thread_summary(thread_id: str, service) -> dict:
+    """Get summary info for a thread (first message metadata)."""
+    thread = service.users().threads().get(
+        userId='me',
+        id=thread_id,
+        format='metadata',
+        metadataHeaders=['From', 'Subject', 'Date'],
+    ).execute()
+
+    messages = thread.get('messages', [])
+    if not messages:
+        return {'thread_id': thread_id, 'date': '', 'from': '', 'subject': ''}
+
+    # Get first message headers
+    headers = messages[0].get('payload', {}).get('headers', [])
+
+    from_addr = _get_header(headers, 'From')
+    subject = _get_header(headers, 'Subject')
+    date_str = _get_header(headers, 'Date')
+
+    # Extract email from "Name <email>" format
+    email_match = re.search(r'<([^>]+)>', from_addr)
+    if email_match:
+        from_email = email_match.group(1)
+    else:
+        from_email = from_addr.split()[0] if from_addr else ''
+
+    # Parse date
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(date_str)
+        date_short = dt.strftime('%Y-%m-%d')
+    except (ValueError, TypeError):
+        date_short = date_str[:10] if date_str else ''
+
+    return {
+        'thread_id': thread_id,
+        'date': date_short,
+        'from': from_email,
+        'subject': subject[:60],
+    }
+
+
+@mail.command()
+@click.argument('query')
+@click.option('--limit', default=100, help='Maximum results (default: 100)')
+def search(query: str, limit: int):
+    """Search Gmail and list matching threads (TSV output).
+
+    Uses Gmail query syntax: from:, to:, subject:, after:, before:, has:attachment, etc.
+
+    Output is TSV (tab-separated) for easy parsing:
+
+    \b
+        thread_id    date    from    subject
+
+    Pipe to pull: gax mail search "from:alice" | tail -n +2 | cut -f1 | xargs -I{} gax mail pull {}
+    """
+    try:
+        creds = get_authenticated_credentials()
+        service = build('gmail', 'v1', credentials=creds)
+
+        # Search threads
+        threads = []
+        page_token = None
+
+        while len(threads) < limit:
+            batch_size = min(100, limit - len(threads))
+            result = service.users().threads().list(
+                userId='me',
+                q=query,
+                maxResults=batch_size,
+                pageToken=page_token,
+            ).execute()
+
+            batch = result.get('threads', [])
+            threads.extend(batch)
+
+            page_token = result.get('nextPageToken')
+            if not page_token or not batch:
+                break
+
+        threads = threads[:limit]
+
+        if not threads:
+            click.echo('No threads found.', err=True)
+            sys.exit(1)
+
+        # Check if more available
+        total_estimate = result.get('resultSizeEstimate', 0)
+        if total_estimate > limit:
+            click.echo(f'# Found ~{total_estimate} threads, showing first {limit}', err=True)
+
+        # Print header
+        click.echo('thread_id\tdate\tfrom\tsubject')
+
+        # Get summary for each thread
+        for thread_info in threads:
+            thread_id = thread_info['id']
+            try:
+                summary = _get_thread_summary(thread_id, service)
+                click.echo(f"{summary['thread_id']}\t{summary['date']}\t{summary['from']}\t{summary['subject']}")
+            except Exception as e:
+                click.echo(f"# Error fetching {thread_id}: {e}", err=True)
+
+    except Exception as e:
+        click.echo(f'Error: {e}', err=True)
+        sys.exit(1)

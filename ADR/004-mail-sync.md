@@ -41,7 +41,34 @@ Key differences from Docs/Sheets:
 ```
 gax mail pull <url-or-id>            # Pull single thread to .mail.gax file
 gax mail sync [LABEL] [OPTIONS]      # Sync threads from label to folder
+gax mail search <query> [--limit N]  # Search and list threads (TSV output)
 ```
+
+### Search Command
+
+```
+gax mail search <query> [--limit N]
+```
+
+**Query:** Gmail native syntax (from:, to:, subject:, after:, has:attachment, etc.)
+
+**Output:** TSV (tab-separated) to stdout - machine and human readable:
+```
+thread_id	date	from	subject
+19d0bed1cddbab6d	2026-03-20	alice@example.com	Re: Project Update
+19d0bd2ac8c2f21d	2026-03-19	bob@example.com	Meeting Notes
+```
+
+**Workflow:**
+```bash
+# Search and preview
+gax mail search "from:alice"
+
+# Search and pull matching threads
+gax mail search "from:alice" | tail -n +2 | cut -f1 | xargs -I{} gax mail pull {}
+```
+
+**Note:** Can add `--format jsonl` later if needed.
 
 ### Sync Command
 
