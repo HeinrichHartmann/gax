@@ -29,8 +29,13 @@ class GSheetClient:
             rows = data[1:] if len(data) > 1 else []
             return pd.DataFrame(rows, columns=headers)
         else:
-            records = ws.get_all_records()
-            return pd.DataFrame(records)
+            # Use get_all_values to handle empty/duplicate headers
+            data = ws.get_all_values()
+            if not data:
+                return pd.DataFrame()
+            headers = data[0]
+            rows = data[1:] if len(data) > 1 else []
+            return pd.DataFrame(rows, columns=headers)
 
     def write(self, spreadsheet_id: str, tab: str, df: pd.DataFrame, with_formulas: bool = False) -> int:
         """Write DataFrame to a Google Sheet tab. Returns number of rows written."""
