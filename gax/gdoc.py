@@ -363,6 +363,389 @@ def doc():
     pass
 
 
+# --- Tab subcommand group ---
+
+
+@doc.group()
+def tab():
+    """Single tab operations"""
+    pass
+
+
+def get_tabs_list(document_id: str, *, service=None) -> dict:
+    """Get document title and list of tabs.
+
+    Returns:
+        Dict with 'title' and 'tabs' (list of {id, title, index})
+    """
+    if service is None:
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+
+    document = (
+        service.documents()
+        .get(documentId=document_id, includeTabsContent=False)
+        .execute()
+    )
+
+    doc_title = document.get("title", "Untitled")
+    raw_tabs = document.get("tabs", [])
+
+    tabs = []
+    for i, t in enumerate(raw_tabs):
+        props = t.get("tabProperties", {})
+        tabs.append(
+            {
+                "id": props.get("tabId", ""),
+                "title": props.get("title", f"Tab {i}"),
+                "index": i,
+            }
+        )
+
+    # If no tabs, document itself is the only "tab"
+    if not tabs:
+        tabs = [{"id": "", "title": doc_title, "index": 0}]
+
+    return {"title": doc_title, "tabs": tabs}
+
+
+@tab.command("list")
+@click.argument("url")
+def tab_list(url: str):
+    """List tabs in a document (TSV output)."""
+    try:
+        document_id = extract_doc_id(url)
+        info = get_tabs_list(document_id)
+
+        click.echo(f"# {info['title']}")
+        click.echo("index\tid\ttitle")
+        for t in info["tabs"]:
+            click.echo(f"{t['index']}\t{t['id']}\t{t['title']}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@tab.command("import")
+@click.argument("url")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output tracking file (default: <filename>.tab.gax)",
+)
+def tab_import(url: str, file: Path, output: Optional[Path]):
+    """Import a markdown file as a new tab in a document.
+
+    This creates a new tab with the file's content and saves a tracking
+    file for future push/pull operations.
+
+    Note: Actually creating the tab in Google Docs is not yet implemented.
+    """
+    try:
+        document_id = extract_doc_id(url)
+        source_url = f"https://docs.google.com/document/d/{document_id}/edit"
+
+        # Derive tab name from filename
+        tab_name = file.stem
+
+        # Read content
+        content = file.read_text(encoding="utf-8")
+
+        # Create a tracking file
+        time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        section = DocSection(
+            title="",  # Will be filled when actually created
+            source=source_url,
+            time=time_str,
+            section=1,
+            section_title=tab_name,
+            content=content,
+        )
+
+        if output:
+            tracking_path = output
+        else:
+            tracking_path = file.with_suffix(".tab.gax")
+
+        if tracking_path.exists():
+            click.echo(f"Error: Tracking file already exists: {tracking_path}", err=True)
+            click.echo("Use 'gax doc tab push' to update an existing tab.")
+            sys.exit(1)
+
+        # TODO: Implement actual tab creation via Docs API
+        click.echo("Warning: Creating tabs in Google Docs is not yet implemented.", err=True)
+        click.echo(f"Would create tab '{tab_name}' in document {document_id}")
+        click.echo(f"Content ({len(content)} chars):")
+        click.echo("-" * 40)
+        preview = content[:500] + ("..." if len(content) > 500 else "")
+        click.echo(preview)
+        click.echo("-" * 40)
+
+        # For now, create the tracking file anyway so the workflow is clear
+        tracking_content = format_section(section)
+        tracking_path.write_text(tracking_content, encoding="utf-8")
+        click.echo(f"Created tracking file: {tracking_path}")
+        click.echo("When tab creation is implemented, use 'gax doc tab push' to sync changes.")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+def pull_single_tab(
+    document_id: str, tab_name: str, source_url: str, *, service=None
+) -> DocSection:
+    """Pull a single tab from a document.
+
+    Args:
+        document_id: Google Docs document ID
+        tab_name: Name of the tab to pull
+        source_url: Source URL for metadata
+        service: Optional Docs API service object for testing
+
+    Returns:
+        DocSection for the specified tab
+    """
+    if service is None:
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+
+    document = (
+        service.documents()
+        .get(documentId=document_id, includeTabsContent=True)
+        .execute()
+    )
+
+    doc_title = document.get("title", "Untitled")
+    raw_tabs = document.get("tabs", [])
+    time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Find matching tab
+    for i, t in enumerate(raw_tabs, start=1):
+        props = t.get("tabProperties", {})
+        title = props.get("title", f"Tab {i}")
+        tab_id = props.get("tabId", "")
+
+        if title == tab_name or tab_id == tab_name:
+            body = t.get("documentTab", {}).get("body", {})
+            content = _docs_body_to_markdown(body)
+
+            return DocSection(
+                title=doc_title,
+                source=source_url,
+                time=time_str,
+                section=1,
+                section_title=title,
+                content=content,
+            )
+
+    # If no tabs, check if tab_name matches document title
+    if not raw_tabs:
+        body = document.get("body", {})
+        content = _docs_body_to_markdown(body)
+
+        return DocSection(
+            title=doc_title,
+            source=source_url,
+            time=time_str,
+            section=1,
+            section_title=doc_title,
+            content=content,
+        )
+
+    raise ValueError(f"Tab not found: {tab_name}")
+
+
+@tab.command("clone")
+@click.argument("url")
+@click.argument("tab_name")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output file (default: <tab>.tab.gax)",
+)
+def tab_clone(url: str, tab_name: str, output: Optional[Path]):
+    """Clone a single tab to a .tab.gax file."""
+    try:
+        document_id = extract_doc_id(url)
+        source_url = f"https://docs.google.com/document/d/{document_id}/edit"
+
+        click.echo(f"Fetching tab: {tab_name}")
+        section = pull_single_tab(document_id, tab_name, source_url)
+
+        content = format_section(section)
+
+        if output:
+            file_path = output
+        else:
+            safe_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+            safe_name = re.sub(r"\s+", "_", safe_name)
+            file_path = Path(f"{safe_name}.tab.gax")
+
+        if file_path.exists():
+            click.echo(f"Error: File already exists: {file_path}", err=True)
+            sys.exit(1)
+
+        file_path.write_text(content, encoding="utf-8")
+        click.echo(f"Created: {file_path}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@tab.command("pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def tab_pull(file: Path):
+    """Pull latest content for a single tab."""
+    try:
+        content = file.read_text(encoding="utf-8")
+        sections = parse_multipart(content)
+
+        if not sections:
+            click.echo("Error: No sections found in file", err=True)
+            sys.exit(1)
+
+        section = sections[0]
+        source_url = section.source
+        tab_name = section.section_title
+
+        if not source_url:
+            click.echo("Error: No source URL found in file", err=True)
+            sys.exit(1)
+
+        document_id = extract_doc_id(source_url)
+        click.echo(f"Pulling tab: {tab_name}")
+
+        new_section = pull_single_tab(document_id, tab_name, source_url)
+        new_content = format_section(new_section)
+
+        file.write_text(new_content, encoding="utf-8")
+        click.echo(f"Updated: {file}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@tab.command("diff")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def tab_diff(file: Path):
+    """Show diff between local file and remote tab."""
+    try:
+        import difflib
+
+        content = file.read_text(encoding="utf-8")
+        sections = parse_multipart(content)
+
+        if not sections:
+            click.echo("Error: No sections found in file", err=True)
+            sys.exit(1)
+
+        local_section = sections[0]
+        source_url = local_section.source
+        tab_name = local_section.section_title
+
+        document_id = extract_doc_id(source_url)
+
+        remote_section = pull_single_tab(document_id, tab_name, source_url)
+
+        # Compare content only (not headers)
+        local_lines = local_section.content.splitlines(keepends=True)
+        remote_lines = remote_section.content.splitlines(keepends=True)
+
+        diff = list(
+            difflib.unified_diff(
+                remote_lines,
+                local_lines,
+                fromfile="remote",
+                tofile="local",
+                lineterm="",
+            )
+        )
+
+        if not diff:
+            click.echo("No differences.")
+        else:
+            for line in diff:
+                click.echo(line.rstrip("\n"))
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@tab.command("push")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+def tab_push(file: Path, yes: bool):
+    """Push local changes to a single tab (with confirmation)."""
+    try:
+        import difflib
+
+        content = file.read_text(encoding="utf-8")
+        sections = parse_multipart(content)
+
+        if not sections:
+            click.echo("Error: No sections found in file", err=True)
+            sys.exit(1)
+
+        local_section = sections[0]
+        source_url = local_section.source
+        tab_name = local_section.section_title
+
+        document_id = extract_doc_id(source_url)
+
+        # Get remote content for diff
+        remote_section = pull_single_tab(document_id, tab_name, source_url)
+
+        local_lines = local_section.content.splitlines(keepends=True)
+        remote_lines = remote_section.content.splitlines(keepends=True)
+
+        diff = list(
+            difflib.unified_diff(
+                remote_lines,
+                local_lines,
+                fromfile="remote",
+                tofile="local",
+                lineterm="",
+            )
+        )
+
+        if not diff:
+            click.echo("No differences to push.")
+            return
+
+        # Show diff
+        click.echo("Changes to push:")
+        click.echo("-" * 40)
+        for line in diff:
+            click.echo(line.rstrip("\n"))
+        click.echo("-" * 40)
+
+        # Confirm
+        if not yes:
+            if not click.confirm("Push these changes?"):
+                click.echo("Aborted.")
+                return
+
+        # TODO: Implement actual push via Docs API
+        # For now, just warn that push is not yet implemented
+        click.echo(
+            "Warning: Push to Google Docs is not yet implemented.", err=True
+        )
+        click.echo("This will be added when the Docs API write support is ready.")
+        sys.exit(1)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 def _add_comments_to_sections(
     sections: list[DocSection],
     document_id: str,

@@ -5,8 +5,9 @@ import sys
 import click
 from pathlib import Path
 
-from .gsheet import pull as gsheet_pull, push as gsheet_push
+from .gsheet import pull as gsheet_pull, push as gsheet_push, clone_all, pull_all
 from .gsheet.client import GSheetClient
+from .multipart import format_multipart
 from .frontmatter import SheetConfig, format_content
 from .formats import get_format
 from . import auth
@@ -83,42 +84,105 @@ def logout():
 # --- GSheet commands ---
 
 
+def _extract_spreadsheet_id(url: str) -> str:
+    """Extract spreadsheet ID from Google Sheets URL."""
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
+    if match:
+        return match.group(1)
+    # Maybe it's already an ID
+    if re.fullmatch(r"[a-zA-Z0-9-_]+", url):
+        return url
+    raise ValueError(f"Could not parse spreadsheet ID from: {url}")
+
+
 @main.group()
 def sheet():
     """Google Sheets operations"""
     pass
 
 
-@sheet.command()
-@click.argument("file", type=click.Path(exists=True, path_type=Path))
-def pull(file: Path):
-    """Pull data from Google Sheets to local file."""
+@sheet.command("clone")
+@click.argument("url")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output file (default: <title>.sheet.gax)",
+)
+@click.option(
+    "--format", "fmt", default="csv", help="Output format: csv, tsv, psv, json, jsonl"
+)
+def sheet_clone(url: str, output: Path | None, fmt: str):
+    """Clone all tabs from a spreadsheet to a multipart .sheet.gax file."""
     try:
-        rows = gsheet_pull(file)
+        spreadsheet_id = _extract_spreadsheet_id(url)
+        click.echo(f"Fetching spreadsheet: {spreadsheet_id}")
+
+        title, sections = clone_all(spreadsheet_id, url, fmt)
+
+        if output:
+            file_path = output
+        else:
+            safe_name = re.sub(r'[<>:"/\\|?*]', "-", title)
+            safe_name = re.sub(r"\s+", "_", safe_name)
+            file_path = Path(f"{safe_name}.sheet.gax")
+
+        if file_path.exists():
+            click.echo(f"Error: File already exists: {file_path}", err=True)
+            sys.exit(1)
+
+        content = format_multipart(sections)
+        file_path.write_text(content, encoding="utf-8")
+
+        total_rows = sum(len(s.content.strip().split("\n")) - 1 for s in sections)
+        click.echo(f"Created: {file_path}")
+        click.echo(f"Tabs: {len(sections)}, Total rows: {total_rows}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@sheet.command("pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def sheet_pull(file: Path):
+    """Pull latest data for all tabs in a multipart file."""
+    try:
+        rows = pull_all(file)
         click.echo(f"Pulled {rows} rows to {file}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
-@sheet.command()
-@click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option(
-    "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
-)
-def push(file: Path, with_formulas: bool):
-    """Push data from local file to Google Sheets."""
+@sheet.group()
+def tab():
+    """Single tab operations"""
+    pass
+
+
+@tab.command("list")
+@click.argument("url")
+def tab_list(url: str):
+    """List tabs in a spreadsheet (TSV output)."""
     try:
-        rows = gsheet_push(file, with_formulas=with_formulas)
-        click.echo(f"Pushed {rows} rows from {file}")
+        spreadsheet_id = _extract_spreadsheet_id(url)
+        client = GSheetClient()
+        info = client.get_spreadsheet_info(spreadsheet_id)
+
+        click.echo(f"# {info['title']}")
+        click.echo("index\tid\ttitle")
+        for t in info["tabs"]:
+            click.echo(f"{t['index']}\t{t['id']}\t{t['title']}")
+
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
-@sheet.command()
+@tab.command("clone")
 @click.argument("url")
-@click.argument("tab")
+@click.argument("tab_name")
 @click.option(
     "--output",
     "-o",
@@ -128,39 +192,31 @@ def push(file: Path, with_formulas: bool):
 @click.option(
     "--format", "fmt", default="csv", help="Output format: csv, tsv, psv, json, jsonl"
 )
-def clone(url: str, tab: str, output: Path | None, fmt: str):
-    """Clone a Google Sheet tab to a local .sheet.gax file."""
+def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
+    """Clone a single tab to a .sheet.gax file."""
     try:
-        # Parse spreadsheet ID from URL
-        match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
-        if not match:
-            raise ValueError(f"Could not parse spreadsheet ID from URL: {url}")
-        spreadsheet_id = match.group(1)
+        spreadsheet_id = _extract_spreadsheet_id(url)
+        click.echo(f"Fetching: {tab_name}")
 
-        click.echo(f"Fetching: {spreadsheet_id} / {tab}")
-
-        # Fetch data
         client = GSheetClient()
-        df = client.read(spreadsheet_id, tab)
+        df = client.read(spreadsheet_id, tab_name)
 
-        # Format output
         formatter = get_format(fmt)
         data = formatter.write(df)
 
         config = SheetConfig(
             spreadsheet_id=spreadsheet_id,
-            tab=tab,
+            tab=tab_name,
             format=fmt,
             url=url,
         )
 
         content = format_content(config, data)
 
-        # Determine output file
         if output:
             file_path = output
         else:
-            safe_name = re.sub(r'[<>:"/\\|?*]', "-", tab)
+            safe_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
             safe_name = re.sub(r"\s+", "_", safe_name)
             file_path = Path(f"{safe_name}.sheet.gax")
 
@@ -172,6 +228,33 @@ def clone(url: str, tab: str, output: Path | None, fmt: str):
         click.echo(f"Created: {file_path}")
         click.echo(f"Rows: {len(df)}")
 
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@tab.command("pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def tab_pull(file: Path):
+    """Pull latest data for a single tab."""
+    try:
+        rows = gsheet_pull(file)
+        click.echo(f"Pulled {rows} rows to {file}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@tab.command("push")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
+)
+def tab_push(file: Path, with_formulas: bool):
+    """Push local data to a single tab."""
+    try:
+        rows = gsheet_push(file, with_formulas=with_formulas)
+        click.echo(f"Pushed {rows} rows from {file}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

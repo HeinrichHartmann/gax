@@ -7,8 +7,9 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from gax.gsheet import GSheetClient, pull, push
+from gax.gsheet import GSheetClient, pull, push, clone_all, pull_all
 from gax.frontmatter import SheetConfig, format_content
+from gax.multipart import parse_multipart, format_multipart
 
 
 def make_mock_gc(sheet_data: list[list[str]]):
@@ -33,6 +34,43 @@ def make_mock_gc(sheet_data: list[list[str]]):
     worksheet.get.return_value = sheet_data
 
     return gc, worksheet
+
+
+def make_mock_gc_multi_tab(
+    title: str, tabs: dict[str, list[list[str]]]
+) -> tuple[MagicMock, dict[str, MagicMock]]:
+    """Create a mock gspread client with multiple tabs.
+
+    Args:
+        title: Spreadsheet title
+        tabs: Dict mapping tab name to sheet data
+
+    Returns:
+        Tuple of (gc mock, dict of worksheet mocks by name)
+    """
+    gc = MagicMock()
+    spreadsheet = MagicMock()
+    spreadsheet.title = title
+
+    worksheets = {}
+    worksheet_list = []
+
+    for idx, (tab_name, data) in enumerate(tabs.items()):
+        ws = MagicMock()
+        ws.id = idx
+        ws.title = tab_name
+        ws.index = idx
+        ws.get_all_values.return_value = data
+        ws.get.return_value = data
+        worksheets[tab_name] = ws
+        worksheet_list.append(ws)
+
+    spreadsheet.worksheets.return_value = worksheet_list
+    spreadsheet.worksheet.side_effect = lambda name: worksheets[name]
+
+    gc.open_by_key.return_value = spreadsheet
+
+    return gc, worksheets
 
 
 class TestGSheetClientRead:
@@ -256,3 +294,183 @@ class TestRoundTrip:
         # Verify modified data was pushed
         values = push_worksheet.update.call_args[1]["values"]
         assert ["Item1", "999"] in values
+
+
+class TestCloneAll:
+    """Tests for clone_all() - cloning entire spreadsheets."""
+
+    def test_clone_all_tabs(self):
+        """Test cloning a spreadsheet with multiple tabs."""
+        tabs = {
+            "Revenue": [
+                ["Month", "Amount"],
+                ["Jan", "10000"],
+                ["Feb", "12000"],
+            ],
+            "Expenses": [
+                ["Month", "Amount"],
+                ["Jan", "8000"],
+                ["Feb", "9000"],
+            ],
+        }
+        gc, _ = make_mock_gc_multi_tab("Q1 Report", tabs)
+        client = GSheetClient(gc=gc)
+
+        title, sections = clone_all(
+            "test-sheet-id",
+            "https://docs.google.com/spreadsheets/d/test-sheet-id",
+            fmt="csv",
+            client=client,
+        )
+
+        assert title == "Q1 Report"
+        assert len(sections) == 2
+
+        # Check first section
+        assert sections[0].headers["title"] == "Q1 Report"
+        assert sections[0].headers["tab"] == "Revenue"
+        assert sections[0].headers["section"] == 1
+        assert "Jan" in sections[0].content
+        assert "10000" in sections[0].content
+
+        # Check second section
+        assert sections[1].headers["tab"] == "Expenses"
+        assert sections[1].headers["section"] == 2
+        assert "8000" in sections[1].content
+
+    def test_clone_single_tab(self):
+        """Test cloning a spreadsheet with a single tab."""
+        tabs = {
+            "Sheet1": [
+                ["Name", "Value"],
+                ["Test", "123"],
+            ],
+        }
+        gc, _ = make_mock_gc_multi_tab("Simple Sheet", tabs)
+        client = GSheetClient(gc=gc)
+
+        title, sections = clone_all(
+            "simple-id", "https://docs.google.com/spreadsheets/d/simple-id", client=client
+        )
+
+        assert title == "Simple Sheet"
+        assert len(sections) == 1
+        assert sections[0].headers["tab"] == "Sheet1"
+
+    def test_clone_preserves_source_url(self):
+        """Test that source URL is preserved in headers."""
+        tabs = {"Data": [["A"], ["1"]]}
+        gc, _ = make_mock_gc_multi_tab("Test", tabs)
+        client = GSheetClient(gc=gc)
+
+        url = "https://docs.google.com/spreadsheets/d/abc123/edit#gid=0"
+        _, sections = clone_all("abc123", url, client=client)
+
+        assert sections[0].headers["source"] == url
+
+
+class TestPullAll:
+    """Tests for pull_all() - pulling all tabs in multipart file."""
+
+    def test_pull_all_tabs(self, tmp_path):
+        """Test pulling updates for all tabs in a multipart file."""
+        # Create initial multipart file
+        from gax.multipart import Section
+
+        sections = [
+            Section(
+                headers={
+                    "title": "Test Sheet",
+                    "source": "https://docs.google.com/spreadsheets/d/test-id",
+                    "section": 1,
+                    "tab": "Revenue",
+                    "format": "csv",
+                },
+                content="Month,Amount\nOld,0\n",
+            ),
+            Section(
+                headers={
+                    "title": "Test Sheet",
+                    "source": "https://docs.google.com/spreadsheets/d/test-id",
+                    "section": 2,
+                    "tab": "Expenses",
+                    "format": "csv",
+                },
+                content="Month,Amount\nOld,0\n",
+            ),
+        ]
+        file_path = tmp_path / "test.sheet.gax"
+        file_path.write_text(format_multipart(sections))
+
+        # Mock with updated data
+        tabs = {
+            "Revenue": [
+                ["Month", "Amount"],
+                ["Jan", "10000"],
+            ],
+            "Expenses": [
+                ["Month", "Amount"],
+                ["Jan", "8000"],
+            ],
+        }
+        gc, _ = make_mock_gc_multi_tab("Test Sheet", tabs)
+        client = GSheetClient(gc=gc)
+
+        # Pull all
+        rows = pull_all(file_path, client=client)
+
+        assert rows == 2  # 1 row per tab
+
+        # Verify file was updated
+        content = file_path.read_text()
+        updated = parse_multipart(content)
+
+        assert len(updated) == 2
+        assert "10000" in updated[0].content
+        assert "Old" not in updated[0].content
+        assert "8000" in updated[1].content
+
+    def test_pull_all_roundtrip(self, tmp_path):
+        """Test clone -> modify -> pull round-trip."""
+        # Clone initial
+        tabs = {
+            "Data": [
+                ["Key", "Value"],
+                ["A", "1"],
+                ["B", "2"],
+            ],
+        }
+        gc, _ = make_mock_gc_multi_tab("Roundtrip Test", tabs)
+        client = GSheetClient(gc=gc)
+
+        title, sections = clone_all(
+            "roundtrip-id",
+            "https://docs.google.com/spreadsheets/d/roundtrip-id",
+            client=client,
+        )
+
+        file_path = tmp_path / "roundtrip.sheet.gax"
+        file_path.write_text(format_multipart(sections))
+
+        # Modify on "server" (new mock)
+        updated_tabs = {
+            "Data": [
+                ["Key", "Value"],
+                ["A", "100"],
+                ["B", "200"],
+                ["C", "300"],
+            ],
+        }
+        pull_gc, _ = make_mock_gc_multi_tab("Roundtrip Test", updated_tabs)
+        pull_client = GSheetClient(gc=pull_gc)
+
+        # Pull
+        rows = pull_all(file_path, client=pull_client)
+
+        assert rows == 3
+
+        # Verify updated content
+        content = file_path.read_text()
+        assert "100" in content
+        assert "200" in content
+        assert "300" in content

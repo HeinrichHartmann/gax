@@ -17,6 +17,17 @@ class GSheetClient:
             self._gc = gspread.authorize(creds)
         return self._gc
 
+    def get_spreadsheet_info(self, spreadsheet_id: str) -> dict:
+        """Get spreadsheet title and tab list."""
+        sh = self.gc.open_by_key(spreadsheet_id)
+        return {
+            "title": sh.title,
+            "tabs": [
+                {"id": ws.id, "title": ws.title, "index": ws.index}
+                for ws in sh.worksheets()
+            ],
+        }
+
     def read(
         self, spreadsheet_id: str, tab: str, range: str | None = None
     ) -> pd.DataFrame:

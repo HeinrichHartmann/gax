@@ -7,7 +7,13 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from gax.gdoc import pull_doc, format_multipart, format_section
+from gax.gdoc import (
+    pull_doc,
+    format_multipart,
+    format_section,
+    get_tabs_list,
+    pull_single_tab,
+)
 
 
 # Load fixtures
@@ -275,3 +281,137 @@ class TestHeadingConversion:
         assert "Normal text" in content
         # Normal text should NOT have # prefix
         assert "\n# Normal text" not in content
+
+
+class TestGetTabsList:
+    """Tests for get_tabs_list function."""
+
+    def test_multi_tab_document(self):
+        """Test getting tabs from a multi-tab document."""
+        doc_response = json.loads(load_fixture("sample_doc_response.json"))
+        service = make_mock_service(doc_response)
+
+        info = get_tabs_list("test-doc-123", service=service)
+
+        assert info["title"] == "Project Plan"
+        assert len(info["tabs"]) == 2
+        assert info["tabs"][0]["title"] == "Overview"
+        assert info["tabs"][0]["index"] == 0
+        assert info["tabs"][1]["title"] == "Timeline"
+        assert info["tabs"][1]["index"] == 1
+
+    def test_single_tab_document(self):
+        """Test getting tabs from a single-tab document."""
+        doc_response = {
+            "documentId": "single-doc",
+            "title": "Simple Doc",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.123", "title": "Simple Doc"},
+                    "documentTab": {"body": {"content": []}},
+                }
+            ],
+        }
+        service = make_mock_service(doc_response)
+
+        info = get_tabs_list("single-doc", service=service)
+
+        assert info["title"] == "Simple Doc"
+        assert len(info["tabs"]) == 1
+        assert info["tabs"][0]["title"] == "Simple Doc"
+        assert info["tabs"][0]["id"] == "t.123"
+
+    def test_legacy_document_no_tabs(self):
+        """Test getting tabs from a legacy document without tabs array."""
+        doc_response = {
+            "documentId": "legacy-doc",
+            "title": "Legacy Doc",
+            "body": {"content": []},
+        }
+        service = make_mock_service(doc_response)
+
+        info = get_tabs_list("legacy-doc", service=service)
+
+        assert info["title"] == "Legacy Doc"
+        assert len(info["tabs"]) == 1
+        assert info["tabs"][0]["title"] == "Legacy Doc"
+        assert info["tabs"][0]["id"] == ""
+
+
+class TestPullSingleTab:
+    """Tests for pull_single_tab function."""
+
+    def test_pull_specific_tab(self):
+        """Test pulling a specific tab by name."""
+        doc_response = json.loads(load_fixture("sample_doc_response.json"))
+        service = make_mock_service(doc_response)
+
+        section = pull_single_tab(
+            "test-doc-123",
+            "Timeline",
+            "https://docs.google.com/document/d/test-doc-123/edit",
+            service=service,
+        )
+
+        assert section.title == "Project Plan"
+        assert section.section_title == "Timeline"
+        assert "# Timeline" in section.content
+        assert "## Key Milestones" in section.content
+
+    def test_pull_first_tab(self):
+        """Test pulling the first tab."""
+        doc_response = json.loads(load_fixture("sample_doc_response.json"))
+        service = make_mock_service(doc_response)
+
+        section = pull_single_tab(
+            "test-doc-123",
+            "Overview",
+            "https://docs.google.com/document/d/test-doc-123/edit",
+            service=service,
+        )
+
+        assert section.section_title == "Overview"
+        assert "# Overview" in section.content
+
+    def test_pull_tab_not_found(self):
+        """Test pulling a non-existent tab raises error."""
+        doc_response = json.loads(load_fixture("sample_doc_response.json"))
+        service = make_mock_service(doc_response)
+
+        import pytest
+
+        with pytest.raises(ValueError, match="Tab not found"):
+            pull_single_tab(
+                "test-doc-123",
+                "NonExistent",
+                "https://docs.google.com/document/d/test-doc-123/edit",
+                service=service,
+            )
+
+    def test_pull_legacy_document(self):
+        """Test pulling from a legacy document matches document title."""
+        doc_response = {
+            "documentId": "legacy-doc",
+            "title": "Legacy Doc",
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [{"textRun": {"content": "Legacy content\n"}}],
+                            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                        }
+                    }
+                ]
+            },
+        }
+        service = make_mock_service(doc_response)
+
+        section = pull_single_tab(
+            "legacy-doc",
+            "Legacy Doc",
+            "https://docs.google.com/document/d/legacy-doc/edit",
+            service=service,
+        )
+
+        assert section.section_title == "Legacy Doc"
+        assert "Legacy content" in section.content
