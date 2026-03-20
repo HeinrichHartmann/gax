@@ -215,10 +215,17 @@ def _docs_body_to_markdown(body: dict) -> str:
     return '\n'.join(lines)
 
 
-def pull_doc(document_id: str, source_url: str) -> list[Section]:
-    """Fetch document from Google Docs API and return list of sections."""
-    creds = get_authenticated_credentials()
-    service = build('docs', 'v1', credentials=creds)
+def pull_doc(document_id: str, source_url: str, *, service=None) -> list[Section]:
+    """Fetch document from Google Docs API and return list of sections.
+
+    Args:
+        document_id: Google Docs document ID
+        source_url: Source URL for metadata
+        service: Optional Docs API service object for testing
+    """
+    if service is None:
+        creds = get_authenticated_credentials()
+        service = build('docs', 'v1', credentials=creds)
 
     # Fetch document with tab content
     document = service.documents().get(

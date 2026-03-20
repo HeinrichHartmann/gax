@@ -1,0 +1,194 @@
+{
+  "documentId": "test-doc-123",
+  "title": "Project Plan",
+  "tabs": [
+    {
+      "tabProperties": {
+        "tabId": "tab1",
+        "title": "Overview"
+      },
+      "documentTab": {
+        "body": {
+          "content": [
+            {
+              "startIndex": 1,
+              "endIndex": 2,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 1,
+                    "endIndex": 2,
+                    "textRun": {
+                      "content": "\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "NORMAL_TEXT"
+                }
+              }
+            },
+            {
+              "startIndex": 2,
+              "endIndex": 11,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 2,
+                    "endIndex": 11,
+                    "textRun": {
+                      "content": "Overview\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "HEADING_1"
+                }
+              }
+            },
+            {
+              "startIndex": 11,
+              "endIndex": 60,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 11,
+                    "endIndex": 60,
+                    "textRun": {
+                      "content": "This document describes the project goals.\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "NORMAL_TEXT"
+                }
+              }
+            },
+            {
+              "startIndex": 60,
+              "endIndex": 100,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 60,
+                    "endIndex": 100,
+                    "textRun": {
+                      "content": "We aim to deliver by Q2 2026.\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "NORMAL_TEXT"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tabProperties": {
+        "tabId": "tab2",
+        "title": "Timeline"
+      },
+      "documentTab": {
+        "body": {
+          "content": [
+            {
+              "startIndex": 1,
+              "endIndex": 2,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 1,
+                    "endIndex": 2,
+                    "textRun": {
+                      "content": "\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "NORMAL_TEXT"
+                }
+              }
+            },
+            {
+              "startIndex": 2,
+              "endIndex": 11,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 2,
+                    "endIndex": 11,
+                    "textRun": {
+                      "content": "Timeline\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "HEADING_1"
+                }
+              }
+            },
+            {
+              "startIndex": 11,
+              "endIndex": 30,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 11,
+                    "endIndex": 30,
+                    "textRun": {
+                      "content": "Key Milestones\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "HEADING_2"
+                }
+              }
+            },
+            {
+              "startIndex": 30,
+              "endIndex": 55,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 30,
+                    "endIndex": 55,
+                    "textRun": {
+                      "content": "Alpha release in Q1.\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "NORMAL_TEXT"
+                }
+              }
+            },
+            {
+              "startIndex": 55,
+              "endIndex": 78,
+              "paragraph": {
+                "elements": [
+                  {
+                    "startIndex": 55,
+                    "endIndex": 78,
+                    "textRun": {
+                      "content": "Beta release in Q2.\n"
+                    }
+                  }
+                ],
+                "paragraphStyle": {
+                  "namedStyleType": "NORMAL_TEXT"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "revisionId": "test-revision-1",
+  "suggestionsViewMode": "SUGGESTIONS_INLINE"
+}
