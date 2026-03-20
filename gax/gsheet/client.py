@@ -6,8 +6,9 @@ from ..auth import get_authenticated_credentials
 
 
 class GSheetClient:
-    def __init__(self):
-        self._gc = None
+    def __init__(self, gc: gspread.Client | None = None):
+        """Initialize client with optional gspread client for testing."""
+        self._gc = gc
 
     @property
     def gc(self) -> gspread.Client:
@@ -16,7 +17,9 @@ class GSheetClient:
             self._gc = gspread.authorize(creds)
         return self._gc
 
-    def read(self, spreadsheet_id: str, tab: str, range: str | None = None) -> pd.DataFrame:
+    def read(
+        self, spreadsheet_id: str, tab: str, range: str | None = None
+    ) -> pd.DataFrame:
         """Read data from a Google Sheet tab into a DataFrame."""
         sh = self.gc.open_by_key(spreadsheet_id)
         ws = sh.worksheet(tab)
@@ -37,7 +40,13 @@ class GSheetClient:
             rows = data[1:] if len(data) > 1 else []
             return pd.DataFrame(rows, columns=headers)
 
-    def write(self, spreadsheet_id: str, tab: str, df: pd.DataFrame, with_formulas: bool = False) -> int:
+    def write(
+        self,
+        spreadsheet_id: str,
+        tab: str,
+        df: pd.DataFrame,
+        with_formulas: bool = False,
+    ) -> int:
         """Write DataFrame to a Google Sheet tab. Returns number of rows written."""
         sh = self.gc.open_by_key(spreadsheet_id)
         ws = sh.worksheet(tab)

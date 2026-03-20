@@ -12,7 +12,9 @@ class CSVFormat(Format):
     def read(self, content: str) -> pd.DataFrame:
         if not content.strip():
             return pd.DataFrame()
-        df = pd.read_csv(io.StringIO(content), sep=self.separator, skipinitialspace=True)
+        df = pd.read_csv(
+            io.StringIO(content), sep=self.separator, skipinitialspace=True
+        )
         # Replace "Unnamed: X" column names with empty string
         df.columns = [(c.strip() if isinstance(c, str) else c) for c in df.columns]
         df.columns = [("" if str(c).startswith("Unnamed:") else c) for c in df.columns]

@@ -70,8 +70,12 @@ class TestPullDoc:
                             "content": [
                                 {
                                     "paragraph": {
-                                        "elements": [{"textRun": {"content": "Hello World\n"}}],
-                                        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                                        "elements": [
+                                            {"textRun": {"content": "Hello World\n"}}
+                                        ],
+                                        "paragraphStyle": {
+                                            "namedStyleType": "NORMAL_TEXT"
+                                        },
                                     }
                                 }
                             ]
@@ -179,14 +183,14 @@ class TestFormatMultipart:
         for i, section in enumerate(sections):
             single = format_section(section)
 
-            output_file = tmp_path / f"section_{i+1}.doc.gax"
+            output_file = tmp_path / f"section_{i + 1}.doc.gax"
             output_file.write_text(single)
 
             # Verify it's valid
             written = output_file.read_text()
             assert written.startswith("---\n")
             assert "title: Project Plan" in written
-            assert f"section: {i+1}" in written
+            assert f"section: {i + 1}" in written
 
 
 class TestHeadingConversion:
@@ -205,32 +209,52 @@ class TestHeadingConversion:
                             "content": [
                                 {
                                     "paragraph": {
-                                        "elements": [{"textRun": {"content": "Heading 1\n"}}],
-                                        "paragraphStyle": {"namedStyleType": "HEADING_1"},
+                                        "elements": [
+                                            {"textRun": {"content": "Heading 1\n"}}
+                                        ],
+                                        "paragraphStyle": {
+                                            "namedStyleType": "HEADING_1"
+                                        },
                                     }
                                 },
                                 {
                                     "paragraph": {
-                                        "elements": [{"textRun": {"content": "Heading 2\n"}}],
-                                        "paragraphStyle": {"namedStyleType": "HEADING_2"},
+                                        "elements": [
+                                            {"textRun": {"content": "Heading 2\n"}}
+                                        ],
+                                        "paragraphStyle": {
+                                            "namedStyleType": "HEADING_2"
+                                        },
                                     }
                                 },
                                 {
                                     "paragraph": {
-                                        "elements": [{"textRun": {"content": "Heading 3\n"}}],
-                                        "paragraphStyle": {"namedStyleType": "HEADING_3"},
+                                        "elements": [
+                                            {"textRun": {"content": "Heading 3\n"}}
+                                        ],
+                                        "paragraphStyle": {
+                                            "namedStyleType": "HEADING_3"
+                                        },
                                     }
                                 },
                                 {
                                     "paragraph": {
-                                        "elements": [{"textRun": {"content": "Heading 4\n"}}],
-                                        "paragraphStyle": {"namedStyleType": "HEADING_4"},
+                                        "elements": [
+                                            {"textRun": {"content": "Heading 4\n"}}
+                                        ],
+                                        "paragraphStyle": {
+                                            "namedStyleType": "HEADING_4"
+                                        },
                                     }
                                 },
                                 {
                                     "paragraph": {
-                                        "elements": [{"textRun": {"content": "Normal text\n"}}],
-                                        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                                        "elements": [
+                                            {"textRun": {"content": "Normal text\n"}}
+                                        ],
+                                        "paragraphStyle": {
+                                            "namedStyleType": "NORMAL_TEXT"
+                                        },
                                     }
                                 },
                             ]

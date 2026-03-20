@@ -23,6 +23,7 @@ def main():
 
 # --- Auth commands ---
 
+
 @main.group()
 def auth_cmd():
     """Authentication management"""
@@ -40,15 +41,17 @@ def login():
         if not auth.credentials_exist():
             click.echo(f"OAuth credentials not found at {auth.CREDENTIALS_FILE}")
             click.echo("")
-            click.echo("Please download OAuth client credentials from Google Cloud Console:")
+            click.echo(
+                "Please download OAuth client credentials from Google Cloud Console:"
+            )
             click.echo("  1. Go to https://console.cloud.google.com/apis/credentials")
             click.echo("  2. Create OAuth 2.0 Client ID (Desktop app)")
             click.echo(f"  3. Download JSON and save to: {auth.CREDENTIALS_FILE}")
             sys.exit(1)
 
         click.echo("Opening browser for authentication...")
-        creds = auth.login()
-        click.echo(f"Authenticated successfully!")
+        auth.login()
+        click.echo("Authenticated successfully!")
         click.echo(f"Token saved to: {auth.TOKEN_FILE}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -79,6 +82,7 @@ def logout():
 
 # --- GSheet commands ---
 
+
 @main.group()
 def sheet():
     """Google Sheets operations"""
@@ -99,7 +103,9 @@ def pull(file: Path):
 
 @sheet.command()
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option("--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))")
+@click.option(
+    "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
+)
 def push(file: Path, with_formulas: bool):
     """Push data from local file to Google Sheets."""
     try:
@@ -113,7 +119,9 @@ def push(file: Path, with_formulas: bool):
 @sheet.command()
 @click.argument("url")
 @click.argument("tab")
-@click.option("--format", "fmt", default="csv", help="Output format: csv, tsv, psv, json, jsonl")
+@click.option(
+    "--format", "fmt", default="csv", help="Output format: csv, tsv, psv, json, jsonl"
+)
 def clone(url: str, tab: str, fmt: str):
     """Clone a Google Sheet tab to stdout (redirect to .sheet.gax file)."""
     try:

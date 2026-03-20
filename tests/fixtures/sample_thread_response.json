@@ -1,0 +1,42 @@
+{
+  "id": "thread-abc123",
+  "historyId": "12345",
+  "messages": [
+    {
+      "id": "msg-001",
+      "threadId": "thread-abc123",
+      "labelIds": ["INBOX", "UNREAD"],
+      "payload": {
+        "mimeType": "text/plain",
+        "headers": [
+          {"name": "From", "value": "Alice Smith <alice@example.com>"},
+          {"name": "To", "value": "Bob Jones <bob@example.com>"},
+          {"name": "Subject", "value": "Project Update"},
+          {"name": "Date", "value": "Mon, 10 Mar 2025 09:30:00 -0700"}
+        ],
+        "body": {
+          "size": 45,
+          "data": "SGkgQm9iLAoKSGVyZSdzIHRoZSBwcm9qZWN0IHVwZGF0ZSB5b3UgcmVxdWVzdGVkLgoKQmVzdCwKQWxpY2U="
+        }
+      }
+    },
+    {
+      "id": "msg-002",
+      "threadId": "thread-abc123",
+      "labelIds": ["INBOX"],
+      "payload": {
+        "mimeType": "text/plain",
+        "headers": [
+          {"name": "From", "value": "Bob Jones <bob@example.com>"},
+          {"name": "To", "value": "Alice Smith <alice@example.com>"},
+          {"name": "Subject", "value": "Re: Project Update"},
+          {"name": "Date", "value": "Mon, 10 Mar 2025 10:15:00 -0700"}
+        ],
+        "body": {
+          "size": 32,
+          "data": "VGhhbmtzIEFsaWNlIQoKTG9va3MgZ29vZCwgbGV0J3MgZGlzY3VzcyB0b21vcnJvdy4KCkJvYg=="
+        }
+      }
+    }
+  ]
+}

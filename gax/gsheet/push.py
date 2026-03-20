@@ -6,7 +6,9 @@ from ..formats import get_format
 from .client import GSheetClient
 
 
-def push(file_path: Path, client: GSheetClient | None = None, with_formulas: bool = False) -> int:
+def push(
+    file_path: Path, client: GSheetClient | None = None, with_formulas: bool = False
+) -> int:
     """
     Push data from local file to Google Sheets.
 
@@ -23,6 +25,8 @@ def push(file_path: Path, client: GSheetClient | None = None, with_formulas: boo
     df = fmt.read(data)
 
     # Write to Google Sheets
-    rows = client.write(config.spreadsheet_id, config.tab, df, with_formulas=with_formulas)
+    rows = client.write(
+        config.spreadsheet_id, config.tab, df, with_formulas=with_formulas
+    )
 
     return rows

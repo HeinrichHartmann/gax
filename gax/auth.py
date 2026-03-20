@@ -156,6 +156,7 @@ def get_authenticated_credentials() -> Credentials:
     elif not creds.valid:
         if creds.refresh_token:
             from google.auth.transport.requests import Request
+
             creds.refresh(Request())
             save_credentials(creds)
         else:

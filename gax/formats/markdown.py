@@ -40,7 +40,7 @@ class MarkdownFormat(Format):
             # Pad row to match header length
             while len(cells) < len(headers):
                 cells.append("")
-            rows.append(cells[:len(headers)])
+            rows.append(cells[: len(headers)])
 
         df = pd.DataFrame(rows, columns=headers)
         df = df.fillna("")

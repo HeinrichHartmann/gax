@@ -32,7 +32,7 @@ def parse_content(content: str) -> tuple[SheetConfig, str]:
         raise ValueError("No closing --- found for frontmatter")
 
     frontmatter_str = content[4:end_idx]  # Skip initial ---
-    data_str = content[end_idx + 4:].lstrip("\n")  # Skip closing --- and newline
+    data_str = content[end_idx + 4 :].lstrip("\n")  # Skip closing --- and newline
 
     # Parse YAML
     frontmatter = yaml.safe_load(frontmatter_str)
