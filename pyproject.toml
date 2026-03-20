@@ -1,13 +1,14 @@
 [project]
 name = "gax"
 version = "0.1.0"
-description = "Google Access CLI - sync Google Sheets with local files"
+description = "Google Access CLI - sync Google Workspace with local files"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.0",
     "gspread>=6.0",
     "google-auth-oauthlib>=1.0",
+    "google-api-python-client>=2.0",
     "pyyaml>=6.0",
     "click>=8.0",
 ]
