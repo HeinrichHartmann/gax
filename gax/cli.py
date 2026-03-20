@@ -114,8 +114,8 @@ def push(file: Path, with_formulas: bool):
 @click.argument("url")
 @click.argument("tab")
 @click.option("--format", "fmt", default="csv", help="Output format: csv, tsv, psv, json, jsonl")
-def init(url: str, tab: str, fmt: str):
-    """Initialize a .sheet.gax file from a Google Sheets URL."""
+def clone(url: str, tab: str, fmt: str):
+    """Clone a Google Sheet tab to stdout (redirect to .sheet.gax file)."""
     try:
         # Parse spreadsheet ID from URL
         match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)

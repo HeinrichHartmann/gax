@@ -19,7 +19,7 @@ gax auth logout
 
 gax sheet pull <file>
 gax sheet push <file> [--with-formulas]
-gax sheet init <url> <tab> [--format FORMAT]
+gax sheet clone <url> <tab> [--format FORMAT]
 
 gax doc clone <url>
 gax doc pull <file>
@@ -46,7 +46,7 @@ gax doc pull <file>
 **gax sheet push** *file* [**--with-formulas**]
 : Push local file data to Google Sheets. With `--with-formulas`, cell values starting with `=` are interpreted as formulas.
 
-**gax sheet init** *url* *tab* [**--format** *FORMAT*]
+**gax sheet clone** *url* *tab* [**--format** *FORMAT*]
 : Initialize a new `.sheet.gax` file from a Google Sheets URL. Outputs to stdout.
 
 ### Google Docs
@@ -112,7 +112,7 @@ See ADR 002 for full multipart format specification.
 Initialize from existing sheet:
 
 ```
-gax sheet init "https://docs.google.com/spreadsheets/d/16f1.../edit" \
+gax sheet clone "https://docs.google.com/spreadsheets/d/16f1.../edit" \
     Actuals --format csv > budget.sheet.gax
 ```
 
