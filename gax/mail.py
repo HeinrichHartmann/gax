@@ -108,13 +108,27 @@ def format_multipart(sections: list[Section]) -> str:
 
 def extract_thread_id(url_or_id: str) -> str:
     """Extract thread ID from Gmail URL or return as-is."""
+    from urllib.parse import unquote, urlparse, parse_qs
+
+    # URL decode first
+    url_or_id = unquote(url_or_id)
+
     # Gmail URL format: https://mail.google.com/mail/u/0/#inbox/FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV
-    # or: https://mail.google.com/mail/u/0/#label/..../FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV
     match = re.search(r'#[^/]+/([A-Za-z0-9]+)$', url_or_id)
     if match:
         return match.group(1)
 
-    # Already an ID
+    # Popout URL with th parameter: th=#thread-f:1859907402038417535
+    match = re.search(r'thread-f[:%]3A(\d+)', url_or_id)
+    if match:
+        return match.group(1)
+
+    # th parameter already decoded: #thread-f:1859907402038417535
+    match = re.search(r'thread-f:(\d+)', url_or_id)
+    if match:
+        return match.group(1)
+
+    # Already an ID (alphanumeric or numeric)
     if re.fullmatch(r'[A-Za-z0-9]+', url_or_id):
         return url_or_id
 
@@ -316,6 +330,197 @@ def pull(url_or_id: str, output: Optional[Path]):
         total_attachments = sum(len(s.attachments) for s in sections)
         if total_attachments:
             click.echo(f'Attachments: {total_attachments}')
+
+    except Exception as e:
+        click.echo(f'Error: {e}', err=True)
+        sys.exit(1)
+
+
+def _parse_duration(duration: str) -> int:
+    """Parse duration string like '3d' or '24h' to seconds."""
+    match = re.match(r'^(\d+)([dhm])$', duration.lower())
+    if not match:
+        raise ValueError(f"Invalid duration format: {duration}. Use e.g., '3d', '24h', '30m'")
+
+    value = int(match.group(1))
+    unit = match.group(2)
+
+    if unit == 'd':
+        return value * 86400
+    elif unit == 'h':
+        return value * 3600
+    elif unit == 'm':
+        return value * 60
+    return value
+
+
+def _make_filename(date_str: str, from_addr: str, subject: str, thread_id: str) -> str:
+    """Create filename: date-from-subject.mail.gax"""
+    # Extract date (YYYY-MM-DD)
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(date_str)
+        date_part = dt.strftime('%Y-%m-%d')
+    except (ValueError, TypeError):
+        # Try ISO format
+        if 'T' in date_str:
+            date_part = date_str.split('T')[0]
+        else:
+            date_part = 'unknown-date'
+
+    # Extract email from "Name <email>" format
+    email_match = re.search(r'<([^>]+)>', from_addr)
+    if email_match:
+        from_part = email_match.group(1)
+    else:
+        from_part = from_addr.split()[0] if from_addr else 'unknown'
+
+    # Sanitize from
+    from_part = re.sub(r'[<>:"/\\|?*\s]', '', from_part)[:30]
+
+    # Sanitize subject
+    subject_part = re.sub(r'[<>:"/\\|?*]', '-', subject)
+    subject_part = re.sub(r'\s+', '_', subject_part)[:40]
+
+    return f'{date_part}-{from_part}-{subject_part}.mail.gax'
+
+
+def _list_threads(label: str, query: str, max_results: int) -> tuple[list[dict], int]:
+    """List threads matching label and query. Returns (threads, total_estimate)."""
+    creds = get_authenticated_credentials()
+    service = build('gmail', 'v1', credentials=creds)
+
+    # Build query
+    full_query = f'label:{label}'
+    if query:
+        full_query = f'{full_query} {query}'
+
+    # First, get estimate of total
+    result = service.users().threads().list(
+        userId='me',
+        q=full_query,
+        maxResults=1,
+    ).execute()
+
+    total_estimate = result.get('resultSizeEstimate', 0)
+
+    # Now fetch up to max_results
+    threads = []
+    page_token = None
+
+    while len(threads) < max_results:
+        batch_size = min(100, max_results - len(threads))
+        result = service.users().threads().list(
+            userId='me',
+            q=full_query,
+            maxResults=batch_size,
+            pageToken=page_token,
+        ).execute()
+
+        batch = result.get('threads', [])
+        threads.extend(batch)
+
+        page_token = result.get('nextPageToken')
+        if not page_token or not batch:
+            break
+
+    return threads[:max_results], total_estimate
+
+
+def _get_existing_thread_ids(folder: Path) -> set[str]:
+    """Get thread IDs already synced to folder."""
+    if not folder.exists():
+        return set()
+
+    thread_ids = set()
+    for f in folder.glob('*.mail.gax'):
+        # Try to extract thread_id from file content
+        try:
+            content = f.read_text(encoding='utf-8')
+            match = re.search(r'^thread_id:\s*(\S+)', content, re.MULTILINE)
+            if match:
+                thread_ids.add(match.group(1))
+        except Exception:
+            pass
+
+    return thread_ids
+
+
+@mail.command()
+@click.argument('label', default='Inbox')
+@click.option('--last', 'last_duration', help='Fetch threads from last N days/hours (e.g., 3d, 24h)')
+@click.option('--since', 'since_date', help='Fetch threads since date (e.g., 2025-01-03)')
+@click.option('--limit', default=100, help='Maximum threads to fetch (default: 100)')
+def sync(label: str, last_duration: Optional[str], since_date: Optional[str], limit: int):
+    """Sync threads from a Gmail label to a local folder."""
+    try:
+        # Build time query
+        query = ''
+        if last_duration:
+            seconds = _parse_duration(last_duration)
+            from datetime import datetime, timedelta
+            since = datetime.now() - timedelta(seconds=seconds)
+            query = f'after:{since.strftime("%Y/%m/%d")}'
+        elif since_date:
+            # Convert YYYY-MM-DD to YYYY/MM/DD for Gmail
+            query = f'after:{since_date.replace("-", "/")}'
+
+        click.echo(f'Syncing label: {label}')
+        if query:
+            click.echo(f'Query: {query}')
+
+        # List threads
+        threads, total_estimate = _list_threads(label, query, limit)
+
+        if total_estimate > limit:
+            click.echo(f'Warning: Found ~{total_estimate} threads, fetching first {limit}. Use --limit to fetch more.', err=True)
+
+        if not threads:
+            click.echo('No threads found.')
+            return
+
+        click.echo(f'Found {len(threads)} threads')
+
+        # Create folder
+        folder = Path(label)
+        folder.mkdir(exist_ok=True)
+
+        # Get already synced thread IDs
+        existing_ids = _get_existing_thread_ids(folder)
+
+        # Sync each thread
+        synced = 0
+        skipped = 0
+
+        for thread_info in threads:
+            thread_id = thread_info['id']
+
+            if thread_id in existing_ids:
+                skipped += 1
+                continue
+
+            try:
+                sections = pull_thread(thread_id)
+                content = format_multipart(sections)
+
+                # Get first message info for filename
+                first = sections[0]
+                filename = _make_filename(first.date, first.from_addr, first.title, thread_id)
+                file_path = folder / filename
+
+                # Avoid overwriting (add thread_id suffix if collision)
+                if file_path.exists():
+                    base = file_path.stem
+                    file_path = folder / f'{base}_{thread_id}.mail.gax'
+
+                file_path.write_text(content, encoding='utf-8')
+                synced += 1
+                click.echo(f'  {filename}')
+
+            except Exception as e:
+                click.echo(f'  Error syncing {thread_id}: {e}', err=True)
+
+        click.echo(f'Synced: {synced}, Skipped: {skipped} (already present)')
 
     except Exception as e:
         click.echo(f'Error: {e}', err=True)

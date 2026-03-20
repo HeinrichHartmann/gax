@@ -39,9 +39,48 @@ Key differences from Docs/Sheets:
 ### Commands
 
 ```
-gax mail pull <url-or-id>            # Pull thread to .mail.gax file
-gax mail list [--label LABEL]        # List threads (future)
-gax mail search <query>              # Search threads (future)
+gax mail pull <url-or-id>            # Pull single thread to .mail.gax file
+gax mail sync [LABEL] [OPTIONS]      # Sync threads from label to folder
+```
+
+### Sync Command
+
+```
+gax mail sync [LABEL] [--last DURATION | --since DATE] [--limit N]
+```
+
+**Arguments:**
+- `LABEL`: Gmail label (default: `Inbox`)
+
+**Options:**
+- `--last DURATION`: Fetch threads from last N days/hours (e.g., `3d`, `24h`)
+- `--since DATE`: Fetch threads since date (e.g., `2025-01-03`)
+- `--limit N`: Maximum threads to fetch (default: `100`)
+
+**Behavior:**
+1. Query Gmail for threads matching label and time filter
+2. Warn if more threads available than limit
+3. Create `<Label>/` directory
+4. For each thread, create `<date>-<from>-<subject>.mail.gax`
+5. Skip threads already present (by thread_id in filename)
+
+**Filename format:**
+```
+<Label>/<date>-<from>-<subject>.mail.gax
+```
+
+Examples:
+```
+Inbox/2026-03-20-alice@example.com-Project_Update.mail.gax
+Work/2025-01-15-bob@company.com-Q1_Report.mail.gax
+```
+
+**Examples:**
+```bash
+gax mail sync                           # Inbox, last 100
+gax mail sync --last 7d                 # Inbox, last week
+gax mail sync Work --since 2025-01-01   # Work label since Jan 1
+gax mail sync --limit 500               # Inbox, up to 500
 ```
 
 ### File Format
