@@ -22,6 +22,77 @@ def main():
     pass
 
 
+def _collect_commands(cmd: click.Command, prefix: str = "") -> list[tuple[str, str, list]]:
+    """Collect all commands as (full_name, help, options) tuples."""
+    results = []
+    name = f"{prefix} {cmd.name}".strip() if prefix else cmd.name
+
+    if isinstance(cmd, click.Group):
+        for subcmd_name in sorted(cmd.list_commands(None)):
+            subcmd = cmd.get_command(None, subcmd_name)
+            if subcmd:
+                results.extend(_collect_commands(subcmd, name))
+    else:
+        # Get first line of help only
+        help_text = (cmd.help or "").split("\n")[0]
+        options = []
+        for param in cmd.params:
+            if isinstance(param, click.Option) and param.help:
+                opts = ", ".join(param.opts)
+                options.append((opts, param.help))
+        results.append((name, help_text, options))
+
+    return results
+
+
+@main.command()
+@click.pass_context
+def man(ctx):
+    """Print the complete manual (auto-generated from commands)."""
+    root = ctx.find_root().command
+
+    lines = ["GAX(1)", "", "NAME", "    gax - Google Access CLI", ""]
+
+    # Group commands by top-level
+    groups: dict[str, list] = {}
+    for cmd_name in sorted(root.list_commands(ctx)):
+        if cmd_name == "man":
+            continue
+        cmd = root.get_command(ctx, cmd_name)
+        if cmd:
+            commands = _collect_commands(cmd)
+            if commands:
+                groups[cmd_name] = commands
+
+    lines.append("COMMANDS")
+
+    for group_name, commands in groups.items():
+        lines.append(f"\n  {group_name}:")
+        for full_name, help_text, options in commands:
+            lines.append(f"    gax {full_name}")
+            if help_text:
+                lines.append(f"        {help_text}")
+            for opt, opt_help in options:
+                lines.append(f"        {opt}: {opt_help}")
+
+    lines.extend([
+        "",
+        "FILES",
+        "    .sheet.gax    Spreadsheet data (single or multipart)",
+        "    .doc.gax      Document (all tabs, multipart)",
+        "    .tab.gax      Single document tab",
+        "    .mail.gax     Email thread",
+        "",
+        "    ~/.config/gax/credentials.json    OAuth credentials",
+        "    ~/.config/gax/token.json          Access token",
+        "",
+        "SEE ALSO",
+        "    gax <command> --help",
+    ])
+
+    click.echo("\n".join(lines))
+
+
 # --- Auth commands ---
 
 
