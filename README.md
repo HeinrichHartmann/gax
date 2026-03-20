@@ -101,21 +101,85 @@ gax mail pull Inbox/   # updates all .mail.gax files in folder
 
 ## File Formats
 
-All files use YAML frontmatter + plain text body:
-
-```
----
-source: https://docs.google.com/...
-...metadata...
----
-Content here (CSV, Markdown, etc.)
-```
+All files use YAML frontmatter + plain text body. The frontmatter stores sync metadata (source URL, IDs), the body is human-readable content.
 
 | Extension | Content |
 |-----------|---------|
 | `.sheet.gax` | Spreadsheet tab (CSV/TSV/JSON) |
 | `.doc.gax` | Document (Markdown) |
 | `.mail.gax` | Email thread (Markdown) |
+
+### Multipart Format
+
+Documents with multiple sections (Doc tabs, Mail threads) use a **multipart format**: multiple YAML+content blocks concatenated. Each section is self-contained with repeated metadata, so sections can be split into standalone files or joined via `cat`.
+
+**Example: Multi-tab Google Doc**
+
+```
+---
+title: Project Plan
+source: https://docs.google.com/document/d/abc123/edit
+time: 2026-03-20T10:00:00Z
+section: 1
+section_title: Overview
+---
+# Overview
+
+Project goals and scope...
+
+---
+title: Project Plan
+source: https://docs.google.com/document/d/abc123/edit
+time: 2026-03-20T10:00:00Z
+section: 2
+section_title: Timeline
+---
+# Timeline
+
+| Phase | Date |
+|-------|------|
+| Alpha | Q1   |
+| Beta  | Q2   |
+```
+
+Each section repeats `title`, `source`, `time` so it remains valid if extracted alone.
+
+**Example: Email thread**
+
+```
+---
+title: Re: Project Update
+source: https://mail.google.com/mail/u/0/#inbox/abc123
+time: 2026-03-20T10:00:00Z
+thread_id: abc123
+section: 1
+section_title: From Alice
+from: alice@example.com
+to: bob@example.com
+date: 2026-03-15T09:30:00Z
+---
+Hi Bob,
+
+Here's the project update you requested.
+
+Best,
+Alice
+
+---
+title: Re: Project Update
+source: https://mail.google.com/mail/u/0/#inbox/abc123
+time: 2026-03-20T10:00:00Z
+thread_id: abc123
+section: 2
+section_title: From Bob
+from: bob@example.com
+to: alice@example.com
+date: 2026-03-15T10:45:00Z
+---
+Thanks Alice!
+
+Bob
+```
 
 ## License
 
