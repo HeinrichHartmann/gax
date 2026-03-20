@@ -427,6 +427,130 @@ def tab_list(url: str):
         sys.exit(1)
 
 
+def create_tab_with_content(
+    document_id: str, tab_name: str, markdown: str, *, service=None
+) -> str:
+    """Create a new tab and populate it with markdown content.
+
+    Args:
+        document_id: Google Docs document ID
+        tab_name: Name for the new tab
+        markdown: Markdown content to insert
+        service: Optional Docs API service for testing
+
+    Returns:
+        The new tab's ID
+    """
+    from .md2docs import markdown_to_requests
+
+    if service is None:
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+
+    # Step 1: Create the tab
+    create_response = (
+        service.documents()
+        .batchUpdate(
+            documentId=document_id,
+            body={
+                "requests": [
+                    {
+                        "addDocumentTab": {
+                            "tabProperties": {"title": tab_name}
+                        }
+                    }
+                ]
+            },
+        )
+        .execute()
+    )
+
+    # Get the new tab ID from response
+    tab_id = create_response["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
+
+    # Step 2: Insert markdown content
+    content_requests = markdown_to_requests(markdown, tab_id)
+    if content_requests:
+        service.documents().batchUpdate(
+            documentId=document_id,
+            body={"requests": content_requests},
+        ).execute()
+
+    return tab_id
+
+
+def update_tab_content(
+    document_id: str, tab_name: str, markdown: str, *, service=None
+) -> None:
+    """Replace tab content with new markdown.
+
+    Args:
+        document_id: Google Docs document ID
+        tab_name: Name of the tab to update
+        markdown: New markdown content
+        service: Optional Docs API service for testing
+    """
+    from .md2docs import markdown_to_requests
+
+    if service is None:
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+
+    # Get tab ID by name
+    doc = (
+        service.documents()
+        .get(documentId=document_id, includeTabsContent=True)
+        .execute()
+    )
+
+    tab_id = None
+    for tab in doc.get("tabs", []):
+        props = tab.get("tabProperties", {})
+        if props.get("title") == tab_name:
+            tab_id = props.get("tabId")
+            break
+
+    if not tab_id:
+        raise ValueError(f"Tab not found: {tab_name}")
+
+    # Get current content length to delete
+    for tab in doc.get("tabs", []):
+        props = tab.get("tabProperties", {})
+        if props.get("tabId") == tab_id:
+            body = tab.get("documentTab", {}).get("body", {})
+            content = body.get("content", [])
+            if content:
+                # Find end index (last element's endIndex - 1 to preserve final newline)
+                end_index = content[-1].get("endIndex", 1) - 1
+                if end_index > 1:
+                    # Delete existing content
+                    service.documents().batchUpdate(
+                        documentId=document_id,
+                        body={
+                            "requests": [
+                                {
+                                    "deleteContentRange": {
+                                        "range": {
+                                            "startIndex": 1,
+                                            "endIndex": end_index,
+                                            "tabId": tab_id,
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                    ).execute()
+            break
+
+    # Insert new content
+    content_requests = markdown_to_requests(markdown, tab_id)
+    if content_requests:
+        service.documents().batchUpdate(
+            documentId=document_id,
+            body={"requests": content_requests},
+        ).execute()
+
+
 @tab.command("import")
 @click.argument("url")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
@@ -437,13 +561,7 @@ def tab_list(url: str):
     help="Output tracking file (default: <filename>.tab.gax)",
 )
 def tab_import(url: str, file: Path, output: Optional[Path]):
-    """Import a markdown file as a new tab in a document.
-
-    This creates a new tab with the file's content and saves a tracking
-    file for future push/pull operations.
-
-    Note: Actually creating the tab in Google Docs is not yet implemented.
-    """
+    """Import a markdown file as a new tab in a document."""
     try:
         document_id = extract_doc_id(url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
@@ -454,17 +572,7 @@ def tab_import(url: str, file: Path, output: Optional[Path]):
         # Read content
         content = file.read_text(encoding="utf-8")
 
-        # Create a tracking file
-        time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        section = DocSection(
-            title="",  # Will be filled when actually created
-            source=source_url,
-            time=time_str,
-            section=1,
-            section_title=tab_name,
-            content=content,
-        )
-
+        # Check tracking file doesn't exist
         if output:
             tracking_path = output
         else:
@@ -475,20 +583,31 @@ def tab_import(url: str, file: Path, output: Optional[Path]):
             click.echo("Use 'gax doc tab push' to update an existing tab.")
             sys.exit(1)
 
-        # TODO: Implement actual tab creation via Docs API
-        click.echo("Warning: Creating tabs in Google Docs is not yet implemented.", err=True)
-        click.echo(f"Would create tab '{tab_name}' in document {document_id}")
-        click.echo(f"Content ({len(content)} chars):")
-        click.echo("-" * 40)
-        preview = content[:500] + ("..." if len(content) > 500 else "")
-        click.echo(preview)
-        click.echo("-" * 40)
+        # Create the tab
+        click.echo(f"Creating tab '{tab_name}' in {document_id}...")
+        tab_id = create_tab_with_content(document_id, tab_name, content)
+        click.echo(f"Created tab: {tab_id}")
 
-        # For now, create the tracking file anyway so the workflow is clear
+        # Get document title for tracking file
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+        doc = service.documents().get(documentId=document_id).execute()
+        doc_title = doc.get("title", "Untitled")
+
+        # Create tracking file
+        time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        section = DocSection(
+            title=doc_title,
+            source=source_url,
+            time=time_str,
+            section=1,
+            section_title=tab_name,
+            content=content,
+        )
+
         tracking_content = format_section(section)
         tracking_path.write_text(tracking_content, encoding="utf-8")
-        click.echo(f"Created tracking file: {tracking_path}")
-        click.echo("When tab creation is implemented, use 'gax doc tab push' to sync changes.")
+        click.echo(f"Created: {tracking_path}")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -733,13 +852,10 @@ def tab_push(file: Path, yes: bool):
                 click.echo("Aborted.")
                 return
 
-        # TODO: Implement actual push via Docs API
-        # For now, just warn that push is not yet implemented
-        click.echo(
-            "Warning: Push to Google Docs is not yet implemented.", err=True
-        )
-        click.echo("This will be added when the Docs API write support is ready.")
-        sys.exit(1)
+        # Push the changes
+        click.echo(f"Pushing to tab '{tab_name}'...")
+        update_tab_content(document_id, tab_name, local_section.content)
+        click.echo("Pushed successfully.")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

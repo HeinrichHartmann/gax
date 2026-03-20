@@ -1,0 +1,219 @@
+"""Convert Markdown to Google Docs API requests.
+
+Simple AST-based approach supporting:
+- Headings (# to ######)
+- Bold (**text**) and Italic (*text*)
+- Tables (| col | col |)
+- Paragraphs
+"""
+
+import re
+from dataclasses import dataclass
+
+
+@dataclass
+class Node:
+    """Base AST node."""
+    pass
+
+
+@dataclass
+class Text(Node):
+    text: str
+    bold: bool = False
+    italic: bool = False
+
+
+@dataclass
+class Heading(Node):
+    level: int  # 1-6
+    text: str
+
+
+@dataclass
+class Paragraph(Node):
+    children: list[Text]
+
+
+@dataclass
+class Table(Node):
+    rows: list[list[str]]  # list of rows, each row is list of cell strings
+
+
+def parse_inline(text: str) -> list[Text]:
+    """Parse inline formatting (bold, italic)."""
+    result = []
+    # Pattern: **bold**, *italic*, ***bold+italic***
+    pattern = re.compile(r'(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*)')
+
+    pos = 0
+    for m in pattern.finditer(text):
+        if m.start() > pos:
+            result.append(Text(text[pos:m.start()]))
+
+        if m.group(2):  # ***bold+italic***
+            result.append(Text(m.group(2), bold=True, italic=True))
+        elif m.group(3):  # **bold**
+            result.append(Text(m.group(3), bold=True))
+        elif m.group(4):  # *italic*
+            result.append(Text(m.group(4), italic=True))
+
+        pos = m.end()
+
+    if pos < len(text):
+        result.append(Text(text[pos:]))
+
+    return result if result else [Text(text)]
+
+
+def parse_markdown(md: str) -> list[Node]:
+    """Parse markdown into AST nodes."""
+    nodes = []
+    lines = md.split('\n')
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        # Empty line
+        if not line.strip():
+            i += 1
+            continue
+
+        # Heading
+        m = re.match(r'^(#{1,6})\s+(.+)$', line)
+        if m:
+            nodes.append(Heading(level=len(m.group(1)), text=m.group(2)))
+            i += 1
+            continue
+
+        # Table (starts with |)
+        if line.strip().startswith('|'):
+            rows = []
+            while i < len(lines) and lines[i].strip().startswith('|'):
+                row_line = lines[i].strip()
+                # Skip separator row (|---|---|)
+                if re.match(r'^\|[\s\-:|]+\|$', row_line):
+                    i += 1
+                    continue
+                # Parse cells
+                cells = [c.strip() for c in row_line.split('|')[1:-1]]
+                rows.append(cells)
+                i += 1
+            if rows:
+                nodes.append(Table(rows=rows))
+            continue
+
+        # Regular paragraph
+        nodes.append(Paragraph(children=parse_inline(line)))
+        i += 1
+
+    return nodes
+
+
+def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str, list[dict]]:
+    """Generate Docs API requests from AST.
+
+    Returns: (plain_text, list_of_formatting_requests)
+    """
+    # First pass: build plain text and track positions
+    text_parts = []
+    format_actions = []  # (start, end, action_type, params)
+
+    for node in nodes:
+        start = sum(len(p) for p in text_parts) + 1  # 1-based index
+
+        if isinstance(node, Heading):
+            text_parts.append(node.text + '\n')
+            end = start + len(node.text)
+            format_actions.append((start, end, 'heading', node.level))
+
+        elif isinstance(node, Paragraph):
+            for child in node.children:
+                child_start = sum(len(p) for p in text_parts) + 1
+                text_parts.append(child.text)
+                child_end = child_start + len(child.text)
+                if child.bold:
+                    format_actions.append((child_start, child_end, 'bold', None))
+                if child.italic:
+                    format_actions.append((child_start, child_end, 'italic', None))
+            text_parts.append('\n')
+
+        elif isinstance(node, Table):
+            # Tables: insert as tab-separated text, then create table
+            table_start = sum(len(p) for p in text_parts) + 1
+            num_rows = len(node.rows)
+            num_cols = max(len(row) for row in node.rows) if node.rows else 0
+
+            # Build table text (will be replaced by actual table)
+            table_text = '\n'.join('\t'.join(row) for row in node.rows) + '\n'
+            text_parts.append(table_text)
+            table_end = sum(len(p) for p in text_parts) + 1
+
+            format_actions.append((table_start, table_end - 1, 'table', (num_rows, num_cols, node.rows)))
+
+    plain_text = ''.join(text_parts)
+
+    # Second pass: generate API requests
+    requests = []
+
+    # Insert text
+    insert_loc = {'index': 1}
+    if tab_id:
+        insert_loc['tabId'] = tab_id
+    requests.append({'insertText': {'text': plain_text, 'location': insert_loc}})
+
+    # Apply formatting (in reverse order for stable indices)
+    for start, end, action, params in reversed(format_actions):
+        range_spec = {'startIndex': start, 'endIndex': end}
+        if tab_id:
+            range_spec['tabId'] = tab_id
+
+        if action == 'heading':
+            style_map = {1: 'HEADING_1', 2: 'HEADING_2', 3: 'HEADING_3',
+                        4: 'HEADING_4', 5: 'HEADING_5', 6: 'HEADING_6'}
+            requests.append({
+                'updateParagraphStyle': {
+                    'range': range_spec,
+                    'paragraphStyle': {'namedStyleType': style_map.get(params, 'HEADING_1')},
+                    'fields': 'namedStyleType'
+                }
+            })
+        elif action == 'bold':
+            requests.append({
+                'updateTextStyle': {
+                    'range': range_spec,
+                    'textStyle': {'bold': True},
+                    'fields': 'bold'
+                }
+            })
+        elif action == 'italic':
+            requests.append({
+                'updateTextStyle': {
+                    'range': range_spec,
+                    'textStyle': {'italic': True},
+                    'fields': 'italic'
+                }
+            })
+        elif action == 'table':
+            num_rows, num_cols, rows = params
+            # Delete the placeholder text and insert table
+            requests.append({'deleteContentRange': {'range': range_spec}})
+            requests.append({
+                'insertTable': {
+                    'rows': num_rows,
+                    'columns': num_cols,
+                    'location': {'index': start}
+                }
+            })
+            # Note: Populating table cells requires additional logic
+            # For now, tables are inserted empty (content in placeholder)
+
+    return plain_text, requests
+
+
+def markdown_to_requests(md: str, tab_id: str | None = None) -> list[dict]:
+    """Convert markdown to Docs API batchUpdate requests."""
+    nodes = parse_markdown(md)
+    _, requests = generate_requests(nodes, tab_id)
+    return requests
