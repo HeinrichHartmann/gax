@@ -23,6 +23,12 @@ gax sheet clone <url> <tab> [--format FORMAT]
 
 gax doc clone <url>
 gax doc pull <file>
+
+gax mail labels
+gax mail search <query> [--limit N]
+gax mail clone <id-or-url>
+gax mail clone <query> --to <folder> [--limit N]
+gax mail pull <file-or-folder>
 ```
 
 ## COMMANDS
@@ -56,6 +62,23 @@ gax doc pull <file>
 
 **gax doc pull** *file*
 : Pull latest content from Google Docs. Reads source URL from file frontmatter.
+
+### Gmail
+
+**gax mail labels**
+: List Gmail labels as TSV output.
+
+**gax mail search** *query* [**--limit** *N*]
+: Search threads using Gmail query syntax. Returns TSV: thread_id, date, from, subject.
+
+**gax mail clone** *id-or-url*
+: Clone a single email thread to a local `.mail.gax` file.
+
+**gax mail clone** *query* **--to** *folder* [**--limit** *N*]
+: Clone multiple threads matching query to a folder. Skips already-cloned threads.
+
+**gax mail pull** *file-or-folder*
+: Update existing `.mail.gax` file(s) with new messages. For folders, updates all `.mail.gax` files.
 
 ## FILE FORMATS
 
@@ -143,6 +166,38 @@ Pull latest changes:
 gax doc pull My_Document.doc.gax
 ```
 
+### Gmail
+
+List available labels:
+
+```
+gax mail labels
+```
+
+Search for threads:
+
+```
+gax mail search "from:alice after:2025/01/01"
+```
+
+Clone a single thread:
+
+```
+gax mail clone 19d0bed1cddbab6d
+```
+
+Clone all threads from a label to a folder:
+
+```
+gax mail clone "label:Inbox" --to Inbox/ --limit 50
+```
+
+Update threads in a folder:
+
+```
+gax mail pull Inbox/
+```
+
 ## FILES
 
 **~/.config/gax/credentials.json**
@@ -168,6 +223,7 @@ gax doc pull My_Document.doc.gax
 - DESIGN.md - Architecture and design decisions
 - ADR/002-multipart-markdown-format.md - Multipart format spec
 - ADR/003-gdoc-sync.md - Google Docs sync design
+- ADR/004-mail-sync.md - Gmail sync design
 
 ## AUTHORS
 
