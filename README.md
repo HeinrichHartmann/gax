@@ -1,234 +1,122 @@
-# GAX(1) - Google Access CLI
+# gax - Google Access CLI
 
-## NAME
+Sync Google Workspace (Sheets, Docs, Gmail) to local files that are human-readable, machine-readable, and git-friendly.
 
-**gax** - human and machine-readable sync for Google Workspace
+## Design
 
-## DESCRIPTION
+- **YAML frontmatter** stores metadata (source URL, IDs) for re-sync
+- **Plain text body** (CSV, Markdown) for easy editing and diffing
+- **Clone/Pull pattern** like git - clone once, pull to update
+- **Bi-directional** for Sheets (push), read-only archive for Docs/Mail
 
-**gax** enables humans and AI agents to collaborate on data in Google Workspace (Sheets, Docs, Calendar, Gmail). It syncs documents to local files that are both human-readable and machine-readable, with YAML metadata headers.
+## Install
 
-See DESIGN.md for the full vision.
-
-## SYNOPSIS
-
-```
-gax auth login
-gax auth status
-gax auth logout
-
-gax sheet pull <file>
-gax sheet push <file> [--with-formulas]
-gax sheet clone <url> <tab> [--format FORMAT]
-
-gax doc clone <url>
-gax doc pull <file>
-
-gax mail labels
-gax mail search <query> [--limit N]
-gax mail clone <id-or-url>
-gax mail clone <query> --to <folder> [--limit N]
-gax mail pull <file-or-folder>
+```bash
+pip install gax
+# or
+uv tool install gax
 ```
 
-## COMMANDS
+## Setup
 
-### Authentication
-
-**gax auth login**
-: Authenticate with Google via OAuth browser flow. Stores token in `~/.config/gax/token.json`.
-
-**gax auth status**
-: Show current authentication status.
-
-**gax auth logout**
-: Remove stored authentication token.
-
-### Google Sheets
-
-**gax sheet pull** *file*
-: Pull data from Google Sheets to local file. Reads spreadsheet ID and tab from file frontmatter.
-
-**gax sheet push** *file* [**--with-formulas**]
-: Push local file data to Google Sheets. With `--with-formulas`, cell values starting with `=` are interpreted as formulas.
-
-**gax sheet clone** *url* *tab* [**--format** *FORMAT*]
-: Initialize a new `.sheet.gax` file from a Google Sheets URL. Outputs to stdout.
-
-### Google Docs
-
-**gax doc clone** *url*
-: Clone a Google Doc to a local `.doc.gax` file. Uses multipart YAML-markdown format (see ADR 002).
-
-**gax doc pull** *file*
-: Pull latest content from Google Docs. Reads source URL from file frontmatter.
-
-### Gmail
-
-**gax mail labels**
-: List Gmail labels as TSV output.
-
-**gax mail search** *query* [**--limit** *N*]
-: Search threads using Gmail query syntax. Returns TSV: thread_id, date, from, subject.
-
-**gax mail clone** *id-or-url*
-: Clone a single email thread to a local `.mail.gax` file.
-
-**gax mail clone** *query* **--to** *folder* [**--limit** *N*]
-: Clone multiple threads matching query to a folder. Skips already-cloned threads.
-
-**gax mail pull** *file-or-folder*
-: Update existing `.mail.gax` file(s) with new messages. For folders, updates all `.mail.gax` files.
-
-## FILE FORMATS
-
-### Sheets (`.sheet.gax`)
-
-YAML frontmatter followed by tabular data:
-
-```
----
-spreadsheet_id: 16f107gJ4_hqkvhwIUXIwxS5-CaPspBmYQs6NE-lvsBg
-tab: Actuals
-format: csv
-url: https://docs.google.com/spreadsheets/d/.../edit
----
-Date,Type,Amount
-2025-12-09,Revenue,10000
-2025-12-18,Expense,-5000
+```bash
+gax auth login    # Opens browser for Google OAuth
+gax auth status   # Check authentication
 ```
 
-### Docs (`.doc.gax`)
+Requires `~/.config/gax/credentials.json` from [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
 
-Multipart YAML-markdown format. Each section (tab) is self-contained:
+## Sheets
 
-```
----
-title: My Document
-source: https://docs.google.com/document/d/xxx/edit
-time: 2026-03-20T10:00:00Z
-section: 1
-section_title: Overview
----
-# Overview
+Two-way sync for Google Sheets tabs.
 
-Document content here...
-```
+```bash
+# Clone a tab to local file (outputs to stdout)
+gax sheet clone URL TAB > budget.sheet.gax
 
-See ADR 002 for full multipart format specification.
-
-## FORMATS (Sheets)
-
-| Format | Description |
-|--------|-------------|
-| csv | Comma-separated values |
-| tsv | Tab-separated values |
-| psv | Pipe-separated values |
-| json | JSON array of objects |
-| jsonl | JSON lines |
-| markdown | Markdown table |
-
-## EXAMPLES
-
-### Sheets
-
-Initialize from existing sheet:
-
-```
-gax sheet clone "https://docs.google.com/spreadsheets/d/16f1.../edit" \
-    Actuals --format csv > budget.sheet.gax
-```
-
-Pull latest data:
-
-```
+# Pull latest data
 gax sheet pull budget.sheet.gax
+
+# Edit locally, then push back
+gax sheet push budget.sheet.gax
+gax sheet push budget.sheet.gax --with-formulas  # preserve =SUM(...) etc.
 ```
 
-Edit locally and push:
+**Arguments:**
+- `URL` - Google Sheets URL
+- `TAB` - Tab/sheet name to sync
+- `--format` - Output format: csv (default), tsv, json, jsonl, markdown
 
+## Docs
+
+Read-only sync for Google Docs (supports multi-tab documents).
+
+```bash
+# Clone document
+gax doc clone URL
+
+# Pull latest
+gax doc pull Document.doc.gax
+
+# Include comments
+gax doc clone URL --with-comments
+gax doc pull Document.doc.gax --with-comments
 ```
-vim budget.sheet.gax
-gax sheet push budget.sheet.gax --with-formulas
-```
 
-### Docs
+**Arguments:**
+- `URL` - Google Docs URL
+- `--with-comments` - Include document comments as separate sections
+- `-o, --output` - Output file path
 
-Clone a Google Doc:
+## Mail
 
-```
-gax doc clone "https://docs.google.com/document/d/1ky1.../edit"
-```
+Archive Gmail threads as local markdown files.
 
-Pull latest changes:
-
-```
-gax doc pull My_Document.doc.gax
-```
-
-### Gmail
-
-List available labels:
-
-```
+```bash
+# List labels
 gax mail labels
-```
 
-Search for threads:
-
-```
+# Search threads (TSV output)
 gax mail search "from:alice after:2025/01/01"
+gax mail search "label:Inbox has:attachment" --limit 50
+
+# Clone single thread
+gax mail clone THREAD_ID
+gax mail clone "https://mail.google.com/..."
+
+# Clone search results to folder
+gax mail clone "label:Inbox" --to Inbox/
+gax mail clone "from:alice" --to Alice/ --limit 100
+
+# Update existing threads with new messages
+gax mail pull thread.mail.gax
+gax mail pull Inbox/   # updates all .mail.gax files in folder
 ```
 
-Clone a single thread:
+**Arguments:**
+- `QUERY` - Gmail search query (same syntax as Gmail search box)
+- `THREAD_ID` - Thread ID or Gmail URL
+- `--to` - Target folder for bulk clone
+- `--limit` - Max threads to fetch (default: 100)
+
+## File Formats
+
+All files use YAML frontmatter + plain text body:
 
 ```
-gax mail clone 19d0bed1cddbab6d
+---
+source: https://docs.google.com/...
+...metadata...
+---
+Content here (CSV, Markdown, etc.)
 ```
 
-Clone all threads from a label to a folder:
+| Extension | Content |
+|-----------|---------|
+| `.sheet.gax` | Spreadsheet tab (CSV/TSV/JSON) |
+| `.doc.gax` | Document (Markdown) |
+| `.mail.gax` | Email thread (Markdown) |
 
-```
-gax mail clone "label:Inbox" --to Inbox/ --limit 50
-```
-
-Update threads in a folder:
-
-```
-gax mail pull Inbox/
-```
-
-## FILES
-
-**~/.config/gax/credentials.json**
-: OAuth client credentials (download from Google Cloud Console)
-
-**~/.config/gax/token.json**
-: Stored OAuth token (created by `gax auth login`)
-
-## ENVIRONMENT
-
-**GAX_CONFIG_DIR**
-: Override default config directory (~/.config/gax)
-
-## EXIT STATUS
-
-| Code | Description |
-|------|-------------|
-| 0 | Success |
-| 1 | Error (authentication, API, file) |
-
-## SEE ALSO
-
-- DESIGN.md - Architecture and design decisions
-- ADR/002-multipart-markdown-format.md - Multipart format spec
-- ADR/003-gdoc-sync.md - Google Docs sync design
-- ADR/004-mail-sync.md - Gmail sync design
-
-## AUTHORS
-
-Heinrich Hartmann <heinrich@heinrichhartmann.com>
-
-## LICENSE
+## License
 
 MIT
