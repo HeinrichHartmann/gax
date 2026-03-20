@@ -39,7 +39,8 @@ Key differences from Docs/Sheets:
 ### Commands
 
 ```
-gax mail pull <url-or-id>            # Pull single thread to .mail.gax file
+gax mail clone <url-or-id>           # Clone thread to new .mail.gax file
+gax mail pull <file>                 # Update existing .mail.gax with new messages
 gax mail sync [LABEL] [OPTIONS]      # Sync threads from label to folder
 gax mail search <query> [--limit N]  # Search and list threads (TSV output)
 ```

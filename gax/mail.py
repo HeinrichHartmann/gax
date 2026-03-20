@@ -304,8 +304,8 @@ def mail():
 @mail.command()
 @click.argument('url_or_id')
 @click.option('--output', '-o', type=click.Path(path_type=Path), help='Output file (default: <subject>_<thread-id>.mail.gax)')
-def pull(url_or_id: str, output: Optional[Path]):
-    """Pull an email thread to a local .mail.gax file."""
+def clone(url_or_id: str, output: Optional[Path]):
+    """Clone an email thread to a local .mail.gax file."""
     try:
         thread_id = extract_thread_id(url_or_id)
 
@@ -321,6 +321,11 @@ def pull(url_or_id: str, output: Optional[Path]):
             safe_subject = re.sub(r'\s+', '_', safe_subject)[:50]
             file_path = Path(f'{safe_subject}_{thread_id}.mail.gax')
 
+        if file_path.exists():
+            click.echo(f'Error: File already exists: {file_path}', err=True)
+            click.echo('Use "gax mail pull" to update an existing file.', err=True)
+            sys.exit(1)
+
         file_path.write_text(content, encoding='utf-8')
         click.echo(f'Created: {file_path}')
         click.echo(f'Subject: {sections[0].title}')
@@ -330,6 +335,42 @@ def pull(url_or_id: str, output: Optional[Path]):
         total_attachments = sum(len(s.attachments) for s in sections)
         if total_attachments:
             click.echo(f'Attachments: {total_attachments}')
+
+    except Exception as e:
+        click.echo(f'Error: {e}', err=True)
+        sys.exit(1)
+
+
+@mail.command()
+@click.argument('file', type=click.Path(exists=True, path_type=Path))
+def pull(file: Path):
+    """Pull latest messages for an existing .mail.gax thread."""
+    try:
+        content = file.read_text(encoding='utf-8')
+
+        # Extract thread_id from file
+        match = re.search(r'^thread_id:\s*(\S+)', content, re.MULTILINE)
+        if not match:
+            click.echo('Error: No thread_id found in file', err=True)
+            sys.exit(1)
+
+        thread_id = match.group(1)
+
+        # Count existing messages
+        old_count = len(re.findall(r'^section:\s*\d+', content, re.MULTILINE))
+
+        click.echo(f'Updating thread: {thread_id}')
+        sections = pull_thread(thread_id)
+        new_content = format_multipart(sections)
+
+        new_count = len(sections)
+
+        file.write_text(new_content, encoding='utf-8')
+        click.echo(f'Updated: {file}')
+        click.echo(f'Messages: {old_count} -> {new_count}')
+
+        if new_count > old_count:
+            click.echo(f'New messages: {new_count - old_count}')
 
     except Exception as e:
         click.echo(f'Error: {e}', err=True)
