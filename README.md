@@ -12,9 +12,9 @@ Sync Google Workspace (Sheets, Docs, Gmail) to local files that are human-readab
 ## Install
 
 ```bash
-pip install gax
+uv tool install git+https://github.com/HeinrichHartmann/gax.git
 # or
-uv tool install gax
+pip install git+https://github.com/HeinrichHartmann/gax.git
 ```
 
 ## Setup
