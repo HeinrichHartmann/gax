@@ -13,6 +13,7 @@ from .formats import get_format
 from . import auth
 from .gdoc import doc
 from .mail import mail
+from .gcal import cal_cli
 
 
 @click.group()
@@ -83,6 +84,7 @@ def man(ctx):
         "    .tab.gax      Single document tab",
         "    .mail.gax     Email thread",
         "    .draft.gax    Email draft",
+        "    .cal.gax      Calendar event",
         "",
         "    ~/.config/gax/credentials.json    OAuth credentials",
         "    ~/.config/gax/token.json          Access token",
@@ -332,9 +334,10 @@ def tab_push(file: Path, with_formulas: bool):
         sys.exit(1)
 
 
-# Register doc and mail command groups
+# Register doc, mail, and cal command groups
 main.add_command(doc)
 main.add_command(mail)
+main.add_command(cal_cli, name="cal")
 
 
 if __name__ == "__main__":
