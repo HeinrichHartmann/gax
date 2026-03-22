@@ -14,6 +14,7 @@ from . import auth
 from .gdoc import doc
 from .mail import mail
 from .gcal import cal_cli
+from .label import label
 
 
 @click.group()
@@ -334,10 +335,11 @@ def tab_push(file: Path, with_formulas: bool):
         sys.exit(1)
 
 
-# Register doc, mail, and cal command groups
+# Register doc, mail, cal, and label command groups
 main.add_command(doc)
 main.add_command(mail)
 main.add_command(cal_cli, name="cal")
+main.add_command(label)
 
 
 if __name__ == "__main__":
