@@ -25,3 +25,8 @@ dev = [
     "pytest>=9.0.2",
     "ruff>=0.15.7",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: end-to-end integration tests (require auth, use real Google APIs)",
+]
