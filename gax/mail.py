@@ -1199,10 +1199,6 @@ def relabel_clone(query: str, output_path: str | None, limit: int):
 
         thread_data = _relabel_fetch_threads(service, query, limit, label_id_to_name)
 
-        if not thread_data:
-            click.echo("No threads found.", err=True)
-            sys.exit(1)
-
         path = Path(output_path)
         _write_gax_file(path, query, limit, thread_data)
 
@@ -1246,10 +1242,6 @@ def relabel_pull(file: str):
             label_id_to_name[label["id"]] = label["name"]
 
         thread_data = _relabel_fetch_threads(service, query, limit, label_id_to_name)
-
-        if not thread_data:
-            click.echo("No threads found.", err=True)
-            sys.exit(1)
 
         _write_gax_file(path, query, limit, thread_data)
 
