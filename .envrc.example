@@ -1,0 +1,5 @@
+# Copy to .envrc and fill in your test resource IDs
+# Then run: direnv allow
+
+export GAX_TEST_DOC="your-test-doc-id-here"
+export GAX_TEST_SHEET="your-test-sheet-id-here"

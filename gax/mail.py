@@ -1376,7 +1376,7 @@ def relabel_plan(file: str, output_path: str):
             # Parse desired user labels
             desired_labels = set()
             if desired_labels_str:
-                desired_labels = {l.strip() for l in desired_labels_str.split(",") if l.strip()}
+                desired_labels = {lbl.strip() for lbl in desired_labels_str.split(",") if lbl.strip()}
 
             # Get current labels from Gmail
             try:

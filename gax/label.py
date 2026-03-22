@@ -315,7 +315,7 @@ def label_apply(plan_file: str, yes: bool):
             plan = yaml.safe_load(f)
 
         if plan.get("type") != "gax/labels-plan":
-            click.echo(f"Error: Not a labels plan file", err=True)
+            click.echo("Error: Not a labels plan file", err=True)
             sys.exit(1)
 
         # Get current labels for parent creation

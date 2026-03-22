@@ -683,14 +683,6 @@ def event_clone_cmd(id_or_url: str, calendar: str, output_path: str | None):
 @click.option("-o", "--output", "output_path", help="Output file path")
 def event_new_cmd(calendar: str, output_path: str | None):
     """Create a new event file (edit and push to create upstream)."""
-    # Get calendar name
-    calendars = list_calendars()
-    cal_name = calendar
-    for cal in calendars:
-        if cal["id"] == calendar:
-            cal_name = cal["name"]
-            break
-
     # Create template event
     now = datetime.now(timezone.utc)
     start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)

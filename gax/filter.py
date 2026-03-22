@@ -11,7 +11,6 @@ import hashlib
 import json
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 import click
 import yaml
@@ -221,7 +220,7 @@ def filter_list():
 
         # Get label mappings
         labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {l["id"]: l["name"] for l in labels_result.get("labels", [])}
+        label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
 
         # Get filters
         result = service.users().settings().filters().list(userId="me").execute()
@@ -278,7 +277,7 @@ def filter_pull(output: str):
 
         # Get label mappings
         labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {l["id"]: l["name"] for l in labels_result.get("labels", [])}
+        label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
 
         # Get filters
         result = service.users().settings().filters().list(userId="me").execute()
@@ -361,7 +360,7 @@ def filter_plan(file: str, output: str, allow_delete: bool):
 
         # Get label mappings for action comparison
         labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {l["id"]: l["name"] for l in labels_result.get("labels", [])}
+        label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
 
         # Check for creates and updates
         for h, desired in desired_by_hash.items():
@@ -479,7 +478,7 @@ def filter_apply(plan_file: str, yes: bool):
 
         # Get label mappings
         labels_result = service.users().labels().list(userId="me").execute()
-        label_name_to_id = {l["name"]: l["id"] for l in labels_result.get("labels", [])}
+        label_name_to_id = {lbl["name"]: lbl["id"] for lbl in labels_result.get("labels", [])}
 
         # 1. Delete (including updates - delete first, recreate later)
         for item in to_delete + to_update:

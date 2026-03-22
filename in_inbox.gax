@@ -1,0 +1,23 @@
+---
+type: gax/relabel
+pulled: 2026-03-22T15:45:54Z
+query: in:inbox
+limit: 10
+columns:
+  sys: I=Inbox S=Spam T=Trash U=Unread *=Starred !=Important
+  cat: P=Personal U=Updates R=Promotions S=Social F=Forums
+  labels: user labels (comma-sep, nesting with /)
+content-type: text/tab-separated-values
+content-length: 1261
+---
+id	from	subject	date	sys	cat	labels
+19d1586c5797d792	MMS_Personalentwicklung@telekom.de	Automatische Antwort: SRE Modul	2026-03-22	I	U	heinrich@heinrichhartmann.com,test/nested/deep
+19d1445a7a545684	noreply@medium.com	A Major Reset Of The Economy Is Coming, And It Won’t Be Pret	2026-03-22	I	U	
+19d142ca72f34a07	sonntag@mailings.nzz.ch	Mit dem «Bildungspapst» auf Schulbesuch	2026-03-22	I	U	
+19d110ca1373589e	heutemeistgelesench@mailings.nzz.ch	Heute meistgelesen: Neo-SP-Stadtrat Tobias Langenegger macht	2026-03-21	IU	U	
+19d10b49f91eaccd	appeconomyinsights@substack.com	📊 PRO: This Week in Visuals	2026-03-21	IU	U	heinrich@heinrichhartmann.com
+19d10ad1776ba1ce	order-update@amazon.de	Zugestellt: „tao pipe 6 Rolls Cohesive...“ und 2 weitere Art	2026-03-21	I	U	
+19d10a8d793e1dca	messaging-digest-noreply@linkedin.com	Sebastian just messaged you	2026-03-21	I	U	heinrich@heinrichhartmann.com
+19d1013987861a9e	shipment-tracking@amazon.de	"In Zustellung: „tao pipe 6 Rolls Cohesive..."" und 2 weitere "	2026-03-21	IU	U	
+19d0fdf78c5af15f	info@fdp.de	Sonntag ist Wahltag: Es zählt jede Stimme!	2026-03-21	IU	U	heinrich@heinrichhartmann.com
+19d0faa4a45269d1	jo@pm-coaching.co.uk	Love Wins...But Only Always	2026-03-21	I	R	heinrich@heinrichhartmann.com
