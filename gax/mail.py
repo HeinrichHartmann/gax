@@ -1126,6 +1126,93 @@ def _parse_gax_content(path: Path) -> str:
     return content[header_end + 5:]  # Skip \n---\n
 
 
+@list_group.command("checkout")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--to", "folder", required=True, type=click.Path(path_type=Path), help="Output folder")
+def list_checkout(file: str, folder: Path):
+    """Checkout full threads from a list file into a folder.
+
+    Reads thread IDs from a list file and clones each thread
+    as a full .mail.gax file. Incremental: skips existing threads.
+
+    \b
+    Examples:
+        gax mail list checkout inbox.gax --to Inbox/
+        gax mail list checkout signals.gax --to Signals/
+
+    \b
+    Workflow:
+        1. clone   -> create list file with thread summaries
+        2. checkout -> materialize full threads to folder
+        3. grep/search folder contents as needed
+    """
+    try:
+        # Parse thread IDs from list file
+        tsv_content = _parse_gax_content(Path(file))
+        lines = tsv_content.strip().split("\n")
+
+        # Skip header line
+        if lines and lines[0].startswith("id\t"):
+            lines = lines[1:]
+
+        thread_ids = []
+        for line in lines:
+            if line.strip() and not line.startswith("#"):
+                fields = line.split("\t")
+                if fields:
+                    thread_ids.append(fields[0].strip())
+
+        if not thread_ids:
+            click.echo("No threads found in list file.", err=True)
+            sys.exit(1)
+
+        click.echo(f"Found {len(thread_ids)} threads in {file}")
+
+        # Create folder
+        folder.mkdir(parents=True, exist_ok=True)
+
+        # Get already cloned thread IDs
+        existing_ids = _get_existing_thread_ids(folder)
+
+        # Clone each thread
+        cloned = 0
+        skipped = 0
+
+        for thread_id in thread_ids:
+            if thread_id in existing_ids:
+                skipped += 1
+                continue
+
+            try:
+                sections = pull_thread(thread_id)
+                content = format_multipart(sections)
+
+                # Generate filename
+                first = sections[0]
+                filename = _make_filename(
+                    first.date, first.from_addr, first.title, thread_id
+                )
+                file_path = folder / filename
+
+                # Avoid overwriting
+                if file_path.exists():
+                    base = file_path.stem
+                    file_path = folder / f"{base}_{thread_id}.mail.gax"
+
+                file_path.write_text(content, encoding="utf-8")
+                cloned += 1
+                click.echo(f"  {filename}")
+
+            except Exception as e:
+                click.echo(f"  Error cloning {thread_id}: {e}", err=True)
+
+        click.echo(f"Checked out: {cloned}, Skipped: {skipped} (already present)")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 @list_group.command("clone")
 @click.argument("query")
 @click.option("-o", "--output", "output_path", default=None, help="Output file (default: list.gax)")
