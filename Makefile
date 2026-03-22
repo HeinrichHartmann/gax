@@ -1,4 +1,4 @@
-.PHONY: test test-e2e install lint fmt
+.PHONY: test test-e2e install lint fmt hooks
 
 test:
 	uv run pytest tests/ -v -m "not e2e"
@@ -15,3 +15,6 @@ lint:
 fmt:
 	uv run ruff format gax/ tests/
 	uv run ruff check --fix gax/ tests/
+
+hooks:
+	uv run pre-commit install
