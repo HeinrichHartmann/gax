@@ -17,6 +17,7 @@ from googleapiclient.discovery import build
 from .auth import get_authenticated_credentials
 from .store import store_blob
 from . import multipart
+from . import draft as draft_module
 
 
 @dataclass
@@ -788,3 +789,110 @@ def search(query: str, limit: int):
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+# =============================================================================
+# Reply command (creates draft from thread)
+# =============================================================================
+
+
+@mail.command()
+@click.argument("file_or_url")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output file (default: Re_<subject>.draft.gax)",
+)
+def reply(file_or_url: str, output: Optional[Path]):
+    """Create a reply draft from a thread.
+
+    Takes a .mail.gax file or Gmail thread URL and creates a .draft.gax file
+    with the reply metadata pre-filled.
+
+    Examples:
+
+        gax mail reply Project_Update.mail.gax
+        gax mail reply "https://mail.google.com/mail/u/0/#inbox/abc123"
+        gax mail reply thread.mail.gax -o my_reply.draft.gax
+    """
+    try:
+        # Determine if input is a file or URL
+        file_path = Path(file_or_url)
+
+        if file_path.exists() and file_path.suffix == ".gax":
+            # Parse .mail.gax file
+            content = file_path.read_text(encoding="utf-8")
+            sections = multipart.parse_multipart(content)
+
+            if not sections:
+                click.echo("Error: No sections found in file", err=True)
+                sys.exit(1)
+
+            # Get last message for reply
+            last_section = sections[-1]
+            thread_id = last_section.headers.get("thread_id", "")
+            subject = last_section.headers.get("title", "")
+            from_addr = last_section.headers.get("from", "")
+
+            # For in_reply_to, we'd need message_id which isn't stored in .mail.gax
+            # Use thread_id for threading
+            in_reply_to = ""
+
+        else:
+            # Treat as URL or thread ID - fetch from Gmail
+            thread_id = extract_thread_id(file_or_url)
+            click.echo(f"Fetching thread: {thread_id}")
+
+            sections = pull_thread(thread_id)
+            if not sections:
+                click.echo("Error: No messages found in thread", err=True)
+                sys.exit(1)
+
+            last_section = sections[-1]
+            subject = last_section.title
+            from_addr = last_section.from_addr
+            in_reply_to = ""
+
+        # Create reply subject
+        if not subject.lower().startswith("re:"):
+            subject = f"Re: {subject}"
+
+        # Create draft config
+        config = draft_module.DraftConfig(
+            subject=subject,
+            to=from_addr,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+            time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+
+        body = "\n"  # Empty body
+
+        draft_content = draft_module.format_draft(config, body)
+
+        # Determine output filename
+        if output:
+            out_path = output
+        else:
+            safe_subject = re.sub(r'[<>:"/\\|?*]', "-", subject)
+            safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
+            out_path = Path(f"{safe_subject}.draft.gax")
+
+        if out_path.exists():
+            click.echo(f"Error: File already exists: {out_path}", err=True)
+            sys.exit(1)
+
+        out_path.write_text(draft_content, encoding="utf-8")
+        click.echo(f"Created: {out_path}")
+        click.echo(f"To: {from_addr}")
+        click.echo(f"Subject: {subject}")
+        click.echo(f"Edit the file, then run: gax mail draft push {out_path}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+# Register draft subcommand group
+mail.add_command(draft_module.draft)
