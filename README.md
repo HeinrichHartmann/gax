@@ -1,13 +1,14 @@
 # gax - Google Access CLI
 
-Sync Google Workspace (Sheets, Docs, Gmail) to local files that are human-readable, machine-readable, and git-friendly.
+Sync Google Workspace (Sheets, Docs, Gmail, Calendar) to local files that are human-readable, machine-readable, and git-friendly.
 
 ## Design
 
 - **YAML frontmatter** stores metadata (source URL, IDs) for re-sync
-- **Plain text body** (CSV, Markdown) for easy editing and diffing
+- **Plain text body** (CSV, Markdown, TSV) for easy editing and diffing
 - **Clone/Pull pattern** like git - clone once, pull to update
-- **Bi-directional** for Sheets (push), read-only archive for Docs/Mail
+- **Plan/Apply pattern** for bulk operations - preview changes before applying
+- **Bi-directional** for Sheets (push), declarative for Labels/Relabel
 
 ## Install
 
@@ -26,159 +27,189 @@ gax auth status   # Check authentication
 
 Requires `~/.config/gax/credentials.json` from [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
 
-## Sheets
+## Commands
 
-Two-way sync for Google Sheets tabs.
+### Sheets
+
+Two-way sync for Google Sheets.
 
 ```bash
-# Clone a tab to local file (outputs to stdout)
-gax sheet clone URL TAB > budget.sheet.gax
+# Clone all tabs
+gax sheet clone URL
 
-# Pull latest data
-gax sheet pull budget.sheet.gax
+# Clone single tab
+gax sheet tab clone URL TAB
 
-# Edit locally, then push back
-gax sheet push budget.sheet.gax
-gax sheet push budget.sheet.gax --with-formulas  # preserve =SUM(...) etc.
+# Pull latest / Push changes
+gax sheet pull file.sheet.gax
+gax sheet tab push file.sheet.gax --with-formulas
 ```
 
-**Arguments:**
-- `URL` - Google Sheets URL
-- `TAB` - Tab/sheet name to sync
-- `--format` - Output format: csv (default), tsv, json, jsonl, markdown
-
-## Docs
+### Docs
 
 Read-only sync for Google Docs (supports multi-tab documents).
 
 ```bash
-# Clone document
 gax doc clone URL
-
-# Pull latest
 gax doc pull Document.doc.gax
-
-# Include comments
 gax doc clone URL --with-comments
-gax doc pull Document.doc.gax --with-comments
 ```
 
-**Arguments:**
-- `URL` - Google Docs URL
-- `--with-comments` - Include document comments as separate sections
-- `-o, --output` - Output file path
+### Mail
 
-## Mail
-
-Archive Gmail threads as local markdown files.
+Archive and manage Gmail.
 
 ```bash
-# List labels
-gax mail labels
-
-# Search threads (TSV output)
+# Search threads
 gax mail search "from:alice after:2025/01/01"
-gax mail search "label:Inbox has:attachment" --limit 50
 
-# Clone single thread
+# Clone thread(s)
 gax mail clone THREAD_ID
-gax mail clone "https://mail.google.com/..."
-
-# Clone search results to folder
 gax mail clone "label:Inbox" --to Inbox/
-gax mail clone "from:alice" --to Alice/ --limit 100
 
-# Update existing threads with new messages
+# Pull updates
 gax mail pull thread.mail.gax
-gax mail pull Inbox/   # updates all .mail.gax files in folder
 ```
 
-**Arguments:**
-- `QUERY` - Gmail search query (same syntax as Gmail search box)
-- `THREAD_ID` - Thread ID or Gmail URL
-- `--to` - Target folder for bulk clone
-- `--limit` - Max threads to fetch (default: 100)
+### Mail Drafts
+
+Compose and send drafts.
+
+```bash
+# Create draft
+gax mail draft create draft.gax
+
+# List / Pull / Send
+gax mail draft list
+gax mail draft pull draft.gax
+gax mail draft send draft.gax
+```
+
+### Mail Relabel (Bulk Label Operations)
+
+Declarative bulk labeling with IaC-style workflow.
+
+```bash
+# Clone threads for relabeling
+gax mail relabel clone "in:inbox" -o inbox.gax --limit 50
+
+# Edit the .gax file:
+#   sys column: I=Inbox S=Spam T=Trash U=Unread *=Starred !=Important
+#   cat column: P=Personal U=Updates R=Promotions S=Social F=Forums
+#   labels column: user labels (comma-separated)
+
+# Generate plan and apply
+gax mail relabel plan inbox.gax
+gax mail relabel apply relabel.plan.yaml -y
+
+# Update existing file
+gax mail relabel pull inbox.gax
+```
+
+**Example .gax file:**
+```
+---
+type: gax/relabel
+query: in:inbox
+limit: 50
+---
+id	from	subject	date	sys	cat	labels
+19d1586c...	alice@example.com	Meeting notes	2026-03-22	I	U	work,projects/active
+19d1445a...	spam@fake.com	Buy now!!!	2026-03-22	S
+```
+
+### Labels (Declarative Management)
+
+Manage Gmail labels declaratively.
+
+```bash
+# Export labels to YAML
+gax label pull -o labels.yaml
+
+# Edit: add/rename/delete labels, change visibility
+# Then generate plan and apply
+gax label plan labels.yaml
+gax label apply labels.plan.yaml -y
+
+# List labels (TSV)
+gax label list
+```
+
+**Visibility settings:**
+- `visible`: show | hide | unread (sidebar)
+- `show_in_list`: show | hide (on messages)
+
+**Example labels.yaml:**
+```yaml
+labels:
+- name: Work
+- name: Projects/Active
+  visible: show
+- name: Archive
+  visible: hide
+  show_in_list: hide
+- name: OldName
+  rename_from: NewName
+```
+
+### Calendar
+
+Sync Google Calendar events.
+
+```bash
+# Clone calendar
+gax cal clone CALENDAR_ID -o calendar.cal.gax
+
+# Pull updates
+gax cal pull calendar.cal.gax
+
+# List calendars
+gax cal list
+```
 
 ## File Formats
 
-All files use YAML frontmatter + plain text body. The frontmatter stores sync metadata (source URL, IDs), the body is human-readable content.
-
 | Extension | Content |
 |-----------|---------|
-| `.sheet.gax` | Spreadsheet tab (CSV/TSV/JSON) |
+| `.sheet.gax` | Spreadsheet (CSV/TSV/JSON) |
 | `.doc.gax` | Document (Markdown) |
 | `.mail.gax` | Email thread (Markdown) |
+| `.draft.gax` | Email draft (Markdown) |
+| `.cal.gax` | Calendar events (YAML) |
+| `.gax` | Relabel state (TSV with YAML header) |
 
 ### Multipart Format
 
-Documents with multiple sections (Doc tabs, Mail threads) use a **multipart format**: multiple YAML+content blocks concatenated. Each section is self-contained with repeated metadata, so sections can be split into standalone files or joined via `cat`.
-
-**Example: Multi-tab Google Doc**
+Documents with multiple sections (Doc tabs, Mail threads) use a **multipart format**: multiple YAML+content blocks concatenated. Each section is self-contained.
 
 ```
 ---
 title: Project Plan
-source: https://docs.google.com/document/d/abc123/edit
-time: 2026-03-20T10:00:00Z
-section: 1
-section_title: Overview
+source: https://docs.google.com/...
+tab: Overview
 ---
 # Overview
 
-Project goals and scope...
+Project goals...
 
 ---
 title: Project Plan
-source: https://docs.google.com/document/d/abc123/edit
-time: 2026-03-20T10:00:00Z
-section: 2
-section_title: Timeline
+source: https://docs.google.com/...
+tab: Timeline
 ---
 # Timeline
 
 | Phase | Date |
 |-------|------|
 | Alpha | Q1   |
-| Beta  | Q2   |
 ```
 
-Each section repeats `title`, `source`, `time` so it remains valid if extracted alone.
+## Help
 
-**Example: Email thread**
-
-```
----
-title: Re: Project Update
-source: https://mail.google.com/mail/u/0/#inbox/abc123
-time: 2026-03-20T10:00:00Z
-thread_id: abc123
-section: 1
-section_title: From Alice
-from: alice@example.com
-to: bob@example.com
-date: 2026-03-15T09:30:00Z
----
-Hi Bob,
-
-Here's the project update you requested.
-
-Best,
-Alice
-
----
-title: Re: Project Update
-source: https://mail.google.com/mail/u/0/#inbox/abc123
-time: 2026-03-20T10:00:00Z
-thread_id: abc123
-section: 2
-section_title: From Bob
-from: bob@example.com
-to: alice@example.com
-date: 2026-03-15T10:45:00Z
----
-Thanks Alice!
-
-Bob
+```bash
+gax --help
+gax <command> --help
+gax man  # Full manual
 ```
 
 ## License
