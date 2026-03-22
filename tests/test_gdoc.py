@@ -5,7 +5,7 @@ Uses mock service objects to test without hitting real Google APIs.
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from gax.gdoc import (
     pull_doc,
@@ -35,15 +35,31 @@ def make_mock_service(doc_response: dict):
 class TestPullDoc:
     """Tests for pull_doc function."""
 
-    def test_multi_tab_document(self):
+    @patch("gax.gdoc.native_md")
+    def test_multi_tab_document(self, mock_native_md):
         """Test pulling a document with multiple tabs."""
-        doc_response = json.loads(load_fixture("sample_doc_response.json"))
-        service = make_mock_service(doc_response)
+        # Mock native_md functions
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t.1", "title": "Overview", "index": 0},
+            {"id": "t.2", "title": "Timeline", "index": 1},
+        ]
+        mock_native_md.export_doc_markdown.return_value = (
+            "# Overview\n\nThese are the project goals.\n\n"
+            "# Timeline\n\n## Key Milestones\n\nMilestone 1\n"
+        )
+        mock_native_md.split_doc_by_tabs.return_value = {
+            "Overview": "These are the project goals.",
+            "Timeline": "## Key Milestones\n\nMilestone 1",
+        }
+
+        # Mock docs service for title
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Project Plan"}
 
         sections = pull_doc(
             "test-doc-123",
             "https://docs.google.com/document/d/test-doc-123/edit",
-            service=service,
+            docs_service=docs_service,
         )
 
         # Should have 2 sections (one per tab)
@@ -53,97 +69,85 @@ class TestPullDoc:
         assert sections[0].title == "Project Plan"
         assert sections[0].section == 1
         assert sections[0].section_title == "Overview"
-        assert "# Overview" in sections[0].content
         assert "project goals" in sections[0].content
 
         # Check second section (Timeline)
         assert sections[1].title == "Project Plan"
         assert sections[1].section == 2
         assert sections[1].section_title == "Timeline"
-        assert "# Timeline" in sections[1].content
-        assert "## Key Milestones" in sections[1].content
+        assert "Key Milestones" in sections[1].content
 
-    def test_single_tab_document(self):
+    @patch("gax.gdoc.native_md")
+    def test_single_tab_document(self, mock_native_md):
         """Test pulling a document with a single tab."""
-        doc_response = {
-            "documentId": "single-doc",
-            "title": "Simple Doc",
-            "tabs": [
-                {
-                    "tabProperties": {"tabId": "t1", "title": "Simple Doc"},
-                    "documentTab": {
-                        "body": {
-                            "content": [
-                                {
-                                    "paragraph": {
-                                        "elements": [
-                                            {"textRun": {"content": "Hello World\n"}}
-                                        ],
-                                        "paragraphStyle": {
-                                            "namedStyleType": "NORMAL_TEXT"
-                                        },
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                }
-            ],
-        }
-        service = make_mock_service(doc_response)
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t1", "title": "Simple Doc", "index": 0}
+        ]
+        mock_native_md.export_doc_markdown.return_value = "# Simple Doc\n\nHello World\n"
+        mock_native_md.split_doc_by_tabs.return_value = {"Simple Doc": "Hello World"}
+
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Simple Doc"}
 
         sections = pull_doc(
             "single-doc",
             "https://docs.google.com/document/d/single-doc/edit",
-            service=service,
+            docs_service=docs_service,
         )
 
         assert len(sections) == 1
         assert sections[0].title == "Simple Doc"
         assert "Hello World" in sections[0].content
 
-    def test_document_without_tabs(self):
+    @patch("gax.gdoc.native_md")
+    def test_document_without_tabs(self, mock_native_md):
         """Test pulling a legacy document without tabs array."""
-        doc_response = {
-            "documentId": "legacy-doc",
-            "title": "Legacy Doc",
-            "body": {
-                "content": [
-                    {
-                        "paragraph": {
-                            "elements": [{"textRun": {"content": "Legacy content\n"}}],
-                            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-                        }
-                    }
-                ]
-            },
-        }
-        service = make_mock_service(doc_response)
+        # No tabs returned means fallback to default
+        mock_native_md.get_doc_tabs.return_value = []
+        mock_native_md.export_doc_markdown.return_value = "Legacy content\n"
+        mock_native_md.split_doc_by_tabs.return_value = {"Document": "Legacy content"}
+
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Legacy Doc"}
 
         sections = pull_doc(
             "legacy-doc",
             "https://docs.google.com/document/d/legacy-doc/edit",
-            service=service,
+            docs_service=docs_service,
         )
 
         assert len(sections) == 1
         assert sections[0].title == "Legacy Doc"
-        assert sections[0].section_title == "Legacy Doc"
-        assert "Legacy content" in sections[0].content
+        # When no tabs, uses fallback title "Document"
+        assert sections[0].section_title == "Document"
 
 
 class TestFormatMultipart:
     """Tests for multipart format output."""
 
-    def test_format_multi_tab_to_file(self, tmp_path):
+    @patch("gax.gdoc.native_md")
+    def test_format_multi_tab_to_file(self, mock_native_md, tmp_path):
         """Test formatting a multi-tab document and writing to file."""
-        doc_response = json.loads(load_fixture("sample_doc_response.json"))
-        service = make_mock_service(doc_response)
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t.1", "title": "Overview", "index": 0},
+            {"id": "t.2", "title": "Timeline", "index": 1},
+        ]
+        mock_native_md.export_doc_markdown.return_value = (
+            "# Overview\n\nProject goals.\n\n"
+            "# Timeline\n\n## Key Milestones\n\nMilestone 1\n"
+        )
+        mock_native_md.split_doc_by_tabs.return_value = {
+            "Overview": "Project goals.",
+            "Timeline": "## Key Milestones\n\nMilestone 1",
+        }
+
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Project Plan"}
 
         sections = pull_doc(
             "test-doc-123",
             "https://docs.google.com/document/d/test-doc-123/edit",
-            service=service,
+            docs_service=docs_service,
         )
 
         content = format_multipart(sections)
@@ -158,25 +162,32 @@ class TestFormatMultipart:
         # Should have two sections with YAML headers
         assert written.count("---\n") >= 4  # At least 2 sections x 2 delimiters
         assert "title: Project Plan" in written
-        assert "section: 1" in written
-        assert "section: 2" in written
-        assert "section_title: Overview" in written
-        assert "section_title: Timeline" in written
+        assert "tab: Overview" in written
+        assert "tab: Timeline" in written
 
         # Content should be present
-        assert "# Overview" in written
-        assert "# Timeline" in written
-        assert "## Key Milestones" in written
+        assert "Key Milestones" in written
 
-    def test_sections_are_self_contained(self, tmp_path):
+    @patch("gax.gdoc.native_md")
+    def test_sections_are_self_contained(self, mock_native_md, tmp_path):
         """Test that each section can be extracted as a standalone file."""
-        doc_response = json.loads(load_fixture("sample_doc_response.json"))
-        service = make_mock_service(doc_response)
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t.1", "title": "Overview", "index": 0},
+            {"id": "t.2", "title": "Timeline", "index": 1},
+        ]
+        mock_native_md.export_doc_markdown.return_value = "# Overview\n\n# Timeline\n"
+        mock_native_md.split_doc_by_tabs.return_value = {
+            "Overview": "Overview content",
+            "Timeline": "Timeline content",
+        }
+
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Project Plan"}
 
         sections = pull_doc(
             "test-doc-123",
             "https://docs.google.com/document/d/test-doc-123/edit",
-            service=service,
+            docs_service=docs_service,
         )
 
         # Each section should have full metadata
@@ -196,82 +207,33 @@ class TestFormatMultipart:
             written = output_file.read_text()
             assert written.startswith("---\n")
             assert "title: Project Plan" in written
-            assert f"section: {i + 1}" in written
 
 
 class TestHeadingConversion:
-    """Tests for heading style conversion."""
+    """Tests for heading style conversion (native API handles this)."""
 
-    def test_heading_levels(self):
-        """Test that heading styles are converted correctly."""
-        doc_response = {
-            "documentId": "headings-doc",
-            "title": "Headings Test",
-            "tabs": [
-                {
-                    "tabProperties": {"tabId": "t1", "title": "Headings"},
-                    "documentTab": {
-                        "body": {
-                            "content": [
-                                {
-                                    "paragraph": {
-                                        "elements": [
-                                            {"textRun": {"content": "Heading 1\n"}}
-                                        ],
-                                        "paragraphStyle": {
-                                            "namedStyleType": "HEADING_1"
-                                        },
-                                    }
-                                },
-                                {
-                                    "paragraph": {
-                                        "elements": [
-                                            {"textRun": {"content": "Heading 2\n"}}
-                                        ],
-                                        "paragraphStyle": {
-                                            "namedStyleType": "HEADING_2"
-                                        },
-                                    }
-                                },
-                                {
-                                    "paragraph": {
-                                        "elements": [
-                                            {"textRun": {"content": "Heading 3\n"}}
-                                        ],
-                                        "paragraphStyle": {
-                                            "namedStyleType": "HEADING_3"
-                                        },
-                                    }
-                                },
-                                {
-                                    "paragraph": {
-                                        "elements": [
-                                            {"textRun": {"content": "Heading 4\n"}}
-                                        ],
-                                        "paragraphStyle": {
-                                            "namedStyleType": "HEADING_4"
-                                        },
-                                    }
-                                },
-                                {
-                                    "paragraph": {
-                                        "elements": [
-                                            {"textRun": {"content": "Normal text\n"}}
-                                        ],
-                                        "paragraphStyle": {
-                                            "namedStyleType": "NORMAL_TEXT"
-                                        },
-                                    }
-                                },
-                            ]
-                        }
-                    },
-                }
-            ],
+    @patch("gax.gdoc.native_md")
+    def test_heading_levels(self, mock_native_md):
+        """Test that headings from native export are preserved."""
+        # Native API returns markdown directly with headings
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t1", "title": "Headings", "index": 0}
+        ]
+        mock_native_md.export_doc_markdown.return_value = (
+            "# Headings\n\n# Heading 1\n\n## Heading 2\n\n### Heading 3\n\n"
+            "#### Heading 4\n\nNormal text\n"
+        )
+        mock_native_md.split_doc_by_tabs.return_value = {
+            "Headings": (
+                "# Heading 1\n\n## Heading 2\n\n### Heading 3\n\n"
+                "#### Heading 4\n\nNormal text"
+            )
         }
 
-        service = make_mock_service(doc_response)
-        sections = pull_doc("headings-doc", "https://...", service=service)
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Headings Test"}
+
+        sections = pull_doc("headings-doc", "https://...", docs_service=docs_service)
 
         content = sections[0].content
         assert "# Heading 1" in content
@@ -279,8 +241,6 @@ class TestHeadingConversion:
         assert "### Heading 3" in content
         assert "#### Heading 4" in content
         assert "Normal text" in content
-        # Normal text should NOT have # prefix
-        assert "\n# Normal text" not in content
 
 
 class TestGetTabsList:
@@ -341,42 +301,54 @@ class TestGetTabsList:
 class TestPullSingleTab:
     """Tests for pull_single_tab function."""
 
-    def test_pull_specific_tab(self):
+    @patch("gax.gdoc.native_md")
+    def test_pull_specific_tab(self, mock_native_md):
         """Test pulling a specific tab by name."""
-        doc_response = json.loads(load_fixture("sample_doc_response.json"))
-        service = make_mock_service(doc_response)
+        mock_native_md.export_tab_markdown.return_value = (
+            "## Key Milestones\n\nMilestone 1"
+        )
+
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Project Plan"}
 
         section = pull_single_tab(
             "test-doc-123",
             "Timeline",
             "https://docs.google.com/document/d/test-doc-123/edit",
-            service=service,
+            docs_service=docs_service,
         )
 
         assert section.title == "Project Plan"
         assert section.section_title == "Timeline"
-        assert "# Timeline" in section.content
-        assert "## Key Milestones" in section.content
+        assert "Key Milestones" in section.content
 
-    def test_pull_first_tab(self):
+    @patch("gax.gdoc.native_md")
+    def test_pull_first_tab(self, mock_native_md):
         """Test pulling the first tab."""
-        doc_response = json.loads(load_fixture("sample_doc_response.json"))
-        service = make_mock_service(doc_response)
+        mock_native_md.export_tab_markdown.return_value = "Overview content here"
+
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Project Plan"}
 
         section = pull_single_tab(
             "test-doc-123",
             "Overview",
             "https://docs.google.com/document/d/test-doc-123/edit",
-            service=service,
+            docs_service=docs_service,
         )
 
         assert section.section_title == "Overview"
-        assert "# Overview" in section.content
+        assert "Overview content" in section.content
 
-    def test_pull_tab_not_found(self):
+    @patch("gax.gdoc.native_md")
+    def test_pull_tab_not_found(self, mock_native_md):
         """Test pulling a non-existent tab raises error."""
-        doc_response = json.loads(load_fixture("sample_doc_response.json"))
-        service = make_mock_service(doc_response)
+        mock_native_md.export_tab_markdown.side_effect = ValueError(
+            "Tab not found: NonExistent"
+        )
+
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Project Plan"}
 
         import pytest
 
@@ -385,32 +357,22 @@ class TestPullSingleTab:
                 "test-doc-123",
                 "NonExistent",
                 "https://docs.google.com/document/d/test-doc-123/edit",
-                service=service,
+                docs_service=docs_service,
             )
 
-    def test_pull_legacy_document(self):
-        """Test pulling from a legacy document matches document title."""
-        doc_response = {
-            "documentId": "legacy-doc",
-            "title": "Legacy Doc",
-            "body": {
-                "content": [
-                    {
-                        "paragraph": {
-                            "elements": [{"textRun": {"content": "Legacy content\n"}}],
-                            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-                        }
-                    }
-                ]
-            },
-        }
-        service = make_mock_service(doc_response)
+    @patch("gax.gdoc.native_md")
+    def test_pull_legacy_document(self, mock_native_md):
+        """Test pulling from a legacy document."""
+        mock_native_md.export_tab_markdown.return_value = "Legacy content"
+
+        docs_service = MagicMock()
+        docs_service.documents().get().execute.return_value = {"title": "Legacy Doc"}
 
         section = pull_single_tab(
             "legacy-doc",
             "Legacy Doc",
             "https://docs.google.com/document/d/legacy-doc/edit",
-            service=service,
+            docs_service=docs_service,
         )
 
         assert section.section_title == "Legacy Doc"

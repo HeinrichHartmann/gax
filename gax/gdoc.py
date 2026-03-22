@@ -15,6 +15,7 @@ from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
 from . import multipart
+from . import native_md
 
 
 @dataclass
@@ -64,24 +65,26 @@ def _doc_section_to_multipart(section: DocSection) -> multipart.Section:
         "title": section.title,
         "source": section.source,
         "time": section.time,
-        "section": section.section,
+        "tab": section.section_title,
     }
     if section.section_type:
-        headers["section_type"] = section.section_type
-    headers["section_title"] = section.section_title
+        headers["tab_type"] = section.section_type
     return multipart.Section(headers=headers, content=section.content)
 
 
 def _multipart_to_doc_section(section: multipart.Section) -> DocSection:
     """Convert generic multipart Section to DocSection."""
+    # Support both new (tab) and old (section/section_title) header names
+    h = section.headers
+    tab_name = h.get("tab", h.get("tab_title", h.get("section_title", "")))
     return DocSection(
-        title=section.headers.get("title", ""),
-        source=section.headers.get("source", ""),
-        time=section.headers.get("time", ""),
-        section=int(section.headers.get("section", 1)),
-        section_title=section.headers.get("section_title", ""),
+        title=h.get("title", ""),
+        source=h.get("source", ""),
+        time=h.get("time", ""),
+        section=int(h.get("section", 1)),  # Keep for internal ordering
+        section_title=tab_name,
         content=section.content,
-        section_type=section.headers.get("section_type"),
+        section_type=h.get("tab_type", h.get("section_type")),
     )
 
 
@@ -118,103 +121,55 @@ def extract_doc_id(url: str) -> str:
     raise ValueError(f"Cannot extract document ID from: {url}")
 
 
-def _docs_body_to_markdown(body: dict) -> str:
-    """Convert Google Docs API body dict to markdown."""
-    lines = []
-
-    for element in body.get("content", []):
-        if "paragraph" in element:
-            para = element["paragraph"]
-            style = para.get("paragraphStyle", {}).get("namedStyleType", "NORMAL_TEXT")
-
-            # Extract text from paragraph elements
-            text = "".join(
-                run.get("textRun", {}).get("content", "")
-                for run in para.get("elements", [])
-            ).rstrip("\n")
-
-            if not text.strip():
-                lines.append("")
-                continue
-
-            # Map heading styles
-            if style == "HEADING_1":
-                lines.append(f"# {text}")
-            elif style == "HEADING_2":
-                lines.append(f"## {text}")
-            elif style == "HEADING_3":
-                lines.append(f"### {text}")
-            elif style == "HEADING_4":
-                lines.append(f"#### {text}")
-            else:
-                lines.append(text)
-            lines.append("")
-
-        elif "table" in element:
-            lines.append("*(table omitted)*")
-            lines.append("")
-
-    return "\n".join(lines)
-
-
-def pull_doc(document_id: str, source_url: str, *, service=None) -> list[DocSection]:
+def pull_doc(
+    document_id: str, source_url: str, *, docs_service=None, drive_service=None
+) -> list[DocSection]:
     """Fetch document from Google Docs API and return list of sections.
+
+    Uses native Drive API markdown export for high-quality conversion.
 
     Args:
         document_id: Google Docs document ID
         source_url: Source URL for metadata
-        service: Optional Docs API service object for testing
+        docs_service: Optional Docs API service object for testing
+        drive_service: Optional Drive API service object for testing
     """
-    if service is None:
+    # Get tab list from Docs API
+    tabs = native_md.get_doc_tabs(document_id, docs_service=docs_service)
+
+    if not tabs:
+        # Fallback: single document without tabs
+        tabs = [{"id": "", "title": "Document", "index": 0}]
+
+    # Get document title
+    if docs_service is None:
         creds = get_authenticated_credentials()
-        service = build("docs", "v1", credentials=creds)
+        docs_service = build("docs", "v1", credentials=creds)
 
-    # Fetch document with tab content
-    document = (
-        service.documents()
-        .get(
-            documentId=document_id,
-            includeTabsContent=True,
-        )
-        .execute()
-    )
+    doc = docs_service.documents().get(documentId=document_id).execute()
+    doc_title = doc.get("title", "Untitled")
 
-    doc_title = document.get("title", "Untitled")
-    raw_tabs = document.get("tabs", [])
+    # Export full document as markdown using native API
+    full_md = native_md.export_doc_markdown(document_id, drive_service=drive_service)
+
+    # Split by tabs
+    tab_titles = [t["title"] for t in tabs]
+    tab_contents = native_md.split_doc_by_tabs(full_md, tab_titles)
+
     time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
     sections = []
 
-    if raw_tabs:
-        # Document has tabs
-        for i, tab in enumerate(raw_tabs, start=1):
-            props = tab.get("tabProperties", {})
-            tab_title = props.get("title", f"Tab {i}")
-            body = tab.get("documentTab", {}).get("body", {})
-            content = _docs_body_to_markdown(body)
-
-            sections.append(
-                DocSection(
-                    title=doc_title,
-                    source=source_url,
-                    time=time_str,
-                    section=i,
-                    section_title=tab_title,
-                    content=content,
-                )
-            )
-    else:
-        # Single-section document (no tabs or old API)
-        body = document.get("body", {})
-        content = _docs_body_to_markdown(body)
+    for i, tab in enumerate(tabs, start=1):
+        tab_title = tab["title"]
+        content = tab_contents.get(tab_title, "")
 
         sections.append(
             DocSection(
                 title=doc_title,
                 source=source_url,
                 time=time_str,
-                section=1,
-                section_title=doc_title,
+                section=i,
+                section_title=tab_title,
                 content=content,
             )
         )
@@ -384,7 +339,7 @@ def get_tabs_list(document_id: str, *, service=None) -> dict:
 
     document = (
         service.documents()
-        .get(documentId=document_id, includeTabsContent=False)
+        .get(documentId=document_id, includeTabsContent=True)
         .execute()
     )
 
@@ -615,67 +570,53 @@ def tab_import(url: str, file: Path, output: Optional[Path]):
 
 
 def pull_single_tab(
-    document_id: str, tab_name: str, source_url: str, *, service=None
+    document_id: str,
+    tab_name: str,
+    source_url: str,
+    *,
+    docs_service=None,
+    drive_service=None,
 ) -> DocSection:
     """Pull a single tab from a document.
+
+    Uses native Drive API markdown export for high-quality conversion.
 
     Args:
         document_id: Google Docs document ID
         tab_name: Name of the tab to pull
         source_url: Source URL for metadata
-        service: Optional Docs API service object for testing
+        docs_service: Optional Docs API service object for testing
+        drive_service: Optional Drive API service object for testing
 
     Returns:
         DocSection for the specified tab
     """
-    if service is None:
+    # Get document title
+    if docs_service is None:
         creds = get_authenticated_credentials()
-        service = build("docs", "v1", credentials=creds)
+        docs_service = build("docs", "v1", credentials=creds)
 
-    document = (
-        service.documents()
-        .get(documentId=document_id, includeTabsContent=True)
-        .execute()
+    doc = docs_service.documents().get(documentId=document_id).execute()
+    doc_title = doc.get("title", "Untitled")
+
+    # Export single tab using native API
+    content = native_md.export_tab_markdown(
+        document_id,
+        tab_name,
+        drive_service=drive_service,
+        docs_service=docs_service,
     )
 
-    doc_title = document.get("title", "Untitled")
-    raw_tabs = document.get("tabs", [])
     time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Find matching tab
-    for i, t in enumerate(raw_tabs, start=1):
-        props = t.get("tabProperties", {})
-        title = props.get("title", f"Tab {i}")
-        tab_id = props.get("tabId", "")
-
-        if title == tab_name or tab_id == tab_name:
-            body = t.get("documentTab", {}).get("body", {})
-            content = _docs_body_to_markdown(body)
-
-            return DocSection(
-                title=doc_title,
-                source=source_url,
-                time=time_str,
-                section=1,
-                section_title=title,
-                content=content,
-            )
-
-    # If no tabs, check if tab_name matches document title
-    if not raw_tabs:
-        body = document.get("body", {})
-        content = _docs_body_to_markdown(body)
-
-        return DocSection(
-            title=doc_title,
-            source=source_url,
-            time=time_str,
-            section=1,
-            section_title=doc_title,
-            content=content,
-        )
-
-    raise ValueError(f"Tab not found: {tab_name}")
+    return DocSection(
+        title=doc_title,
+        source=source_url,
+        time=time_str,
+        section=1,
+        section_title=tab_name,
+        content=content,
+    )
 
 
 @tab.command("clone")
@@ -852,9 +793,10 @@ def tab_push(file: Path, yes: bool):
                 click.echo("Aborted.")
                 return
 
-        # Push the changes
+        # Push the changes (inline images from blob store back to base64)
         click.echo(f"Pushing to tab '{tab_name}'...")
-        update_tab_content(document_id, tab_name, local_section.content)
+        content_to_push = native_md.inline_images_from_store(local_section.content)
+        update_tab_content(document_id, tab_name, content_to_push)
         click.echo("Pushed successfully.")
 
     except Exception as e:

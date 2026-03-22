@@ -199,11 +199,14 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
             num_rows, num_cols, rows = params
             # Delete the placeholder text and insert table
             requests.append({'deleteContentRange': {'range': range_spec}})
+            table_loc = {'index': start}
+            if tab_id:
+                table_loc['tabId'] = tab_id
             requests.append({
                 'insertTable': {
                     'rows': num_rows,
                     'columns': num_cols,
-                    'location': {'index': start}
+                    'location': table_loc
                 }
             })
             # Note: Populating table cells requires additional logic
