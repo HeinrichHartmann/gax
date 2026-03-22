@@ -896,3 +896,388 @@ def reply(file_or_url: str, output: Optional[Path]):
 
 # Register draft subcommand group
 mail.add_command(draft_module.draft)
+
+
+# =============================================================================
+# Relabel commands (bulk label operations)
+# =============================================================================
+
+
+@click.group()
+def relabel():
+    """Bulk label operations (fetch/plan/apply)."""
+    pass
+
+
+def _get_thread_for_relabel(thread_id: str, service) -> dict:
+    """Get thread info for relabel yaml output."""
+    thread = (
+        service.users()
+        .threads()
+        .get(
+            userId="me",
+            id=thread_id,
+            format="metadata",
+            metadataHeaders=["From", "Subject", "Date"],
+        )
+        .execute()
+    )
+
+    messages = thread.get("messages", [])
+    if not messages:
+        return {
+            "id": thread_id,
+            "labels": [],
+            "from": "",
+            "subject": "",
+            "date": "",
+            "snippet": "",
+        }
+
+    # Get first message headers
+    first_msg = messages[0]
+    headers = first_msg.get("payload", {}).get("headers", [])
+    snippet = first_msg.get("snippet", "")[:80]
+
+    from_addr = _get_header(headers, "From")
+    subject = _get_header(headers, "Subject")
+    date_str = _get_header(headers, "Date")
+
+    # Extract email from "Name <email>" format
+    email_match = re.search(r"<([^>]+)>", from_addr)
+    if email_match:
+        from_email = email_match.group(1)
+    else:
+        from_email = from_addr.split()[0] if from_addr else ""
+
+    # Parse date
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(date_str)
+        date_short = dt.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        date_short = date_str[:10] if date_str else ""
+
+    return {
+        "id": thread_id,
+        "labels": [],
+        "from": from_email,
+        "subject": subject[:60],
+        "date": date_short,
+        "snippet": snippet,
+    }
+
+
+@relabel.command("fetch")
+@click.argument("query", default="in:inbox")
+@click.option("-o", "--output", "output_path", default="relabel.yaml", help="Output file")
+@click.option("--limit", default=50, help="Maximum threads (default: 50)")
+def relabel_fetch(query: str, output_path: str, limit: int):
+    """Fetch threads for relabeling.
+
+    Examples:
+
+        gax mail relabel fetch
+        gax mail relabel fetch "in:inbox"
+        gax mail relabel fetch "from:@company.com" --limit 100
+    """
+    import yaml
+
+    try:
+        creds = get_authenticated_credentials()
+        service = build("gmail", "v1", credentials=creds)
+
+        # Search threads
+        threads = []
+        page_token = None
+
+        while len(threads) < limit:
+            batch_size = min(100, limit - len(threads))
+            result = (
+                service.users()
+                .threads()
+                .list(
+                    userId="me",
+                    q=query,
+                    maxResults=batch_size,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+
+            batch = result.get("threads", [])
+            threads.extend(batch)
+
+            page_token = result.get("nextPageToken")
+            if not page_token or not batch:
+                break
+
+        threads = threads[:limit]
+
+        if not threads:
+            click.echo("No threads found.", err=True)
+            sys.exit(1)
+
+        # Get details for each thread
+        thread_data = []
+        for thread_info in threads:
+            try:
+                data = _get_thread_for_relabel(thread_info["id"], service)
+                thread_data.append(data)
+            except Exception as e:
+                click.echo(f"# Error fetching {thread_info['id']}: {e}", err=True)
+
+        # Build output
+        output = {
+            "fetched": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "query": query,
+            "threads": thread_data,
+        }
+
+        # Write yaml
+        path = Path(output_path)
+        with open(path, "w") as f:
+            f.write(f"# Relabel - edit 'labels' field for each thread\n")
+            f.write(f"# Fetched: {output['fetched']}\n")
+            f.write(f"# Query: {output['query']}\n\n")
+            yaml.dump(
+                {"threads": output["threads"]},
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+
+        click.echo(f"Wrote {len(thread_data)} threads to {output_path}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@relabel.command("plan")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("-o", "--output", "output_path", default="relabel.plan.yaml", help="Output file")
+def relabel_plan(file: str, output_path: str):
+    """Generate plan from edited relabel file.
+
+    Reads the relabel.yaml, outputs only threads with non-empty labels.
+
+    Example:
+
+        gax mail relabel plan relabel.yaml
+    """
+    import yaml
+
+    try:
+        creds = get_authenticated_credentials()
+        service = build("gmail", "v1", credentials=creds)
+
+        # Read input
+        with open(file) as f:
+            content = f.read()
+
+        # Skip comment lines for yaml parsing
+        yaml_content = "\n".join(
+            line for line in content.split("\n")
+            if not line.strip().startswith("#")
+        )
+        data = yaml.safe_load(yaml_content)
+        threads = data.get("threads", [])
+
+        # Get label name -> id mapping
+        labels_result = service.users().labels().list(userId="me").execute()
+        label_map = {
+            label["name"]: label["id"]
+            for label in labels_result.get("labels", [])
+        }
+
+        # Build changes
+        changes = []
+        errors = []
+
+        for thread in threads:
+            labels = thread.get("labels", [])
+            if not labels:
+                continue
+
+            thread_id = thread.get("id", "")
+            if not thread_id:
+                continue
+
+            # Handle special labels
+            if labels == ["-"]:
+                changes.append({
+                    "id": thread_id,
+                    "archive": True,
+                })
+                continue
+
+            if labels == ["!"]:
+                changes.append({
+                    "id": thread_id,
+                    "trash": True,
+                })
+                continue
+
+            # Validate labels exist
+            add_labels = []
+            for label_name in labels:
+                if label_name not in label_map:
+                    errors.append(f"Unknown label '{label_name}' for thread {thread_id}")
+                else:
+                    add_labels.append(label_name)
+
+            if add_labels:
+                changes.append({
+                    "id": thread_id,
+                    "add": add_labels,
+                    "archive": True,
+                })
+
+        if errors:
+            for err in errors:
+                click.echo(f"Error: {err}", err=True)
+            sys.exit(1)
+
+        if not changes:
+            click.echo("No changes to apply.")
+            return
+
+        # Write plan
+        plan = {
+            "source": file,
+            "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "changes": changes,
+        }
+
+        path = Path(output_path)
+        with open(path, "w") as f:
+            yaml.dump(plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        # Summary
+        archive_count = sum(1 for c in changes if c.get("archive") and not c.get("add"))
+        trash_count = sum(1 for c in changes if c.get("trash"))
+        label_count = sum(1 for c in changes if c.get("add"))
+
+        click.echo(f"Wrote {len(changes)} changes to {output_path}")
+        if label_count:
+            click.echo(f"  Add labels: {label_count}")
+        if archive_count:
+            click.echo(f"  Archive only: {archive_count}")
+        if trash_count:
+            click.echo(f"  Trash: {trash_count}")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@relabel.command("apply")
+@click.argument("plan_file", type=click.Path(exists=True))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def relabel_apply(plan_file: str, yes: bool):
+    """Apply relabel plan.
+
+    Reads the plan file and applies label changes.
+
+    Example:
+
+        gax mail relabel apply relabel.plan.yaml
+    """
+    import yaml
+
+    try:
+        creds = get_authenticated_credentials()
+        service = build("gmail", "v1", credentials=creds)
+
+        # Read plan
+        with open(plan_file) as f:
+            plan = yaml.safe_load(f)
+
+        changes = plan.get("changes", [])
+        if not changes:
+            click.echo("No changes in plan.")
+            return
+
+        # Get label name -> id mapping
+        labels_result = service.users().labels().list(userId="me").execute()
+        label_map = {
+            label["name"]: label["id"]
+            for label in labels_result.get("labels", [])
+        }
+
+        # Show summary
+        click.echo(f"Plan: {plan_file}")
+        click.echo(f"Changes: {len(changes)}")
+        click.echo()
+
+        for change in changes[:10]:
+            thread_id = change["id"][:12] + "..."
+            if change.get("trash"):
+                click.echo(f"  {thread_id}  → trash")
+            elif change.get("add"):
+                labels_str = ", ".join(change["add"])
+                click.echo(f"  {thread_id}  +{labels_str}")
+            elif change.get("archive"):
+                click.echo(f"  {thread_id}  → archive")
+
+        if len(changes) > 10:
+            click.echo(f"  ... and {len(changes) - 10} more")
+
+        click.echo()
+
+        if not yes:
+            if not click.confirm("Apply changes?"):
+                click.echo("Cancelled.")
+                return
+
+        # Apply changes
+        success = 0
+        failed = 0
+
+        for change in changes:
+            thread_id = change["id"]
+            try:
+                if change.get("trash"):
+                    service.users().threads().trash(
+                        userId="me",
+                        id=thread_id,
+                    ).execute()
+                else:
+                    modify_body = {}
+
+                    # Add labels
+                    if change.get("add"):
+                        add_ids = [label_map[name] for name in change["add"]]
+                        modify_body["addLabelIds"] = add_ids
+
+                    # Archive (remove INBOX)
+                    if change.get("archive"):
+                        modify_body["removeLabelIds"] = ["INBOX"]
+
+                    if modify_body:
+                        service.users().threads().modify(
+                            userId="me",
+                            id=thread_id,
+                            body=modify_body,
+                        ).execute()
+
+                success += 1
+
+            except Exception as e:
+                click.echo(f"Error on {thread_id}: {e}", err=True)
+                failed += 1
+
+        click.echo()
+        click.echo(f"Applied: {success} threads")
+        if failed:
+            click.echo(f"Failed: {failed} threads")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+# Register relabel subcommand group
+mail.add_command(relabel)
