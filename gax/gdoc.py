@@ -62,6 +62,7 @@ class CommentReply:
 def _doc_section_to_multipart(section: DocSection) -> multipart.Section:
     """Convert DocSection to generic multipart Section."""
     headers = {
+        "type": "gax/doc",
         "title": section.title,
         "source": section.source,
         "time": section.time,

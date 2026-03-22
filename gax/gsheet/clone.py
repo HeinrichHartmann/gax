@@ -33,6 +33,7 @@ def clone_all(
 
         section = Section(
             headers={
+                "type": "gax/sheet",
                 "title": title,
                 "source": url,
                 "section": idx,

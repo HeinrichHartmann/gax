@@ -68,7 +68,7 @@ def parse_draft(content: str) -> tuple[DraftConfig, str]:
 
 def format_draft(config: DraftConfig, body: str) -> str:
     """Format a draft config and body as .draft.gax content."""
-    headers: dict[str, Any] = {}
+    headers: dict[str, Any] = {"type": "gax/draft"}
 
     # Add headers in consistent order
     if config.draft_id:

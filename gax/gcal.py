@@ -419,6 +419,7 @@ def event_to_yaml(event: CalendarEvent) -> str:
     Returns YAML frontmatter only (no body).
     """
     data = {
+        "type": "gax/cal",
         "id": event.id,
         "calendar": event.calendar,
         "source": event.source,

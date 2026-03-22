@@ -297,14 +297,12 @@ def label_plan(file: str, output: str, allow_delete: bool):
 
 @label.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
-@click.option("-y", "--yes", is_flag=True, help="Auto-confirm")
-def label_apply(plan_file: str, yes: bool):
+def label_apply(plan_file: str):
     """Apply label changes from plan file.
 
     \b
     Example:
         gax label apply labels.plan.yaml
-        gax label apply labels.plan.yaml -y
     """
     try:
         creds = get_authenticated_credentials()
@@ -332,7 +330,7 @@ def label_apply(plan_file: str, yes: bool):
             click.echo("No changes in plan.")
             return
 
-        click.echo("Plan:")
+        click.echo("Applying:")
         if to_create:
             click.echo(f"  Create: {len(to_create)}")
         if to_rename:
@@ -341,11 +339,6 @@ def label_apply(plan_file: str, yes: bool):
             click.echo(f"  Update: {len(to_update)}")
         if to_delete:
             click.echo(f"  Delete: {len(to_delete)}")
-
-        if not yes:
-            if not click.confirm("Apply?"):
-                click.echo("Aborted.")
-                return
 
         # Execute changes
         # 1. Create (parents first for nesting)

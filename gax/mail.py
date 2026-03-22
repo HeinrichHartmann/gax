@@ -18,6 +18,8 @@ from .auth import get_authenticated_credentials
 from .store import store_blob
 from . import multipart
 from . import draft as draft_module
+from .label import label as label_group
+from .filter import filter_group
 
 
 @dataclass
@@ -69,6 +71,7 @@ class MailSection:
 def _mail_section_to_multipart(section: MailSection) -> multipart.Section:
     """Convert MailSection to generic multipart Section."""
     headers = {
+        "type": "gax/mail",
         "title": section.title,
         "source": section.source,
         "time": section.time,
@@ -317,35 +320,10 @@ def mail():
     pass
 
 
-@mail.command()
-def labels():
-    """List Gmail labels (TSV output)."""
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        result = service.users().labels().list(userId="me").execute()
-        labels_list = result.get("labels", [])
-
-        # Print header
-        click.echo("id\tname\ttype")
-
-        # Sort: system labels first, then user labels alphabetically
-        system_labels = [label for label in labels_list if label.get("type") == "system"]
-        user_labels = [label for label in labels_list if label.get("type") == "user"]
-
-        system_labels.sort(key=lambda label: label.get("name", ""))
-        user_labels.sort(key=lambda label: label.get("name", ""))
-
-        for label in system_labels + user_labels:
-            label_id = label.get("id", "")
-            name = label.get("name", "")
-            label_type = label.get("type", "")
-            click.echo(f"{label_id}\t{name}\t{label_type}")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+@click.group()
+def thread():
+    """Email thread operations"""
+    pass
 
 
 def _is_thread_id(value: str) -> bool:
@@ -365,7 +343,7 @@ def _is_thread_id(value: str) -> bool:
     return False
 
 
-@mail.command()
+@thread.command()
 @click.argument("query_or_id")
 @click.option(
     "--to",
@@ -387,13 +365,13 @@ def clone(query_or_id: str, folder: Optional[Path], output: Optional[Path], limi
 
     Single thread mode (ID or URL):
 
-        gax mail clone 19d0bed1cddbab6d
-        gax mail clone "https://mail.google.com/..."
+        gax mail thread clone 19d0bed1cddbab6d
+        gax mail thread clone "https://mail.google.com/..."
 
     Bulk mode (query with --to):
 
-        gax mail clone "label:Inbox" --to Inbox/
-        gax mail clone "from:alice" --to Alice/ --limit 50
+        gax mail thread clone "label:Inbox" --to Inbox/
+        gax mail thread clone "from:alice" --to Alice/ --limit 50
     """
     try:
         # Detect single thread vs search query
@@ -555,18 +533,18 @@ def _pull_single_file(file_path: Path) -> tuple[int, int]:
     return old_count, new_count
 
 
-@mail.command()
+@thread.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 def pull(path: Path):
     """Pull latest messages for .mail.gax file(s).
 
     Single file:
 
-        gax mail pull thread.mail.gax
+        gax mail thread pull thread.mail.gax
 
     Folder (updates all .mail.gax files):
 
-        gax mail pull Inbox/
+        gax mail thread pull Inbox/
     """
     try:
         if path.is_file():
@@ -714,26 +692,12 @@ def _get_thread_summary(thread_id: str, service) -> dict:
     }
 
 
-@mail.command()
-@click.argument("query")
-@click.option("--limit", default=100, help="Maximum results (default: 100)")
-def search(query: str, limit: int):
-    """Search Gmail and list matching threads (TSV output).
-
-    Uses Gmail query syntax: from:, to:, subject:, after:, before:, has:attachment, etc.
-
-    Output is TSV (tab-separated) for easy parsing:
-
-    \b
-        thread_id    date    from    subject
-
-    Pipe to pull: gax mail search "from:alice" | tail -n +2 | cut -f1 | xargs -I{} gax mail pull {}
-    """
+def _list_threads(query: str, limit: int):
+    """List threads matching query (TSV output)."""
     try:
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
 
-        # Search threads
         threads = []
         page_token = None
         total_estimate = 0
@@ -766,16 +730,13 @@ def search(query: str, limit: int):
             click.echo("No threads found.", err=True)
             sys.exit(1)
 
-        # Check if more available
         if total_estimate > limit:
             click.echo(
                 f"# Found ~{total_estimate} threads, showing first {limit}", err=True
             )
 
-        # Print header
         click.echo("thread_id\tdate\tfrom\tsubject")
 
-        # Get summary for each thread
         for thread_info in threads:
             thread_id = thread_info["id"]
             try:
@@ -796,7 +757,7 @@ def search(query: str, limit: int):
 # =============================================================================
 
 
-@mail.command()
+@thread.command()
 @click.argument("file_or_url")
 @click.option(
     "--output",
@@ -812,9 +773,9 @@ def reply(file_or_url: str, output: Optional[Path]):
 
     Examples:
 
-        gax mail reply Project_Update.mail.gax
-        gax mail reply "https://mail.google.com/mail/u/0/#inbox/abc123"
-        gax mail reply thread.mail.gax -o my_reply.draft.gax
+        gax mail thread reply Project_Update.mail.gax
+        gax mail thread reply "https://mail.google.com/mail/u/0/#inbox/abc123"
+        gax mail thread reply thread.mail.gax -o my_reply.draft.gax
     """
     try:
         # Determine if input is a file or URL
@@ -899,14 +860,29 @@ mail.add_command(draft_module.draft)
 
 
 # =============================================================================
-# Relabel commands (bulk label operations)
+# List commands (search and bulk label operations)
 # =============================================================================
 
 
-@click.group()
-def relabel():
-    """Bulk label operations (fetch/plan/apply)."""
-    pass
+@click.group(invoke_without_command=True)
+@click.argument("query", default="in:inbox")
+@click.option("--limit", default=20, help="Maximum results (default: 20)")
+@click.pass_context
+def list_group(ctx, query: str, limit: int):
+    """Search/list Gmail threads and bulk label operations.
+
+    Without subcommand, lists threads matching query (TSV output).
+    Default query is "in:inbox".
+
+    \b
+    Examples:
+        gax mail list                    # List inbox
+        gax mail list "from:alice"       # Search
+        gax mail list clone "in:inbox"   # Clone for bulk labeling
+    """
+    if ctx.invoked_subcommand is None:
+        # Default action: search/list threads
+        _list_threads(query, limit)
 
 
 # System label abbreviations (token-efficient)
@@ -1151,12 +1127,12 @@ def _parse_gax_content(path: Path) -> str:
     return content[header_end + 5:]  # Skip \n---\n
 
 
-@relabel.command("clone")
+@list_group.command("clone")
 @click.argument("query")
-@click.option("-o", "--output", "output_path", default=None, help="Output file (default: relabel.gax)")
+@click.option("-o", "--output", "output_path", default=None, help="Output file (default: list.gax)")
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
 def relabel_clone(query: str, output_path: str | None, limit: int):
-    """Clone threads from Gmail for relabeling.
+    """Clone threads from Gmail for bulk labeling.
 
     Creates a .gax file with current state. Use 'pull' to update,
     'plan' to compute changes, 'apply' to execute.
@@ -1169,9 +1145,9 @@ def relabel_clone(query: str, output_path: str | None, limit: int):
 
     \b
     Examples:
-        gax mail relabel clone "in:inbox"
-        gax mail relabel clone "in:inbox" -o inbox.gax
-        gax mail relabel clone "in:spam" -o spam.gax --limit 100
+        gax mail list clone "in:inbox"
+        gax mail list clone "in:inbox" -o inbox.gax
+        gax mail list clone "in:spam" -o spam.gax --limit 100
 
     \b
     Workflow:
@@ -1209,7 +1185,7 @@ def relabel_clone(query: str, output_path: str | None, limit: int):
         sys.exit(1)
 
 
-@relabel.command("pull")
+@list_group.command("pull")
 @click.argument("file", type=click.Path(exists=True))
 def relabel_pull(file: str):
     """Update a .gax file by re-fetching from Gmail.
@@ -1218,7 +1194,7 @@ def relabel_pull(file: str):
 
     \b
     Example:
-        gax mail relabel pull inbox.gax
+        gax mail list pull inbox.gax
     """
     path = Path(file)
 
@@ -1278,11 +1254,11 @@ def _parse_tsv_line(line: str) -> list[str]:
     return fields
 
 
-@relabel.command("plan")
+@list_group.command("plan")
 @click.argument("file", type=click.Path(exists=True))
-@click.option("-o", "--output", "output_path", default="relabel.plan.yaml", help="Output file")
+@click.option("-o", "--output", "output_path", default="list.plan.yaml", help="Output file")
 def relabel_plan(file: str, output_path: str):
-    """Generate plan from edited relabel file.
+    """Generate plan from edited list file.
 
     Compares desired state (sys/cat/labels) with current state in Gmail.
     Outputs add/remove operations needed to reach desired state.
@@ -1295,7 +1271,7 @@ def relabel_plan(file: str, output_path: str):
 
     Example:
 
-        gax mail relabel plan relabel.tsv
+        gax mail list plan inbox.gax
     """
     import yaml
 
@@ -1490,17 +1466,16 @@ def relabel_plan(file: str, output_path: str):
         sys.exit(1)
 
 
-@relabel.command("apply")
+@list_group.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-def relabel_apply(plan_file: str, yes: bool):
-    """Apply relabel plan.
+def relabel_apply(plan_file: str):
+    """Apply label changes from plan.
 
     Reads the plan file and applies sys/cat/label changes.
 
     Example:
 
-        gax mail relabel apply relabel.plan.yaml
+        gax mail list apply inbox.plan.yaml
     """
     import yaml
 
@@ -1561,11 +1536,6 @@ def relabel_apply(plan_file: str, yes: bool):
             click.echo(f"Labels to create: {', '.join(sorted(labels_to_create))}")
 
         click.echo()
-
-        if not yes:
-            if not click.confirm("Apply changes?"):
-                click.echo("Cancelled.")
-                return
 
         # Create missing user labels (with parent labels for nesting)
         for label_name in sorted(labels_to_create):
@@ -1657,5 +1627,8 @@ def relabel_apply(plan_file: str, yes: bool):
         sys.exit(1)
 
 
-# Register relabel subcommand group
-mail.add_command(relabel)
+# Register subcommand groups
+mail.add_command(thread)
+mail.add_command(list_group, name="list")
+mail.add_command(label_group, name="label")
+mail.add_command(filter_group, name="filter")

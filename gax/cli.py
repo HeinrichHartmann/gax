@@ -1,5 +1,6 @@
 """CLI interface for gax"""
 
+import glob
 import re
 import sys
 import click
@@ -7,15 +8,13 @@ from pathlib import Path
 
 from .gsheet import pull as gsheet_pull, push as gsheet_push, clone_all, pull_all
 from .gsheet.client import GSheetClient
-from .multipart import format_multipart
-from .frontmatter import SheetConfig, format_content
+from .multipart import format_multipart, parse_multipart
+from .frontmatter import SheetConfig, format_content, parse_content
 from .formats import get_format
 from . import auth
 from .gdoc import doc
 from .mail import mail
 from .gcal import cal_cli
-from .label import label
-from .filter import filter_group
 
 
 @click.group()
@@ -23,6 +22,242 @@ from .filter import filter_group
 def main():
     """gax - Google Access CLI"""
     pass
+
+
+def _detect_file_type(file_path: Path) -> str | None:
+    """Detect .gax file type from YAML header or extension.
+
+    Returns type string (e.g., 'gax/doc') or None if unknown.
+    """
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+    # Try to parse as multipart to get type from header
+    if content.startswith("---"):
+        sections = parse_multipart(content)
+        if sections:
+            file_type = sections[0].headers.get("type")
+            if file_type:
+                return file_type
+
+            # Infer from header fields
+            headers = sections[0].headers
+            if "thread_id" in headers:
+                return "gax/mail"
+            if "draft_id" in headers:
+                return "gax/draft"
+            if "spreadsheet_id" in headers or "tab" in headers:
+                return "gax/sheet"
+            if "document_id" in headers or "source" in headers:
+                # Check source URL pattern
+                source = headers.get("source", "")
+                if "docs.google.com/document" in source:
+                    return "gax/doc"
+                if "docs.google.com/spreadsheets" in source:
+                    return "gax/sheet"
+
+        # Try frontmatter-style for single-tab sheets
+        try:
+            config, _ = parse_content(content)
+            if config.spreadsheet_id:
+                return "gax/sheet-tab"
+        except Exception:
+            pass
+
+        # Check for relabel/label/filter files (YAML-only format)
+        for line in content.split("\n"):
+            if line.startswith("type:"):
+                file_type = line.split(":", 1)[1].strip()
+                return file_type
+            if line.startswith("query:"):
+                return "gax/relabel"
+
+    # Fallback to extension
+    name = file_path.name.lower()
+    if name.endswith(".doc.gax") or name.endswith(".tab.gax"):
+        return "gax/doc"
+    if name.endswith(".sheet.gax"):
+        return "gax/sheet"
+    if name.endswith(".mail.gax"):
+        return "gax/mail"
+    if name.endswith(".draft.gax"):
+        return "gax/draft"
+    if name.endswith(".cal.gax"):
+        return "gax/cal"
+
+    return None
+
+
+def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
+    """Pull a single .gax file. Returns (success, message)."""
+    file_type = _detect_file_type(file_path)
+
+    if not file_type:
+        return False, f"Unknown file type for {file_path}"
+
+    try:
+        if file_type == "gax/doc":
+            from .gdoc import pull_doc, extract_doc_id
+
+            content = file_path.read_text(encoding="utf-8")
+            sections = parse_multipart(content)
+            if not sections:
+                return False, "No sections found"
+            source_url = sections[0].headers.get("source", "")
+            if not source_url:
+                return False, "No source URL found"
+            document_id = extract_doc_id(source_url)
+            new_sections = pull_doc(document_id, source_url)
+            new_content = format_multipart(new_sections)
+            file_path.write_text(new_content, encoding="utf-8")
+            return True, f"{len(new_sections)} tabs"
+
+        elif file_type == "gax/sheet":
+            rows = pull_all(file_path)
+            return True, f"{rows} rows"
+
+        elif file_type == "gax/sheet-tab":
+            rows = gsheet_pull(file_path)
+            return True, f"{rows} rows"
+
+        elif file_type == "gax/mail":
+            from .mail import pull_thread, _mail_section_to_multipart
+
+            content = file_path.read_text(encoding="utf-8")
+            sections = parse_multipart(content)
+            if not sections:
+                return False, "No sections found"
+            thread_id = sections[0].headers.get("thread_id", "")
+            if not thread_id:
+                return False, "No thread_id found"
+            new_sections = pull_thread(thread_id)
+            new_content = format_multipart([_mail_section_to_multipart(s) for s in new_sections])
+            file_path.write_text(new_content, encoding="utf-8")
+            return True, f"{len(new_sections)} messages"
+
+        elif file_type == "gax/draft":
+            from .draft import parse_draft, get_draft, format_draft
+
+            content = file_path.read_text(encoding="utf-8")
+            config, _ = parse_draft(content)
+            if not config.draft_id:
+                return False, "No draft_id in file"
+            remote_config, remote_body = get_draft(config.draft_id)
+            new_content = format_draft(remote_config, remote_body)
+            file_path.write_text(new_content, encoding="utf-8")
+            return True, "updated"
+
+        elif file_type == "gax/relabel":
+            from .mail import _parse_gax_header, _relabel_fetch_threads, _write_gax_file
+            from .auth import get_authenticated_credentials
+            from googleapiclient.discovery import build
+
+            header = _parse_gax_header(file_path)
+            if not header["query"]:
+                return False, "No query found"
+            creds = get_authenticated_credentials()
+            service = build("gmail", "v1", credentials=creds)
+            labels_result = service.users().labels().list(userId="me").execute()
+            label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
+            thread_data = _relabel_fetch_threads(service, header["query"], header["limit"], label_id_to_name)
+            _write_gax_file(file_path, header["query"], header["limit"], thread_data)
+            return True, f"{len(thread_data)} threads"
+
+        elif file_type == "gax/cal":
+            from .gcal import yaml_to_event, api_event_to_dataclass, event_to_yaml
+            from .auth import get_authenticated_credentials
+            from googleapiclient.discovery import build
+
+            content = file_path.read_text(encoding="utf-8")
+            local_event = yaml_to_event(content)
+            if not local_event.id:
+                return False, "No event ID found"
+            creds = get_authenticated_credentials()
+            service = build("calendar", "v3", credentials=creds)
+            api_event = service.events().get(calendarId=local_event.calendar, eventId=local_event.id).execute()
+            updated_event = api_event_to_dataclass(api_event, local_event.calendar, "")
+            new_content = event_to_yaml(updated_event)
+            file_path.write_text(new_content, encoding="utf-8")
+            return True, "updated"
+
+        elif file_type == "gax/labels":
+            # Label files don't have a meaningful pull - they export current state
+            return False, "Use 'gax label pull' to export labels"
+
+        elif file_type == "gax/filters":
+            # Filter files don't have a meaningful pull - they export current state
+            return False, "Use 'gax filter pull' to export filters"
+
+        else:
+            return False, f"Unsupported type: {file_type}"
+
+    except Exception as e:
+        return False, str(e)
+
+
+@main.command("pull")
+@click.argument("files", nargs=-1, required=True)
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def unified_pull(files: tuple[str, ...], verbose: bool):
+    """Pull/update .gax file(s) from their sources.
+
+    Automatically detects file type from YAML header and calls
+    the appropriate pull command.
+
+    \b
+    Examples:
+        gax pull file.doc.gax           # Pull a single doc
+        gax pull *.gax                   # Pull all .gax files
+        gax pull inbox.gax notes.doc.gax # Pull multiple files
+    """
+    # Expand globs and '.'
+    all_files: list[Path] = []
+    for pattern in files:
+        if pattern == ".":
+            # Current directory - find all .gax files
+            all_files.extend(Path(".").glob("*.gax"))
+        elif "*" in pattern or "?" in pattern:
+            # Glob pattern
+            all_files.extend(Path(p) for p in glob.glob(pattern))
+        else:
+            all_files.append(Path(pattern))
+
+    if not all_files:
+        click.echo("No .gax files found.", err=True)
+        sys.exit(1)
+
+    success_count = 0
+    for file_path in all_files:
+        if not file_path.exists():
+            click.echo(f"Error: {file_path} not found", err=True)
+            continue
+
+        file_type = _detect_file_type(file_path)
+        type_str = f"({file_type})" if file_type else "(unknown)"
+
+        if verbose:
+            click.echo(f"Pulling {file_path} {type_str}...", nl=False)
+
+        success, message = _pull_file(file_path, verbose)
+
+        if verbose:
+            if success:
+                click.echo(f" {message}")
+            else:
+                click.echo(f" ERROR: {message}")
+        else:
+            if success:
+                click.echo(f"Pulling {file_path} {type_str}... {message}")
+            else:
+                click.echo(f"Error: {file_path}: {message}", err=True)
+
+        if success:
+            success_count += 1
+
+    if len(all_files) > 1:
+        click.echo(f"Done: {success_count}/{len(all_files)} files updated")
 
 
 def _collect_commands(cmd: click.Command, prefix: str = "") -> list[tuple[str, str, list]]:
@@ -336,12 +571,10 @@ def tab_push(file: Path, with_formulas: bool):
         sys.exit(1)
 
 
-# Register doc, mail, cal, label, and filter command groups
+# Register doc, mail, and cal command groups
 main.add_command(doc)
 main.add_command(mail)
 main.add_command(cal_cli, name="cal")
-main.add_command(label)
-main.add_command(filter_group, name="filter")
 
 
 if __name__ == "__main__":

@@ -440,8 +440,7 @@ def filter_plan(file: str, output: str, allow_delete: bool):
 
 @filter_group.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
-@click.option("-y", "--yes", is_flag=True, help="Auto-confirm")
-def filter_apply(plan_file: str, yes: bool):
+def filter_apply(plan_file: str):
     """Apply filter changes from plan file."""
     try:
         creds = get_authenticated_credentials()
@@ -463,18 +462,13 @@ def filter_apply(plan_file: str, yes: bool):
             click.echo("No changes in plan.")
             return
 
-        click.echo("Plan:")
+        click.echo("Applying:")
         if to_create:
             click.echo(f"  Create: {len(to_create)}")
         if to_update:
             click.echo(f"  Update: {len(to_update)}")
         if to_delete:
             click.echo(f"  Delete: {len(to_delete)}")
-
-        if not yes:
-            if not click.confirm("Apply?"):
-                click.echo("Aborted.")
-                return
 
         # Get label mappings
         labels_result = service.users().labels().list(userId="me").execute()
