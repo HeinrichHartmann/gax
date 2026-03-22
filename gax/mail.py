@@ -865,20 +865,19 @@ mail.add_command(draft_module.draft)
 
 
 @click.group(invoke_without_command=True)
-@click.argument("query", default="in:inbox")
+@click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
 @click.option("--limit", default=20, help="Maximum results (default: 20)")
 @click.pass_context
 def list_group(ctx, query: str, limit: int):
     """Search/list Gmail threads and bulk label operations.
 
     Without subcommand, lists threads matching query (TSV output).
-    Default query is "in:inbox".
 
     \b
     Examples:
-        gax mail list                    # List inbox
-        gax mail list "from:alice"       # Search
-        gax mail list clone "in:inbox"   # Clone for bulk labeling
+        gax mail list                      # List inbox
+        gax mail list -q "from:alice"      # Search
+        gax mail list clone "in:inbox"     # Clone for bulk labeling
     """
     if ctx.invoked_subcommand is None:
         # Default action: search/list threads
