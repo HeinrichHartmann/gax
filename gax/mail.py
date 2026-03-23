@@ -1496,7 +1496,22 @@ def relabel_plan(file: str, output_path: str):
                     cat_to_remove = current_cat_label
 
             labels_to_add = desired_labels - current_user_labels
-            labels_to_remove = current_user_labels - desired_labels
+            # Also add parent labels for nested labels (hub/i/x → hub/i, hub)
+            parents_to_add = set()
+            for lbl in labels_to_add:
+                parts = lbl.split("/")
+                for i in range(1, len(parts)):
+                    parent = "/".join(parts[:i])
+                    if parent not in current_user_labels:
+                        parents_to_add.add(parent)
+            labels_to_add |= parents_to_add
+            # Don't remove parents that are implied by desired labels
+            desired_labels_expanded = set(desired_labels)
+            for lbl in desired_labels:
+                parts = lbl.split("/")
+                for i in range(1, len(parts)):
+                    desired_labels_expanded.add("/".join(parts[:i]))
+            labels_to_remove = current_user_labels - desired_labels_expanded
 
             # Build change record
             change = {"id": thread_id}
