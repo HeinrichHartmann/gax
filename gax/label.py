@@ -116,26 +116,22 @@ def label_pull_to_file(path, include_all: bool = False) -> int:
 
         label_list.append(entry)
 
-    # Build output document
-    doc = {
+    # Build header
+    header = {
         "type": "gax/labels",
         "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "labels": label_list,
     }
 
-    # Write YAML
+    # Write YAML with frontmatter
     with open(Path(path), "w") as f:
         f.write("# Gmail Labels\n")
-        f.write(f"# Pulled: {doc['pulled']}\n")
-        f.write("#\n")
-        f.write("# Visibility options:\n")
-        f.write("#   visible: show | hide | unread\n")
-        f.write("#   show_in_list: show | hide\n")
-        f.write("#\n")
-        f.write("# To rename: add 'rename_from: OldName'\n")
-        f.write("# To delete: remove label from list and use --delete flag\n")
-        f.write("#\n")
-        yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        f.write("# Visibility: visible (show|hide|unread), show_in_list (show|hide)\n")
+        f.write("# Rename: add 'rename_from: OldName'\n")
+        f.write("# Delete: remove from list, use --delete flag\n")
+        f.write("---\n")
+        yaml.dump(header, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        f.write("---\n")
+        yaml.dump(label_list, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     return len(label_list)
 
@@ -163,6 +159,29 @@ def label_pull(output: str, include_all: bool):
         sys.exit(1)
 
 
+def _parse_labels_file(path: str) -> list:
+    """Parse labels file (supports both old and frontmatter format)."""
+    with open(path) as f:
+        content = f.read()
+
+    # Skip comment lines at start
+    lines = content.split("\n")
+    while lines and lines[0].startswith("#"):
+        lines = lines[1:]
+    content = "\n".join(lines)
+
+    # Check for frontmatter format
+    if content.startswith("---\n"):
+        parts = content.split("---\n", 2)
+        if len(parts) >= 3:
+            # parts[0] is empty, parts[1] is header, parts[2] is content
+            return yaml.safe_load(parts[2]) or []
+
+    # Old format: single YAML doc with labels key
+    doc = yaml.safe_load(content)
+    return doc.get("labels", []) if doc else []
+
+
 @label.command("plan")
 @click.argument("file", type=click.Path(exists=True))
 @click.option("-o", "--output", default="labels.plan.yaml", help="Output plan file")
@@ -186,10 +205,7 @@ def label_plan(file: str, output: str, allow_delete: bool):
         service = build("gmail", "v1", credentials=creds)
 
         # Load desired state from file
-        with open(file) as f:
-            doc = yaml.safe_load(f)
-
-        desired_labels = doc.get("labels", [])
+        desired_labels = _parse_labels_file(file)
 
         # Get current state from Gmail
         result = service.users().labels().list(userId="me").execute()

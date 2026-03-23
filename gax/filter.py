@@ -294,14 +294,16 @@ def filter_pull_to_file(path) -> int:
         }
         filters.append(entry)
 
-    doc = {
+    header = {
         "type": "gax/filters",
         "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "filters": filters,
     }
 
     with open(Path(path), "w") as f:
-        yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        f.write("---\n")
+        yaml.dump(header, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        f.write("---\n")
+        yaml.dump(filters, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     return len(filters)
 
@@ -318,6 +320,29 @@ def filter_pull(output: str):
         sys.exit(1)
 
 
+def _parse_filters_file(path: str) -> list:
+    """Parse filters file (supports both old and frontmatter format)."""
+    with open(path) as f:
+        content = f.read()
+
+    # Skip comment lines at start
+    lines = content.split("\n")
+    while lines and lines[0].startswith("#"):
+        lines = lines[1:]
+    content = "\n".join(lines)
+
+    # Check for frontmatter format
+    if content.startswith("---\n"):
+        parts = content.split("---\n", 2)
+        if len(parts) >= 3:
+            # parts[0] is empty, parts[1] is header, parts[2] is content
+            return yaml.safe_load(parts[2]) or []
+
+    # Old format: single YAML doc with filters key
+    doc = yaml.safe_load(content)
+    return doc.get("filters", []) if doc else []
+
+
 @filter_group.command("plan")
 @click.argument("file", type=click.Path(exists=True))
 @click.option("-o", "--output", default="filters.plan.yaml", help="Output plan file")
@@ -329,10 +354,7 @@ def filter_plan(file: str, output: str, allow_delete: bool):
         service = build("gmail", "v1", credentials=creds)
 
         # Load desired state
-        with open(file) as f:
-            doc = yaml.safe_load(f)
-
-        desired_filters = doc.get("filters", [])
+        desired_filters = _parse_filters_file(file)
 
         # Get current state
         result = service.users().settings().filters().list(userId="me").execute()
