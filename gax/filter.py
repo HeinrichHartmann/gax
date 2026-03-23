@@ -21,7 +21,12 @@ from googleapiclient.discovery import build
 
 @click.group("filter")
 def filter_group():
-    """Gmail filter management (declarative)."""
+    """Gmail filter management (declarative).
+
+    Note: Gmail applies ALL matching filters simultaneously, not sequentially.
+    Filter order has no significance - there is no "stop processing" feature.
+    Conflicting actions from multiple filters may neutralize each other.
+    """
     pass
 
 
