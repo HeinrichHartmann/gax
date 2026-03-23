@@ -316,6 +316,18 @@ def _event_sort_key(event: dict) -> str:
     return start.get("dateTime", start.get("date", ""))
 
 
+def _get_rsvp_status(event: dict) -> str:
+    """Get RSVP status for current user.
+
+    Returns: accepted, declined, tentative, needsAction, or empty string.
+    """
+    attendees = event.get("attendees", [])
+    for attendee in attendees:
+        if attendee.get("self"):
+            return attendee.get("responseStatus", "")
+    return ""
+
+
 def _format_event_line(event: dict, include_desc: bool = False) -> str:
     """Format a single event as compact line."""
     start = event.get("start", {})
@@ -332,13 +344,21 @@ def _format_event_line(event: dict, include_desc: bool = False) -> str:
     else:
         time_range = "all-day    "  # Pad to align
 
+    # RSVP prefix (only for non-accepted states)
+    rsvp = _get_rsvp_status(event)
+    rsvp_prefix = ""
+    if rsvp == "declined":
+        rsvp_prefix = "[X] "
+    elif rsvp == "tentative":
+        rsvp_prefix = "[?] "
+    elif rsvp == "needsAction":
+        rsvp_prefix = "[!] "
+
     title = event.get("summary", "(No title)")
 
-    # Status indicator
+    # Status indicator (event status, not RSVP)
     status = event.get("status", "confirmed")
-    if status == "tentative":
-        title = f"{title} [?]"
-    elif status == "cancelled":
+    if status == "cancelled":
         title = f"~~{title}~~"
 
     # Calendar name (short form)
@@ -349,8 +369,8 @@ def _format_event_line(event: dict, include_desc: bool = False) -> str:
     location = event.get("location", "")
     loc_short = location[:30] + "..." if len(location) > 33 else location
 
-    # Build line: time  title  [location]  @calendar
-    parts = [f"{time_range}  {title}"]
+    # Build line: [rsvp] time  title  [location]  @calendar
+    parts = [f"{rsvp_prefix}{time_range}  {title}"]
     if loc_short:
         parts.append(f"  ({loc_short})")
     if cal_short:
@@ -381,7 +401,7 @@ def format_events_tsv(events: list[dict], include_desc: bool = False) -> str:
     Returns:
         TSV string with header row.
     """
-    header = "calendar\tdate\tstart\tend\ttitle\tid\tstatus\tlocation"
+    header = "calendar\tdate\tstart\tend\trsvp\ttitle\tid\tstatus\tlocation"
     if include_desc:
         header += "\tdescription"
     lines = [header]
@@ -403,13 +423,14 @@ def format_events_tsv(events: list[dict], include_desc: bool = False) -> str:
             start_time = ""
             end_time = ""
 
+        rsvp = _get_rsvp_status(event)
         title = event.get("summary", "").replace("\t", " ")
         event_id = event.get("id", "")
         status = event.get("status", "confirmed")
         location = event.get("location", "").replace("\t", " ")
 
         row = (
-            f"{cal_name}\t{date_str}\t{start_time}\t{end_time}\t"
+            f"{cal_name}\t{date_str}\t{start_time}\t{end_time}\t{rsvp}\t"
             f"{title}\t{event_id}\t{status}\t{location}"
         )
         if include_desc:
