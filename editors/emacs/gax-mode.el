@@ -119,7 +119,12 @@ Returns the MIME type string or nil if not found."
           (setq-local csv-separators '("\t")))
         ;; Enable alignment
         (when (fboundp 'csv-align-mode)
-          (csv-align-mode 1))))))
+          (csv-align-mode 1)))
+      ;; Disable visual-fill-column-mode for tabular data
+      (when (bound-and-true-p visual-fill-column-mode)
+        (visual-fill-column-mode -1))
+      ;; Truncate long lines (no wrapping)
+      (setq-local truncate-lines t))))
 
 (add-hook 'gax-mode-hook #'gax--setup-body-mode)
 
