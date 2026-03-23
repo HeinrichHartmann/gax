@@ -344,166 +344,61 @@ def _is_thread_id(value: str) -> bool:
 
 
 @thread.command()
-@click.argument("query_or_id")
-@click.option(
-    "--to",
-    "folder",
-    type=click.Path(path_type=Path),
-    help="Clone to folder (bulk mode)",
-)
+@click.argument("thread_id_or_url")
 @click.option(
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (single thread mode)",
+    help="Output file",
 )
-@click.option(
-    "--limit", default=100, help="Maximum threads to clone in bulk mode (default: 100)"
-)
-def clone(query_or_id: str, folder: Optional[Path], output: Optional[Path], limit: int):
-    """Clone email thread(s) to local .mail.gax file(s).
+def clone(thread_id_or_url: str, output: Optional[Path]):
+    """Clone a single email thread to a local .mail.gax file.
 
-    Single thread mode (ID or URL):
-
+    \b
+    Examples:
         gax mail thread clone 19d0bed1cddbab6d
         gax mail thread clone "https://mail.google.com/..."
+        gax mail thread clone 19d0bed1cddbab6d -o thread.mail.gax
 
-    Bulk mode (query with --to):
-
-        gax mail thread clone "label:Inbox" --to Inbox/
-        gax mail thread clone "from:alice" --to Alice/ --limit 50
+    For bulk cloning, use: gax mail list checkout FOLDER -q QUERY
     """
     try:
-        # Detect single thread vs search query
-        if _is_thread_id(query_or_id) and not folder:
-            # Single thread mode
-            thread_id = extract_thread_id(query_or_id)
+        if not _is_thread_id(thread_id_or_url):
+            click.echo(
+                f"Error: '{thread_id_or_url}' is not a valid thread ID or URL",
+                err=True,
+            )
+            click.echo("For bulk cloning, use: gax mail list checkout FOLDER -q QUERY", err=True)
+            sys.exit(1)
 
-            click.echo(f"Fetching thread: {thread_id}")
-            sections = pull_thread(thread_id)
-            content = format_multipart(sections)
+        thread_id = extract_thread_id(thread_id_or_url)
 
-            if output:
-                file_path = output
-            else:
-                # Generate filename from subject
-                safe_subject = re.sub(r'[<>:"/\\|?*]', "-", sections[0].title)
-                safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-                file_path = Path(f"{safe_subject}_{thread_id}.mail.gax")
+        click.echo(f"Fetching thread: {thread_id}")
+        sections = pull_thread(thread_id)
+        content = format_multipart(sections)
 
-            if file_path.exists():
-                click.echo(f"Error: File already exists: {file_path}", err=True)
-                click.echo('Use "gax mail pull" to update an existing file.', err=True)
-                sys.exit(1)
-
-            file_path.write_text(content, encoding="utf-8")
-            click.echo(f"Created: {file_path}")
-            click.echo(f"Subject: {sections[0].title}")
-            click.echo(f"Messages: {len(sections)}")
-
-            # Report attachments
-            total_attachments = sum(len(s.attachments) for s in sections)
-            if total_attachments:
-                click.echo(f"Attachments: {total_attachments}")
-
+        if output:
+            file_path = output
         else:
-            # Bulk mode: search query -> folder
-            if not folder:
-                click.echo(
-                    "Error: Use --to <folder> for bulk cloning with a search query",
-                    err=True,
-                )
-                click.echo(
-                    "Or provide a thread ID/URL for single thread mode.", err=True
-                )
-                sys.exit(1)
+            # Generate filename from subject
+            safe_subject = re.sub(r'[<>:"/\\|?*]', "-", sections[0].title)
+            safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
+            file_path = Path(f"{safe_subject}_{thread_id}.mail.gax")
 
-            creds = get_authenticated_credentials()
-            service = build("gmail", "v1", credentials=creds)
+        if file_path.exists():
+            click.echo(f"Error: File already exists: {file_path}", err=True)
+            click.echo('Use "gax mail pull" to update an existing file.', err=True)
+            sys.exit(1)
 
-            # Search threads
-            click.echo(f"Searching: {query_or_id}")
-            threads = []
-            page_token = None
+        file_path.write_text(content, encoding="utf-8")
+        click.echo(f"Created: {file_path}")
+        click.echo(f"Subject: {sections[0].title}")
+        click.echo(f"Messages: {len(sections)}")
 
-            while len(threads) < limit:
-                batch_size = min(100, limit - len(threads))
-                result = (
-                    service.users()
-                    .threads()
-                    .list(
-                        userId="me",
-                        q=query_or_id,
-                        maxResults=batch_size,
-                        pageToken=page_token,
-                    )
-                    .execute()
-                )
-
-                batch = result.get("threads", [])
-                threads.extend(batch)
-
-                page_token = result.get("nextPageToken")
-                if not page_token or not batch:
-                    break
-
-            threads = threads[:limit]
-
-            if not threads:
-                click.echo("No threads found.")
-                return
-
-            # Check if more available
-            total_estimate = result.get("resultSizeEstimate", 0)
-            if total_estimate > limit:
-                click.echo(
-                    f"Warning: Found ~{total_estimate} threads, cloning first {limit}. Use --limit to clone more.",
-                    err=True,
-                )
-
-            click.echo(f"Found {len(threads)} threads")
-
-            # Create folder
-            folder.mkdir(parents=True, exist_ok=True)
-
-            # Get already cloned thread IDs
-            existing_ids = _get_existing_thread_ids(folder)
-
-            # Clone each thread
-            cloned = 0
-            skipped = 0
-
-            for thread_info in threads:
-                thread_id = thread_info["id"]
-
-                if thread_id in existing_ids:
-                    skipped += 1
-                    continue
-
-                try:
-                    sections = pull_thread(thread_id)
-                    content = format_multipart(sections)
-
-                    # Get first message info for filename
-                    first = sections[0]
-                    filename = _make_filename(
-                        first.date, first.from_addr, first.title, thread_id
-                    )
-                    file_path = folder / filename
-
-                    # Avoid overwriting (add thread_id suffix if collision)
-                    if file_path.exists():
-                        base = file_path.stem
-                        file_path = folder / f"{base}_{thread_id}.mail.gax"
-
-                    file_path.write_text(content, encoding="utf-8")
-                    cloned += 1
-                    click.echo(f"  {filename}")
-
-                except Exception as e:
-                    click.echo(f"  Error cloning {thread_id}: {e}", err=True)
-
-            click.echo(f"Cloned: {cloned}, Skipped: {skipped} (already present)")
+        # Report attachments
+        total_attachments = sum(len(s.attachments) for s in sections)
+        if total_attachments:
+            click.echo(f"Attachments: {total_attachments}")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
