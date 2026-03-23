@@ -348,7 +348,7 @@ def _format_event_line(event: dict, include_desc: bool = False) -> str:
     rsvp = _get_rsvp_status(event)
     rsvp_prefix = ""
     if rsvp == "declined":
-        rsvp_prefix = "[X] "
+        rsvp_prefix = "DECLINED "
     elif rsvp == "tentative":
         rsvp_prefix = "[?] "
     elif rsvp == "needsAction":
