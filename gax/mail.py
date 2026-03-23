@@ -1489,7 +1489,7 @@ def relabel_plan(file: str, output_path: str):
 
             cat_to_add = None
             cat_to_remove = None
-            if desired_cat_label != current_cat_label:
+            if desired_cat_label not in current_cat_labels:
                 if desired_cat_label:
                     cat_to_add = desired_cat_label
                 if current_cat_label:
