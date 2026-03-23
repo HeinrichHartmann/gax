@@ -74,6 +74,72 @@ def label_list():
         sys.exit(1)
 
 
+def label_pull_to_file(path, include_all: bool = False) -> int:
+    """Pull labels and write to file. Returns label count."""
+    creds = get_authenticated_credentials()
+    service = build("gmail", "v1", credentials=creds)
+
+    result = service.users().labels().list(userId="me").execute()
+    labels = result.get("labels", [])
+
+    # Build label list
+    label_list = []
+    for lbl in sorted(labels, key=lambda x: x["name"]):
+        label_type = lbl.get("type", "user")
+
+        # Skip system labels unless include_all
+        if label_type == "system" and not include_all:
+            continue
+
+        entry = {"name": lbl["name"]}
+
+        # Add visibility settings if not default
+        llv = lbl.get("labelListVisibility")
+        if llv and llv != "labelShow":
+            entry["visible"] = LABEL_LIST_VISIBILITY_REV.get(llv, llv)
+
+        mlv = lbl.get("messageListVisibility")
+        if mlv and mlv != "show":
+            entry["show_in_list"] = mlv
+
+        # Add color if present
+        color = lbl.get("color")
+        if color:
+            entry["color"] = {
+                "text": color.get("textColor", "#000000"),
+                "bg": color.get("backgroundColor", "#ffffff"),
+            }
+
+        # Mark system labels as read-only
+        if label_type == "system":
+            entry["system"] = True
+
+        label_list.append(entry)
+
+    # Build output document
+    doc = {
+        "type": "gax/labels",
+        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "labels": label_list,
+    }
+
+    # Write YAML
+    with open(Path(path), "w") as f:
+        f.write("# Gmail Labels\n")
+        f.write(f"# Pulled: {doc['pulled']}\n")
+        f.write("#\n")
+        f.write("# Visibility options:\n")
+        f.write("#   visible: show | hide | unread\n")
+        f.write("#   show_in_list: show | hide\n")
+        f.write("#\n")
+        f.write("# To rename: add 'rename_from: OldName'\n")
+        f.write("# To delete: remove label from list and use --delete flag\n")
+        f.write("#\n")
+        yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    return len(label_list)
+
+
 @label.command("pull")
 @click.option("-o", "--output", default="labels.yaml", help="Output file")
 @click.option("--all", "include_all", is_flag=True, help="Include system labels (read-only)")
@@ -90,70 +156,8 @@ def label_pull(output: str, include_all: bool):
         gax label pull --all  # include system labels
     """
     try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        result = service.users().labels().list(userId="me").execute()
-        labels = result.get("labels", [])
-
-        # Build label list
-        label_list = []
-        for lbl in sorted(labels, key=lambda x: x["name"]):
-            label_type = lbl.get("type", "user")
-
-            # Skip system labels unless --all
-            if label_type == "system" and not include_all:
-                continue
-
-            entry = {"name": lbl["name"]}
-
-            # Add visibility settings if not default
-            llv = lbl.get("labelListVisibility")
-            if llv and llv != "labelShow":
-                entry["visible"] = LABEL_LIST_VISIBILITY_REV.get(llv, llv)
-
-            mlv = lbl.get("messageListVisibility")
-            if mlv and mlv != "show":
-                entry["show_in_list"] = mlv
-
-            # Add color if present
-            color = lbl.get("color")
-            if color:
-                entry["color"] = {
-                    "text": color.get("textColor", "#000000"),
-                    "bg": color.get("backgroundColor", "#ffffff"),
-                }
-
-            # Mark system labels as read-only
-            if label_type == "system":
-                entry["system"] = True
-
-            label_list.append(entry)
-
-        # Build output document
-        doc = {
-            "type": "gax/labels",
-            "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "labels": label_list,
-        }
-
-        # Write YAML
-        path = Path(output)
-        with open(path, "w") as f:
-            f.write("# Gmail Labels\n")
-            f.write(f"# Pulled: {doc['pulled']}\n")
-            f.write("#\n")
-            f.write("# Visibility options:\n")
-            f.write("#   visible: show | hide | unread\n")
-            f.write("#   show_in_list: show | hide\n")
-            f.write("#\n")
-            f.write("# To rename: add 'rename_from: OldName'\n")
-            f.write("# To delete: remove label from list and use --delete flag\n")
-            f.write("#\n")
-            yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-        click.echo(f"Wrote {len(label_list)} labels to {output}")
-
+        count = label_pull_to_file(output, include_all)
+        click.echo(f"Wrote {count} labels to {output}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

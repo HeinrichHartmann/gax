@@ -108,6 +108,16 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
         return False, f"Unknown file type for {file_path}"
 
     try:
+        # Handle labels and filters first (YAML-only, not multipart)
+        if file_type == "gax/labels":
+            from .label import label_pull_to_file
+            count = label_pull_to_file(file_path)
+            return True, f"{count} labels"
+
+        if file_type == "gax/filters":
+            from .filter import filter_pull_to_file
+            count = filter_pull_to_file(file_path)
+            return True, f"{count} filters"
         if file_type == "gax/doc":
             from .gdoc import pull_doc, extract_doc_id
 
@@ -191,14 +201,6 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             new_content = event_to_yaml(updated_event)
             file_path.write_text(new_content, encoding="utf-8")
             return True, "updated"
-
-        elif file_type == "gax/labels":
-            # Label files don't have a meaningful pull - they export current state
-            return False, "Use 'gax label pull' to export labels"
-
-        elif file_type == "gax/filters":
-            # Filter files don't have a meaningful pull - they export current state
-            return False, "Use 'gax filter pull' to export filters"
 
         else:
             return False, f"Unsupported type: {file_type}"

@@ -267,46 +267,52 @@ def filter_list():
         sys.exit(1)
 
 
+def filter_pull_to_file(path) -> int:
+    """Pull filters and write to file. Returns filter count."""
+    from pathlib import Path
+    creds = get_authenticated_credentials()
+    service = build("gmail", "v1", credentials=creds)
+
+    # Get label mappings
+    labels_result = service.users().labels().list(userId="me").execute()
+    label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
+
+    # Get filters
+    result = service.users().settings().filters().list(userId="me").execute()
+    api_filters = result.get("filter", [])
+
+    # Convert to YAML format
+    filters = []
+    for f in api_filters:
+        criteria = _api_to_yaml_criteria(f.get("criteria", {}))
+        action = _api_to_yaml_action(f.get("action", {}), label_id_to_name)
+
+        entry = {
+            "name": _generate_filter_name(criteria),
+            "criteria": criteria,
+            "action": action,
+        }
+        filters.append(entry)
+
+    doc = {
+        "type": "gax/filters",
+        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "filters": filters,
+    }
+
+    with open(Path(path), "w") as f:
+        yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    return len(filters)
+
+
 @filter_group.command("pull")
 @click.option("-o", "--output", default="filters.yaml", help="Output file")
 def filter_pull(output: str):
     """Export filters to YAML file."""
     try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        # Get label mappings
-        labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
-
-        # Get filters
-        result = service.users().settings().filters().list(userId="me").execute()
-        api_filters = result.get("filter", [])
-
-        # Convert to YAML format
-        filters = []
-        for f in api_filters:
-            criteria = _api_to_yaml_criteria(f.get("criteria", {}))
-            action = _api_to_yaml_action(f.get("action", {}), label_id_to_name)
-
-            entry = {
-                "name": _generate_filter_name(criteria),
-                "criteria": criteria,
-                "action": action,
-            }
-            filters.append(entry)
-
-        doc = {
-            "type": "gax/filters",
-            "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "filters": filters,
-        }
-
-        with open(output, "w") as f:
-            yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-        click.echo(f"Wrote {len(filters)} filters to {output}")
-
+        count = filter_pull_to_file(output)
+        click.echo(f"Wrote {count} filters to {output}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
