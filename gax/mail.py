@@ -1067,7 +1067,7 @@ def _write_gax_file(path: Path, query: str, limit: int, thread_data: list[dict])
     with open(path, "w") as f:
         # YAML header
         f.write("---\n")
-        f.write("type: gax/relabel\n")
+        f.write("type: gax/list\n")
         f.write(f"pulled: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
         f.write(f"query: {query}\n")
         f.write(f"limit: {limit}\n")
@@ -1127,46 +1127,63 @@ def _parse_gax_content(path: Path) -> str:
 
 
 @list_group.command("checkout")
-@click.argument("file", type=click.Path(exists=True))
-@click.option("--to", "folder", required=True, type=click.Path(path_type=Path), help="Output folder")
-def list_checkout(file: str, folder: Path):
-    """Checkout full threads from a list file into a folder.
+@click.argument("query")
+@click.option("-o", "--output", "folder", required=True, type=click.Path(path_type=Path), help="Output folder")
+@click.option("--limit", default=50, help="Maximum threads (default: 50)")
+def list_checkout(query: str, folder: Path, limit: int):
+    """Checkout full threads matching query into a folder.
 
-    Reads thread IDs from a list file and clones each thread
-    as a full .mail.gax file. Incremental: skips existing threads.
+    Searches Gmail and clones each matching thread as a full .mail.gax file.
+    Incremental: skips existing threads.
 
     \b
     Examples:
-        gax mail list checkout inbox.gax --to Inbox/
-        gax mail list checkout signals.gax --to Signals/
+        gax mail list checkout "in:inbox" -o Inbox/
+        gax mail list checkout "from:alice" -o Alice/ --limit 100
 
     \b
     Workflow:
-        1. clone   -> create list file with thread summaries
-        2. checkout -> materialize full threads to folder
-        3. grep/search folder contents as needed
+        1. checkout -> materialize full threads to folder
+        2. grep/search folder contents as needed
     """
     try:
-        # Parse thread IDs from list file
-        tsv_content = _parse_gax_content(Path(file))
-        lines = tsv_content.strip().split("\n")
+        creds = get_authenticated_credentials()
+        service = build("gmail", "v1", credentials=creds)
 
-        # Skip header line
-        if lines and lines[0].startswith("id\t"):
-            lines = lines[1:]
+        # Search threads
+        click.echo(f"Searching: {query}")
+        threads = []
+        page_token = None
 
-        thread_ids = []
-        for line in lines:
-            if line.strip() and not line.startswith("#"):
-                fields = line.split("\t")
-                if fields:
-                    thread_ids.append(fields[0].strip())
+        while len(threads) < limit:
+            batch_size = min(100, limit - len(threads))
+            result = (
+                service.users()
+                .threads()
+                .list(
+                    userId="me",
+                    q=query,
+                    maxResults=batch_size,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
 
-        if not thread_ids:
-            click.echo("No threads found in list file.", err=True)
+            batch = result.get("threads", [])
+            threads.extend(batch)
+
+            page_token = result.get("nextPageToken")
+            if not page_token or not batch:
+                break
+
+        threads = threads[:limit]
+
+        if not threads:
+            click.echo("No threads found.", err=True)
             sys.exit(1)
 
-        click.echo(f"Found {len(thread_ids)} threads in {file}")
+        thread_ids = [t["id"] for t in threads]
+        click.echo(f"Found {len(thread_ids)} threads")
 
         # Create folder
         folder.mkdir(parents=True, exist_ok=True)

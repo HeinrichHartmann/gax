@@ -27,6 +27,10 @@ def main():
 def _detect_file_type(file_path: Path) -> str | None:
     """Detect .gax file type from YAML header or extension.
 
+    Supports:
+    - Multipart format (---/---/---) with type in first section header
+    - Simple YAML with type field (e.g., .gax.yaml files)
+
     Returns type string (e.g., 'gax/doc') or None if unknown.
     """
     try:
@@ -72,7 +76,13 @@ def _detect_file_type(file_path: Path) -> str | None:
                 file_type = line.split(":", 1)[1].strip()
                 return file_type
             if line.startswith("query:"):
-                return "gax/relabel"
+                return "gax/list"
+    else:
+        # For simple YAML without leading ---, still check for type field
+        for line in content.split("\n")[:20]:  # Check first 20 lines
+            if line.startswith("type:"):
+                file_type = line.split(":", 1)[1].strip()
+                return file_type
 
     # Fallback to extension
     name = file_path.name.lower()
@@ -149,7 +159,7 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             file_path.write_text(new_content, encoding="utf-8")
             return True, "updated"
 
-        elif file_type == "gax/relabel":
+        elif file_type == "gax/list":
             from .mail import _parse_gax_header, _relabel_fetch_threads, _write_gax_file
             from .auth import get_authenticated_credentials
             from googleapiclient.discovery import build

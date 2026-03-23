@@ -8,7 +8,7 @@ Sync Google Workspace (Sheets, Docs, Gmail, Calendar) to local files that are hu
 - **Plain text body** (CSV, Markdown, TSV) for easy editing and diffing
 - **Clone/Pull pattern** like git - clone once, pull to update
 - **Plan/Apply pattern** for bulk operations - preview changes before applying
-- **Bi-directional** for Sheets (push), declarative for Labels/Relabel
+- **Bi-directional** for Sheets (push), declarative for Labels/List
 
 ## Install
 
@@ -60,15 +60,18 @@ gax doc clone URL --with-comments
 Archive and manage Gmail.
 
 ```bash
-# Search threads
-gax mail search "from:alice after:2025/01/01"
+# List threads (TSV output)
+gax mail list -q "from:alice after:2025/01/01"
 
 # Clone thread(s)
-gax mail clone THREAD_ID
-gax mail clone "label:Inbox" --to Inbox/
+gax mail thread clone THREAD_ID
+gax mail thread clone "label:Inbox" --to Inbox/
 
 # Pull updates
-gax mail pull thread.mail.gax
+gax mail thread pull thread.mail.gax
+
+# Checkout threads to folder
+gax mail list checkout "in:inbox" -o Inbox/
 ```
 
 ### Mail Drafts
@@ -85,13 +88,13 @@ gax mail draft pull draft.gax
 gax mail draft send draft.gax
 ```
 
-### Mail Relabel (Bulk Label Operations)
+### Mail List (Bulk Label Operations)
 
 Declarative bulk labeling with IaC-style workflow.
 
 ```bash
 # Clone threads for relabeling
-gax mail relabel clone "in:inbox" -o inbox.gax --limit 50
+gax mail list clone "in:inbox" -o inbox.gax --limit 50
 
 # Edit the .gax file:
 #   sys column: I=Inbox S=Spam T=Trash U=Unread *=Starred !=Important
@@ -99,17 +102,17 @@ gax mail relabel clone "in:inbox" -o inbox.gax --limit 50
 #   labels column: user labels (comma-separated)
 
 # Generate plan and apply
-gax mail relabel plan inbox.gax
-gax mail relabel apply relabel.plan.yaml -y
+gax mail list plan inbox.gax
+gax mail list apply list.plan.yaml
 
 # Update existing file
-gax mail relabel pull inbox.gax
+gax mail list pull inbox.gax
 ```
 
 **Example .gax file:**
 ```
 ---
-type: gax/relabel
+type: gax/list
 query: in:inbox
 limit: 50
 ---
@@ -124,15 +127,15 @@ Manage Gmail labels declaratively.
 
 ```bash
 # Export labels to YAML
-gax label pull -o labels.yaml
+gax mail label pull -o labels.yaml
 
 # Edit: add/rename/delete labels, change visibility
 # Then generate plan and apply
-gax label plan labels.yaml
-gax label apply labels.plan.yaml -y
+gax mail label plan labels.yaml
+gax mail label apply labels.plan.yaml
 
 # List labels (TSV)
-gax label list
+gax mail label list
 ```
 
 **Visibility settings:**
@@ -176,7 +179,7 @@ gax cal list
 | `.mail.gax` | Email thread (Markdown) |
 | `.draft.gax` | Email draft (Markdown) |
 | `.cal.gax` | Calendar events (YAML) |
-| `.gax` | Relabel state (TSV with YAML header) |
+| `.gax` | List state (TSV with YAML header) |
 
 ### Multipart Format
 
