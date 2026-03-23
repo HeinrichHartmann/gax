@@ -81,14 +81,14 @@ def list_calendars(*, service=None) -> list[dict]:
 def list_events(
     *,
     days: int = 7,
-    calendar_id: str | None = None,
+    calendar_ids: list[str] | None = None,
     service=None,
 ) -> list[dict]:
     """List upcoming events.
 
     Args:
         days: Number of days to look ahead
-        calendar_id: Optional calendar ID to filter (None = all calendars)
+        calendar_ids: Optional list of calendar IDs to filter (None = all calendars)
         service: Optional Calendar API service
 
     Returns:
@@ -101,10 +101,13 @@ def list_events(
     time_max = now + timedelta(days=days)
 
     # Get calendars to query
-    if calendar_id:
-        calendars = [{"id": calendar_id, "name": calendar_id}]
+    all_calendars = list_calendars(service=service)
+    cal_id_to_name = {c["id"]: c["name"] for c in all_calendars}
+
+    if calendar_ids:
+        calendars = [{"id": cid, "name": cal_id_to_name.get(cid, cid)} for cid in calendar_ids]
     else:
-        calendars = list_calendars(service=service)
+        calendars = all_calendars
 
     all_events = []
 
@@ -616,21 +619,52 @@ def calendars_cmd():
         click.echo(f"  {cal['id']}")
 
 
-def _resolve_calendar_id(calendar: str | None) -> str | None:
-    """Resolve calendar name to ID."""
+def _resolve_calendar_ids(calendar: str | None) -> list[str] | None:
+    """Resolve calendar selector to list of IDs.
+
+    Supports:
+        - Single name or ID: "Moss"
+        - Comma-separated: "Moss,Work"
+        - Numeric indices (1-based): "1,2,3"
+        - Mixed: "1,Moss,3"
+    """
     if not calendar:
         return None
+
     calendars = list_calendars()
-    for cal in calendars:
-        if cal["name"] == calendar or cal["id"] == calendar:
-            return cal["id"]
-    click.echo(f"Calendar not found: {calendar}", err=True)
-    raise SystemExit(1)
+    result = []
+
+    for part in calendar.split(","):
+        part = part.strip()
+        if not part:
+            continue
+
+        # Try numeric index (1-based)
+        if part.isdigit():
+            idx = int(part) - 1
+            if 0 <= idx < len(calendars):
+                result.append(calendars[idx]["id"])
+            else:
+                click.echo(f"Calendar index out of range: {part} (have {len(calendars)})", err=True)
+                raise SystemExit(1)
+        else:
+            # Try name or ID match
+            found = False
+            for cal in calendars:
+                if cal["name"] == part or cal["id"] == part:
+                    result.append(cal["id"])
+                    found = True
+                    break
+            if not found:
+                click.echo(f"Calendar not found: {part}", err=True)
+                raise SystemExit(1)
+
+    return result if result else None
 
 
 @cal_cli.group(name="list", invoke_without_command=True)
 @click.option("--days", "-d", default=7, help="Number of days to show (default: 7)")
-@click.option("--cal", "-c", "calendar", help="Filter by calendar name or ID")
+@click.option("--cal", "-c", "calendar", help="Filter by calendar (name, ID, or index 1-8). Comma-separated for multiple.")
 @click.option(
     "--format", "-f", "fmt",
     type=click.Choice(["md", "tsv"]),
@@ -661,8 +695,8 @@ def list_group(ctx, days: int, calendar: str | None, fmt: str, verbose: bool):
 
     # If no subcommand, run default behavior
     if ctx.invoked_subcommand is None:
-        calendar_id = _resolve_calendar_id(calendar)
-        events = list_events(days=days, calendar_id=calendar_id)
+        calendar_ids = _resolve_calendar_ids(calendar)
+        events = list_events(days=days, calendar_ids=calendar_ids)
 
         if fmt == "tsv":
             click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
@@ -673,7 +707,7 @@ def list_group(ctx, days: int, calendar: str | None, fmt: str, verbose: bool):
 @list_group.command(name="clone")
 @click.argument("file", default="calendar.cal.gax")
 @click.option("--days", "-d", default=7, help="Number of days (default: 7)")
-@click.option("--cal", "-c", "calendar", help="Filter by calendar name or ID")
+@click.option("--cal", "-c", "calendar", help="Filter by calendar (name, ID, or index). Comma-separated for multiple.")
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
 def list_clone_cmd(file: str, days: int, calendar: str | None, verbose: bool):
     """Clone upcoming events to a .cal.gax file.
@@ -685,6 +719,7 @@ def list_clone_cmd(file: str, days: int, calendar: str | None, verbose: bool):
         gax cal list clone
         gax cal list clone week.cal.gax -d 7
         gax cal list clone moss.cal.gax -c Moss
+        gax cal list clone -c 2,8     # Multiple calendars
         gax cal list clone -v         # Include descriptions
     """
     from pathlib import Path
@@ -715,6 +750,94 @@ def list_pull_cmd(file: str):
     click.echo(f"Pulled {count} events to {file}")
 
 
+@list_group.command(name="checkout")
+@click.argument("folder", type=click.Path(path_type=Path))
+@click.option("--days", "-d", default=7, help="Number of days (default: 7)")
+@click.option("--cal", "-c", "calendar", help="Filter by calendar (name, ID, or index). Comma-separated for multiple.")
+def list_checkout_cmd(folder: Path, days: int, calendar: str | None):
+    """Checkout events as individual .cal.gax files into a folder.
+
+    Each event becomes a separate file that can be edited and pushed.
+
+    \b
+    Examples:
+        gax cal list checkout Week/
+        gax cal list checkout Week/ -d 7
+        gax cal list checkout Moss/ -c Moss
+        gax cal list checkout Family/ -c 2,8
+
+    \b
+    Workflow:
+        1. checkout -> create folder with .cal.gax files
+        2. edit files as needed
+        3. gax push <file> to update calendar
+    """
+    # Create folder
+    folder.mkdir(parents=True, exist_ok=True)
+
+    # Get events
+    calendar_ids = _resolve_calendar_ids(calendar)
+    events = list_events(days=days, calendar_ids=calendar_ids)
+
+    if not events:
+        click.echo("No events found.")
+        return
+
+    click.echo(f"Found {len(events)} events")
+
+    # Get existing event IDs in folder
+    existing_ids = set()
+    for f in folder.glob("*.cal.gax"):
+        try:
+            content = f.read_text()
+            if "id:" in content:
+                for line in content.split("\n"):
+                    if line.startswith("id:"):
+                        existing_ids.add(line.split(":", 1)[1].strip())
+                        break
+        except Exception:
+            pass
+
+    # Clone each event
+    cloned = 0
+    skipped = 0
+
+    for event in events:
+        event_id = event.get("id", "")
+        if event_id in existing_ids:
+            skipped += 1
+            continue
+
+        try:
+            cal_id = event.get("_calendar_id", "primary")
+            cal_name = event.get("_calendar_name", cal_id)
+            event_data = api_event_to_dataclass(event, cal_id, cal_name)
+
+            # Generate filename
+            title = event.get("summary", "event")
+            safe_title = re.sub(r"[^\w\s-]", "", title)[:30].strip()
+            safe_title = re.sub(r"\s+", "_", safe_title)
+            start = event.get("start", {})
+            date_str = start.get("dateTime", start.get("date", ""))[:10]
+            filename = f"{date_str}_{safe_title}.cal.gax"
+
+            file_path = folder / filename
+
+            # Avoid overwriting
+            if file_path.exists():
+                file_path = folder / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax"
+
+            content = event_to_yaml(event_data)
+            file_path.write_text(content)
+            cloned += 1
+            click.echo(f"  {filename}")
+
+        except Exception as e:
+            click.echo(f"  Error cloning event: {e}", err=True)
+
+    click.echo(f"Checked out: {cloned}, Skipped: {skipped} (already present)")
+
+
 def _clone_events_to_file(
     path: "Path",
     days: int = 7,
@@ -722,8 +845,8 @@ def _clone_events_to_file(
     verbose: bool = False,
 ) -> int:
     """Clone events to file. Returns event count."""
-    calendar_id = _resolve_calendar_id(calendar)
-    events = list_events(days=days, calendar_id=calendar_id)
+    calendar_ids = _resolve_calendar_ids(calendar)
+    events = list_events(days=days, calendar_ids=calendar_ids)
 
     # Build header
     header = {
