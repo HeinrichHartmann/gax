@@ -258,22 +258,21 @@ def _event_to_api_body(event: CalendarEvent) -> dict:
 
 
 def format_events_markdown(events: list[dict]) -> str:
-    """Format events as org-mode inspired markdown.
+    """Format events as compact agenda view.
 
     Args:
         events: List of event dicts from API
 
     Returns:
-        Markdown string grouped by calendar and date.
+        Markdown string grouped by date, calendar info on right.
     """
     if not events:
         return "No upcoming events.\n"
 
-    # Group by calendar, then by date
-    by_calendar: dict[str, dict[str, list]] = {}
+    # Group by date (multiplexing all calendars)
+    by_date: dict[str, list] = {}
 
     for event in events:
-        cal_name = event.get("_calendar_name", "Unknown")
         start = event.get("start", {})
         start_str = start.get("dateTime", start.get("date", ""))
 
@@ -282,40 +281,39 @@ def format_events_markdown(events: list[dict]) -> str:
         else:
             date_str = start_str
 
-        if cal_name not in by_calendar:
-            by_calendar[cal_name] = {}
-        if date_str not in by_calendar[cal_name]:
-            by_calendar[cal_name][date_str] = []
-
-        by_calendar[cal_name][date_str].append(event)
+        if date_str not in by_date:
+            by_date[date_str] = []
+        by_date[date_str].append(event)
 
     # Format output
     lines = []
 
-    for cal_name in sorted(by_calendar.keys()):
-        lines.append(f"# {cal_name}")
+    for date_str in sorted(by_date.keys()):
+        # Format date with day of week
+        try:
+            dt = datetime.fromisoformat(date_str)
+            day_name = dt.strftime("%a")
+            lines.append(f"## {day_name} {date_str}")
+        except Exception:
+            lines.append(f"## {date_str}")
         lines.append("")
 
-        dates = by_calendar[cal_name]
-        for date_str in sorted(dates.keys()):
-            # Format date with day of week
-            try:
-                dt = datetime.fromisoformat(date_str)
-                day_name = dt.strftime("%a")
-                lines.append(f"## {date_str} {day_name}")
-            except Exception:
-                lines.append(f"## {date_str}")
-            lines.append("")
+        for event in sorted(by_date[date_str], key=_event_sort_key):
+            lines.append(_format_event_line(event))
 
-            for event in dates[date_str]:
-                lines.append(_format_event_line(event))
-                lines.append("")
+        lines.append("")
 
     return "\n".join(lines)
 
 
+def _event_sort_key(event: dict) -> str:
+    """Sort key for events (by start time)."""
+    start = event.get("start", {})
+    return start.get("dateTime", start.get("date", ""))
+
+
 def _format_event_line(event: dict) -> str:
-    """Format a single event as markdown list item."""
+    """Format a single event as compact line."""
     start = event.get("start", {})
     end = event.get("end", {})
 
@@ -328,44 +326,33 @@ def _format_event_line(event: dict) -> str:
         end_time = end_str.split("T")[1][:5] if "T" in end_str else ""
         time_range = f"{start_time}-{end_time}"
     else:
-        time_range = "(all-day)"
+        time_range = "all-day    "  # Pad to align
 
     title = event.get("summary", "(No title)")
-    event_id = event.get("id", "")
 
     # Status indicator
     status = event.get("status", "confirmed")
-    status_str = ""
     if status == "tentative":
-        status_str = " [tentative]"
+        title = f"{title} [?]"
     elif status == "cancelled":
-        status_str = " [cancelled]"
+        title = f"~~{title}~~"
 
-    line = f"- {time_range} **{title}** `{event_id}`{status_str}"
+    # Calendar name (short form)
+    cal_name = event.get("_calendar_name", "")
+    cal_short = cal_name.split("@")[0] if "@" in cal_name else cal_name
 
-    # Location on second line
+    # Location
     location = event.get("location", "")
-    if location:
-        line += f"\n  {location}"
+    loc_short = location[:30] + "..." if len(location) > 33 else location
 
-    # Conference link
-    conf = event.get("conferenceData", {})
-    if conf:
-        entry_points = conf.get("entryPoints", [])
-        for ep in entry_points:
-            if ep.get("entryPointType") == "video":
-                line += f"\n  {ep.get('uri', '')}"
-                break
+    # Build line: time  title  [location]  @calendar
+    parts = [f"{time_range}  {title}"]
+    if loc_short:
+        parts.append(f"  ({loc_short})")
+    if cal_short:
+        parts.append(f"  @{cal_short}")
 
-    # Attendees
-    attendees = event.get("attendees", [])
-    if attendees:
-        names = [f"@{a.get('email', '').split('@')[0]}" for a in attendees[:5]]
-        if len(attendees) > 5:
-            names.append(f"+{len(attendees) - 5} more")
-        line += f"\n  {' '.join(names)}"
-
-    return line
+    return "".join(parts)
 
 
 def format_events_tsv(events: list[dict]) -> str:
@@ -608,7 +595,19 @@ def calendars_cmd():
         click.echo(f"  {cal['id']}")
 
 
-@cal_cli.command(name="list")
+def _resolve_calendar_id(calendar: str | None) -> str | None:
+    """Resolve calendar name to ID."""
+    if not calendar:
+        return None
+    calendars = list_calendars()
+    for cal in calendars:
+        if cal["name"] == calendar or cal["id"] == calendar:
+            return cal["id"]
+    click.echo(f"Calendar not found: {calendar}", err=True)
+    raise SystemExit(1)
+
+
+@cal_cli.group(name="list", invoke_without_command=True)
 @click.option("--days", "-d", default=7, help="Number of days to show (default: 7)")
 @click.option("--cal", "-c", "calendar", help="Filter by calendar name or ID")
 @click.option(
@@ -617,26 +616,129 @@ def calendars_cmd():
     default="md",
     help="Output format (default: md)"
 )
-def list_cmd(days: int, calendar: str | None, fmt: str):
-    """List upcoming events."""
-    # Resolve calendar name to ID if needed
-    calendar_id = None
-    if calendar:
-        calendars = list_calendars()
-        for cal in calendars:
-            if cal["name"] == calendar or cal["id"] == calendar:
-                calendar_id = cal["id"]
-                break
-        if not calendar_id:
-            click.echo(f"Calendar not found: {calendar}", err=True)
-            raise SystemExit(1)
+@click.pass_context
+def list_group(ctx, days: int, calendar: str | None, fmt: str):
+    """List upcoming events.
 
+    Without subcommand, lists events to stdout.
+
+    \b
+    Examples:
+        gax cal list                  # List next 7 days
+        gax cal list -d 14            # List next 14 days
+        gax cal list -c Moss          # Filter by calendar
+        gax cal list clone week.cal.gax  # Clone to file
+    """
+    # Store options for subcommands
+    ctx.ensure_object(dict)
+    ctx.obj["days"] = days
+    ctx.obj["calendar"] = calendar
+    ctx.obj["fmt"] = fmt
+
+    # If no subcommand, run default behavior
+    if ctx.invoked_subcommand is None:
+        calendar_id = _resolve_calendar_id(calendar)
+        events = list_events(days=days, calendar_id=calendar_id)
+
+        if fmt == "tsv":
+            click.echo(format_events_tsv(events), nl=False)
+        else:
+            click.echo(format_events_markdown(events), nl=False)
+
+
+@list_group.command(name="clone")
+@click.argument("file", default="calendar.cal.gax")
+@click.option("--days", "-d", default=7, help="Number of days (default: 7)")
+@click.option("--cal", "-c", "calendar", help="Filter by calendar name or ID")
+def list_clone_cmd(file: str, days: int, calendar: str | None):
+    """Clone upcoming events to a .cal.gax file.
+
+    Creates a file with all events that can be updated with 'gax pull'.
+
+    \b
+    Examples:
+        gax cal list clone
+        gax cal list clone week.cal.gax -d 7
+        gax cal list clone moss.cal.gax -c Moss
+    """
+    from pathlib import Path
+
+    path = Path(file)
+    if path.exists():
+        click.echo(f"Error: {file} already exists. Use 'gax pull' to update.", err=True)
+        raise SystemExit(1)
+
+    count = _clone_events_to_file(path, days=days, calendar=calendar)
+    click.echo(f"Cloned {count} events to {file}")
+
+
+@list_group.command(name="pull")
+@click.argument("file", type=click.Path(exists=True))
+def list_pull_cmd(file: str):
+    """Pull latest events to existing file.
+
+    \b
+    Example:
+        gax cal list pull week.cal.gax
+    """
+    from pathlib import Path
+
+    path = Path(file)
+    days, calendar = _parse_cal_list_file(path)
+    count = _clone_events_to_file(path, days=days, calendar=calendar)
+    click.echo(f"Pulled {count} events to {file}")
+
+
+def _clone_events_to_file(
+    path: "Path",
+    days: int = 7,
+    calendar: str | None = None,
+) -> int:
+    """Clone events to file. Returns event count."""
+    calendar_id = _resolve_calendar_id(calendar)
     events = list_events(days=days, calendar_id=calendar_id)
 
-    if fmt == "tsv":
-        click.echo(format_events_tsv(events), nl=False)
-    else:
-        click.echo(format_events_markdown(events), nl=False)
+    # Build header
+    header = {
+        "type": "gax/cal-list",
+        "content-type": "text/tab-separated-values",
+        "days": days,
+        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if calendar:
+        header["calendar"] = calendar
+
+    # Format TSV body
+    tsv_body = format_events_tsv(events)
+
+    # Write file with frontmatter
+    import yaml
+    with open(path, "w") as f:
+        f.write("---\n")
+        yaml.dump(header, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        f.write("---\n")
+        f.write(tsv_body)
+
+    return len(events)
+
+
+def _parse_cal_list_file(path: "Path") -> tuple[int, str | None]:
+    """Parse cal list file header. Returns (days, calendar)."""
+    import yaml
+
+    content = path.read_text()
+    if not content.startswith("---"):
+        raise ValueError("Expected YAML frontmatter")
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        raise ValueError("Invalid frontmatter format")
+
+    header = yaml.safe_load(parts[1])
+    if header.get("type") != "gax/cal-list":
+        raise ValueError(f"Expected type: gax/cal-list, got: {header.get('type')}")
+
+    return header.get("days", 7), header.get("calendar")
 
 
 @cal_cli.group(name="event")
