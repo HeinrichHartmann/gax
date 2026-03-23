@@ -1,4 +1,4 @@
-.PHONY: test test-e2e install lint fmt hooks
+.PHONY: test test-e2e install lint fmt hooks readme
 
 test:
 	uv run pytest tests/ -v -m "not e2e"
@@ -18,3 +18,15 @@ fmt:
 
 hooks:
 	uv run pre-commit install
+
+readme: README.md
+
+README.md: gax/*.py
+	@echo "Updating README.md with gax man output..."
+	@{ \
+		sed -n '1,/<!-- BEGIN GAX MAN -->/p' README.md; \
+		echo '```'; \
+		uv run gax man; \
+		echo '```'; \
+		sed -n '/<!-- END GAX MAN -->/,$$p' README.md; \
+	} > README.md.tmp && mv README.md.tmp README.md

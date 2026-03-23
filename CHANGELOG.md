@@ -7,16 +7,20 @@
 - `gax mail list checkout FOLDER` - Materialize full threads to folder
 - `gax mail thread` subgroup (clone/pull/reply)
 - `gax mail list` subgroup (clone/pull/plan/apply/checkout) - replaces relabel
-- `gax mail label clone` - Clone labels to labels.yaml
-- `gax mail filter clone` - Clone filters to filters.yaml
+- `gax mail label clone [FILE]` - Clone labels to `.label.mail.gax` file
+- `gax mail filter clone [FILE]` - Clone filters to `.filter.mail.gax` file
 - `gax mail label` moved under mail
 - `gax mail filter` moved under mail
 - Frontmatter format for labels and filters files (header separated by `---`)
 - Support for `.gax.yaml` header detection in unified pull
+- `gax man` now shows positional arguments in command signatures
+- `make readme` target to auto-generate README from `gax man`
 
 ### Changed
 - `gax/relabel` type renamed to `gax/list`
 - Labels/filters now use frontmatter format with `---` separator
+- Labels default file: `labels.yaml` → `labels.label.mail.gax`
+- Filters default file: `filters.yaml` → `filters.filter.mail.gax`
 - OAuth scope: `documents.readonly` → `documents` (enables doc import)
 - Default mail list limit: 100 → 20
 - CLI consistency: all clone commands now use FILE/FOLDER as positional arg

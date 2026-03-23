@@ -272,8 +272,8 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
         click.echo(f"Done: {success_count}/{len(all_files)} files updated")
 
 
-def _collect_commands(cmd: click.Command, prefix: str = "") -> list[tuple[str, str, list]]:
-    """Collect all commands as (full_name, help, options) tuples."""
+def _collect_commands(cmd: click.Command, prefix: str = "") -> list[tuple[str, str, list, list]]:
+    """Collect all commands as (full_name, help, arguments, options) tuples."""
     results = []
     name = f"{prefix} {cmd.name}".strip() if prefix else cmd.name
 
@@ -285,12 +285,22 @@ def _collect_commands(cmd: click.Command, prefix: str = "") -> list[tuple[str, s
     else:
         # Get first line of help only
         help_text = (cmd.help or "").split("\n")[0]
+        arguments = []
         options = []
         for param in cmd.params:
-            if isinstance(param, click.Option) and param.help:
+            if isinstance(param, click.Argument):
+                arg_name = param.name.upper()
+                # Show default if present
+                if param.default is not None:
+                    arguments.append(f"[{arg_name}]")
+                elif param.required:
+                    arguments.append(arg_name)
+                else:
+                    arguments.append(f"[{arg_name}]")
+            elif isinstance(param, click.Option) and param.help:
                 opts = ", ".join(param.opts)
                 options.append((opts, param.help))
-        results.append((name, help_text, options))
+        results.append((name, help_text, arguments, options))
 
     return results
 
@@ -318,8 +328,13 @@ def man(ctx):
 
     for group_name, commands in groups.items():
         lines.append(f"\n  {group_name}:")
-        for full_name, help_text, options in commands:
-            lines.append(f"    gax {full_name}")
+        for full_name, help_text, arguments, options in commands:
+            # Show command with positional arguments
+            args_str = " ".join(arguments)
+            if args_str:
+                lines.append(f"    gax {full_name} {args_str}")
+            else:
+                lines.append(f"    gax {full_name}")
             if help_text:
                 lines.append(f"        {help_text}")
             for opt, opt_help in options:
@@ -328,12 +343,15 @@ def man(ctx):
     lines.extend([
         "",
         "FILES",
-        "    .sheet.gax    Spreadsheet data (single or multipart)",
-        "    .doc.gax      Document (all tabs, multipart)",
-        "    .tab.gax      Single document tab",
-        "    .mail.gax     Email thread",
-        "    .draft.gax    Email draft",
-        "    .cal.gax      Calendar event",
+        "    .sheet.gax         Spreadsheet data (single or multipart)",
+        "    .doc.gax           Document (all tabs, multipart)",
+        "    .tab.gax           Single document tab",
+        "    .mail.gax          Email thread",
+        "    .draft.gax         Email draft",
+        "    .cal.gax           Calendar event",
+        "    .gax               Mail list (TSV with YAML header)",
+        "    .label.mail.gax    Gmail labels state",
+        "    .filter.mail.gax   Gmail filters state",
         "",
         "    ~/.config/gax/credentials.json    OAuth credentials",
         "    ~/.config/gax/token.json          Access token",

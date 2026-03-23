@@ -27,199 +27,185 @@ gax auth status   # Check authentication
 
 Requires `~/.config/gax/credentials.json` from [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
 
-## Commands
+## Reference
 
-### Sheets
-
-Two-way sync for Google Sheets.
-
-```bash
-# Clone all tabs
-gax sheet clone URL
-
-# Clone single tab
-gax sheet tab clone URL TAB
-
-# Pull latest / Push changes
-gax sheet pull file.sheet.gax
-gax sheet tab push file.sheet.gax --with-formulas
+<!-- BEGIN GAX MAN -->
 ```
+GAX(1)
 
-### Docs
+NAME
+    gax - Google Access CLI
 
-Read-only sync for Google Docs (supports multi-tab documents).
+COMMANDS
 
-```bash
-gax doc clone URL
-gax doc pull Document.doc.gax
-gax doc clone URL --with-comments
+  auth:
+    gax auth login
+        Authenticate with Google (opens browser).
+    gax auth logout
+        Remove stored authentication token.
+    gax auth status
+        Show authentication status.
+
+  cal:
+    gax cal calendars
+        List available calendars.
+    gax cal event clone [ID_OR_URL]
+        Clone an event to a local .cal.gax file.
+        --cal, -c: Calendar ID (default: primary)
+        -o, --output: Output file path
+    gax cal event delete [FILE_PATH]
+        Delete event from calendar.
+        -y, --yes: Skip confirmation
+    gax cal event new
+        Create a new event file (edit and push to create upstream).
+        --cal, -c: Calendar ID (default: primary)
+        -o, --output: Output file path
+    gax cal event pull [FILE_PATH]
+        Pull latest event data from API.
+    gax cal event push [FILE_PATH]
+        Push local changes to API.
+        -y, --yes: Skip confirmation
+    gax cal list
+        List upcoming events.
+        --days, -d: Number of days to show (default: 7)
+        --cal, -c: Filter by calendar name or ID
+        --format, -f: Output format (default: md)
+
+  doc:
+    gax doc clone [URL]
+        Clone a Google Doc to a local .doc.gax file.
+        --output, -o: Output file (default: <title>.doc.gax)
+        --with-comments: Include document comments as separate sections
+    gax doc pull [FILE]
+        Pull latest content from Google Docs to local file.
+        --with-comments: Include document comments as separate sections
+    gax doc tab clone [URL] [TAB_NAME]
+        Clone a single tab to a .tab.gax file.
+        --output, -o: Output file (default: <tab>.tab.gax)
+    gax doc tab diff [FILE]
+        Show diff between local file and remote tab.
+    gax doc tab import [URL] [FILE]
+        Import a markdown file as a new tab in a document.
+        --output, -o: Output tracking file (default: <filename>.tab.gax)
+    gax doc tab list [URL]
+        List tabs in a document (TSV output).
+    gax doc tab pull [FILE]
+        Pull latest content for a single tab.
+    gax doc tab push [FILE]
+        Push local changes to a single tab (with confirmation).
+        -y, --yes: Skip confirmation prompt
+
+  mail:
+    gax mail draft clone [DRAFT_ID_OR_URL]
+        Clone an existing draft from Gmail.
+        --output, -o: Output file (default: <subject>.draft.gax)
+    gax mail draft list
+        List Gmail drafts (TSV output).
+        --limit: Maximum results (default: 100)
+    gax mail draft new
+        Create a new local draft file.
+        --output, -o: Output file (default: <subject>.draft.gax)
+        --to: Recipient email address
+        --subject: Email subject
+    gax mail draft pull [FILE]
+        Pull latest content from Gmail draft.
+    gax mail draft push [FILE]
+        Push local draft to Gmail.
+        -y, --yes: Skip confirmation prompt
+    gax mail filter apply [PLAN_FILE]
+        Apply filter changes from plan file.
+    gax mail filter clone [FILE]
+        Clone Gmail filters to a .gax file.
+    gax mail filter list
+        List Gmail filters (TSV output).
+    gax mail filter plan [FILE]
+        Generate plan from edited filters file.
+        -o, --output: Output plan file
+        --delete: Include deletions in plan
+    gax mail filter pull [FILE]
+        Pull latest filters to existing file.
+    gax mail label apply [PLAN_FILE]
+        Apply label changes from plan file.
+    gax mail label clone [FILE]
+        Clone Gmail labels to a .gax file.
+        --all: Include system labels (read-only)
+    gax mail label list
+        List Gmail labels (TSV output).
+    gax mail label plan [FILE]
+        Generate plan from edited labels file.
+        -o, --output: Output plan file
+        --delete: Include deletions in plan
+    gax mail label pull [FILE]
+        Pull latest labels to existing file.
+        --all: Include system labels (read-only)
+    gax mail list apply [PLAN_FILE]
+        Apply label changes from plan.
+    gax mail list checkout [FOLDER]
+        Checkout full threads matching query into a folder.
+        -q, --query: Search query (default: in:inbox)
+        --limit: Maximum threads (default: 50)
+    gax mail list clone [FILE]
+        Clone threads from Gmail for bulk labeling.
+        -q, --query: Search query (default: in:inbox)
+        --limit: Maximum threads (default: 50)
+    gax mail list plan [FILE]
+        Generate plan from edited list file.
+        -o, --output: Output file
+    gax mail list pull [FILE]
+        Update a .gax file by re-fetching from Gmail.
+    gax mail thread clone [QUERY_OR_ID]
+        Clone email thread(s) to local .mail.gax file(s).
+        --to: Clone to folder (bulk mode)
+        --output, -o: Output file (single thread mode)
+        --limit: Maximum threads to clone in bulk mode (default: 100)
+    gax mail thread pull [PATH]
+        Pull latest messages for .mail.gax file(s).
+    gax mail thread reply [FILE_OR_URL]
+        Create a reply draft from a thread.
+        --output, -o: Output file (default: Re_<subject>.draft.gax)
+
+  pull:
+    gax pull [FILES]
+        Pull/update .gax file(s) from their sources.
+        -v, --verbose: Verbose output
+
+  sheet:
+    gax sheet clone [URL]
+        Clone all tabs from a spreadsheet to a multipart .sheet.gax file.
+        --output, -o: Output file (default: <title>.sheet.gax)
+        --format: Output format: md, csv, tsv, psv, json, jsonl
+    gax sheet pull [FILE]
+        Pull latest data for all tabs in a multipart file.
+    gax sheet tab clone [URL] [TAB_NAME]
+        Clone a single tab to a .sheet.gax file.
+        --output, -o: Output file (default: <tab>.sheet.gax)
+        --format: Output format: md, csv, tsv, psv, json, jsonl
+    gax sheet tab list [URL]
+        List tabs in a spreadsheet (TSV output).
+    gax sheet tab pull [FILE]
+        Pull latest data for a single tab.
+    gax sheet tab push [FILE]
+        Push local data to a single tab.
+        --with-formulas: Interpret formulas (e.g. =SUM(A1:A10))
+
+FILES
+    .sheet.gax         Spreadsheet data (single or multipart)
+    .doc.gax           Document (all tabs, multipart)
+    .tab.gax           Single document tab
+    .mail.gax          Email thread
+    .draft.gax         Email draft
+    .cal.gax           Calendar event
+    .gax               Mail list (TSV with YAML header)
+    .label.mail.gax    Gmail labels state
+    .filter.mail.gax   Gmail filters state
+
+    ~/.config/gax/credentials.json    OAuth credentials
+    ~/.config/gax/token.json          Access token
+
+SEE ALSO
+    gax <command> --help
 ```
-
-### Mail
-
-Archive and manage Gmail.
-
-```bash
-# List threads (TSV output)
-gax mail list -q "from:alice after:2025/01/01"
-
-# Clone thread(s)
-gax mail thread clone THREAD_ID
-gax mail thread clone "label:Inbox" --to Inbox/
-
-# Pull updates
-gax mail thread pull thread.mail.gax
-
-# Checkout threads to folder
-gax mail list checkout "in:inbox" -o Inbox/
-```
-
-### Mail Drafts
-
-Compose and send drafts.
-
-```bash
-# Create draft
-gax mail draft create draft.gax
-
-# List / Pull / Send
-gax mail draft list
-gax mail draft pull draft.gax
-gax mail draft send draft.gax
-```
-
-### Mail List (Bulk Label Operations)
-
-Declarative bulk labeling with IaC-style workflow.
-
-```bash
-# Clone threads for relabeling
-gax mail list clone inbox.gax -q "in:inbox"
-
-# Edit the .gax file:
-#   sys column: I=Inbox S=Spam T=Trash U=Unread *=Starred !=Important
-#   cat column: P=Personal U=Updates R=Promotions S=Social F=Forums
-#   labels column: user labels (comma-separated)
-
-# Generate plan and apply
-gax mail list plan inbox.gax
-gax mail list apply inbox.plan.yaml
-
-# Update existing file
-gax mail list pull inbox.gax
-
-# Checkout full threads to folder
-gax mail list checkout Inbox/ -q "in:inbox"
-```
-
-**Example .gax file:**
-```
----
-type: gax/list
-query: in:inbox
-limit: 50
----
-id	from	subject	date	sys	cat	labels
-19d1586c...	alice@example.com	Meeting notes	2026-03-22	I	U	work,projects/active
-19d1445a...	spam@fake.com	Buy now!!!	2026-03-22	S
-```
-
-### Labels (Declarative Management)
-
-Manage Gmail labels declaratively.
-
-```bash
-# Clone labels to YAML
-gax mail label clone              # → labels.yaml
-
-# Edit: add/rename/delete labels, change visibility
-# Then generate plan and apply
-gax mail label plan labels.yaml
-gax mail label apply labels.plan.yaml
-
-# Update existing file
-gax mail label pull labels.yaml
-
-# List labels (TSV)
-gax mail label list
-```
-
-**Visibility settings:**
-- `visible`: show | hide | unread (sidebar)
-- `show_in_list`: show | hide (on messages)
-
-**Example labels.yaml:**
-```yaml
-labels:
-- name: Work
-- name: Projects/Active
-  visible: show
-- name: Archive
-  visible: hide
-  show_in_list: hide
-- name: OldName
-  rename_from: NewName
-```
-
-### Calendar
-
-Sync Google Calendar events.
-
-```bash
-# Clone calendar
-gax cal clone CALENDAR_ID -o calendar.cal.gax
-
-# Pull updates
-gax cal pull calendar.cal.gax
-
-# List calendars
-gax cal list
-```
-
-## File Formats
-
-| Extension | Content |
-|-----------|---------|
-| `.sheet.gax` | Spreadsheet (CSV/TSV/JSON) |
-| `.doc.gax` | Document (Markdown) |
-| `.mail.gax` | Email thread (Markdown) |
-| `.draft.gax` | Email draft (Markdown) |
-| `.cal.gax` | Calendar events (YAML) |
-| `.gax` | List state (TSV with YAML header) |
-
-### Multipart Format
-
-Documents with multiple sections (Doc tabs, Mail threads) use a **multipart format**: multiple YAML+content blocks concatenated. Each section is self-contained.
-
-```
----
-title: Project Plan
-source: https://docs.google.com/...
-tab: Overview
----
-# Overview
-
-Project goals...
-
----
-title: Project Plan
-source: https://docs.google.com/...
-tab: Timeline
----
-# Timeline
-
-| Phase | Date |
-|-------|------|
-| Alpha | Q1   |
-```
-
-## Help
-
-```bash
-gax --help
-gax <command> --help
-gax man  # Full manual
-```
+<!-- END GAX MAN -->
 
 ## License
 
