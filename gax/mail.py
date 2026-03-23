@@ -1127,10 +1127,10 @@ def _parse_gax_content(path: Path) -> str:
 
 
 @list_group.command("checkout")
-@click.argument("query")
-@click.option("-o", "--output", "folder", required=True, type=click.Path(path_type=Path), help="Output folder")
+@click.argument("folder", type=click.Path(path_type=Path))
+@click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
-def list_checkout(query: str, folder: Path, limit: int):
+def list_checkout(folder: Path, query: str, limit: int):
     """Checkout full threads matching query into a folder.
 
     Searches Gmail and clones each matching thread as a full .mail.gax file.
@@ -1138,8 +1138,9 @@ def list_checkout(query: str, folder: Path, limit: int):
 
     \b
     Examples:
-        gax mail list checkout "in:inbox" -o Inbox/
-        gax mail list checkout "from:alice" -o Alice/ --limit 100
+        gax mail list checkout Inbox/
+        gax mail list checkout Inbox/ -q "in:inbox"
+        gax mail list checkout Alice/ -q "from:alice" --limit 100
 
     \b
     Workflow:
@@ -1231,10 +1232,10 @@ def list_checkout(query: str, folder: Path, limit: int):
 
 
 @list_group.command("clone")
-@click.argument("query")
-@click.option("-o", "--output", "output_path", default=None, help="Output file (default: list.gax)")
+@click.argument("file")
+@click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
-def relabel_clone(query: str, output_path: str | None, limit: int):
+def relabel_clone(file: str, query: str, limit: int):
     """Clone threads from Gmail for bulk labeling.
 
     Creates a .gax file with current state. Use 'pull' to update,
@@ -1248,9 +1249,9 @@ def relabel_clone(query: str, output_path: str | None, limit: int):
 
     \b
     Examples:
-        gax mail list clone "in:inbox"
-        gax mail list clone "in:inbox" -o inbox.gax
-        gax mail list clone "in:spam" -o spam.gax --limit 100
+        gax mail list clone inbox.gax
+        gax mail list clone inbox.gax -q "in:inbox"
+        gax mail list clone spam.gax -q "in:spam" --limit 100
 
     \b
     Workflow:
@@ -1260,11 +1261,12 @@ def relabel_clone(query: str, output_path: str | None, limit: int):
         4. plan   -> compute diff
         5. apply  -> execute changes
     """
-    # Default output based on query
-    if output_path is None:
-        # Generate filename from query
-        safe_name = query.replace(":", "_").replace(" ", "_")[:20]
-        output_path = f"{safe_name}.gax"
+    output_path = file
+
+    # Check for existing file
+    if Path(output_path).exists():
+        click.echo(f"Error: {output_path} already exists. Use 'pull' to update.", err=True)
+        sys.exit(1)
 
     try:
         creds = get_authenticated_credentials()

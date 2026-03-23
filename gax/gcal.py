@@ -4,6 +4,7 @@ Implements calendar viewing and event editing (ADR 007).
 """
 
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -671,6 +672,11 @@ def event_clone_cmd(id_or_url: str, calendar: str, output_path: str | None):
         safe_title = re.sub(r"[^\w\s-]", "", event.title)[:30].strip()
         safe_title = re.sub(r"\s+", "_", safe_title)
         output_path = f"{safe_title}.cal.gax"
+
+    # Check for existing file
+    if Path(output_path).exists():
+        click.echo(f"Error: {output_path} already exists. Use 'pull' to update.", err=True)
+        sys.exit(1)
 
     # Write file
     content = event_to_yaml(event)

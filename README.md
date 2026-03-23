@@ -94,7 +94,7 @@ Declarative bulk labeling with IaC-style workflow.
 
 ```bash
 # Clone threads for relabeling
-gax mail list clone "in:inbox" -o inbox.gax --limit 50
+gax mail list clone inbox.gax -q "in:inbox"
 
 # Edit the .gax file:
 #   sys column: I=Inbox S=Spam T=Trash U=Unread *=Starred !=Important
@@ -103,10 +103,13 @@ gax mail list clone "in:inbox" -o inbox.gax --limit 50
 
 # Generate plan and apply
 gax mail list plan inbox.gax
-gax mail list apply list.plan.yaml
+gax mail list apply inbox.plan.yaml
 
 # Update existing file
 gax mail list pull inbox.gax
+
+# Checkout full threads to folder
+gax mail list checkout Inbox/ -q "in:inbox"
 ```
 
 **Example .gax file:**
@@ -126,13 +129,16 @@ id	from	subject	date	sys	cat	labels
 Manage Gmail labels declaratively.
 
 ```bash
-# Export labels to YAML
-gax mail label pull -o labels.yaml
+# Clone labels to YAML
+gax mail label clone              # → labels.yaml
 
 # Edit: add/rename/delete labels, change visibility
 # Then generate plan and apply
 gax mail label plan labels.yaml
 gax mail label apply labels.plan.yaml
+
+# Update existing file
+gax mail label pull labels.yaml
 
 # List labels (TSV)
 gax mail label list

@@ -308,13 +308,42 @@ def filter_pull_to_file(path) -> int:
     return len(filters)
 
 
-@filter_group.command("pull")
-@click.option("-o", "--output", default="filters.yaml", help="Output file")
-def filter_pull(output: str):
-    """Export filters to YAML file."""
+@filter_group.command("clone")
+def filter_clone():
+    """Clone Gmail filters to filters.yaml.
+
+    Creates a state file with all filters and their settings.
+    Edit this file and use 'plan' to preview changes, 'apply' to execute.
+
+    \b
+    Example:
+        gax mail filter clone
+    """
+    from pathlib import Path
+    output = "filters.yaml"
     try:
+        if Path(output).exists():
+            click.echo(f"Error: {output} already exists. Use 'pull' to update.", err=True)
+            sys.exit(1)
         count = filter_pull_to_file(output)
-        click.echo(f"Wrote {count} filters to {output}")
+        click.echo(f"Cloned {count} filters to {output}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@filter_group.command("pull")
+@click.argument("file", type=click.Path(exists=True))
+def filter_pull(file: str):
+    """Pull latest filters to existing file.
+
+    \b
+    Example:
+        gax mail filter pull filters.yaml
+    """
+    try:
+        count = filter_pull_to_file(file)
+        click.echo(f"Pulled {count} filters to {file}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

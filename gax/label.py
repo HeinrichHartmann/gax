@@ -136,24 +136,44 @@ def label_pull_to_file(path, include_all: bool = False) -> int:
     return len(label_list)
 
 
-@label.command("pull")
-@click.option("-o", "--output", default="labels.yaml", help="Output file")
+@label.command("clone")
 @click.option("--all", "include_all", is_flag=True, help="Include system labels (read-only)")
-def label_pull(output: str, include_all: bool):
-    """Export labels to YAML file.
+def label_clone(include_all: bool):
+    """Clone Gmail labels to labels.yaml.
 
     Creates a state file with all user labels and their settings.
-    Edit this file and use 'push' to apply changes.
+    Edit this file and use 'plan' to preview changes, 'apply' to execute.
 
     \b
     Example:
-        gax label pull
-        gax label pull -o my-labels.yaml
-        gax label pull --all  # include system labels
+        gax mail label clone
+        gax mail label clone --all  # include system labels
+    """
+    output = "labels.yaml"
+    try:
+        if Path(output).exists():
+            click.echo(f"Error: {output} already exists. Use 'pull' to update.", err=True)
+            sys.exit(1)
+        count = label_pull_to_file(output, include_all)
+        click.echo(f"Cloned {count} labels to {output}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@label.command("pull")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--all", "include_all", is_flag=True, help="Include system labels (read-only)")
+def label_pull(file: str, include_all: bool):
+    """Pull latest labels to existing file.
+
+    \b
+    Example:
+        gax mail label pull labels.yaml
     """
     try:
-        count = label_pull_to_file(output, include_all)
-        click.echo(f"Wrote {count} labels to {output}")
+        count = label_pull_to_file(file, include_all)
+        click.echo(f"Pulled {count} labels to {file}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
