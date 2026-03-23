@@ -24,3 +24,4 @@ ENV/
 .uv/
 .direnv/
 .envrc
+REVIEW/
