@@ -10,7 +10,7 @@ Gax files have a distinctive structure: YAML frontmatter followed by a body in v
 (markdown, CSV, TSV, etc.). Standard text editors don't provide:
 
 - Syntax highlighting for both YAML header and format-specific body
-- Keybindings for gax operations (pull, push)
+- Keybindings for gax operations (pull)
 - Format-aware editing features
 
 An Emacs major mode would provide a native editing experience for gax files, leveraging
@@ -47,41 +47,49 @@ All dependencies are available on MELPA and included in Doom Emacs by default.
 ├─────────────────────────────────┤
 │ ---                             │  ← yaml-mode innermode
 │ type: gax/sheet                 │
-│ format: csv                     │
+│ format: tsv                     │
 │ source: https://...             │
 │ ---                             │
 ├─────────────────────────────────┤
-│ name,email,role                 │  ← hostmode (format-specific)
-│ Alice,alice@example.com,admin   │
-│ Bob,bob@example.com,user        │
+│ name    email                   │  ← hostmode (tsv-mode)
+│ Alice   alice@example.com       │
+│ Bob     bob@example.com         │
 └─────────────────────────────────┘
 ```
 
 **V1 Scope:** Single header + body only. Multipart files (multiple `---` sections) will
 display but only the first header gets yaml-mode treatment.
 
-### Format Detection
+### Format Header Convention
 
-The body mode is determined by header fields:
+All gax files consistently include a `format:` field in the YAML header to specify
+the body content type:
 
-| Header Field | Value | Body Mode |
-|--------------|-------|-----------|
-| `format` | `csv`, `tsv`, `psv` | `csv-mode` |
-| `format` | `json`, `jsonl` | `json-mode` |
-| `format` | `md`, `markdown` | `markdown-mode` |
-| `type` | `gax/mail`, `gax/doc` | `markdown-mode` |
-| `type` | `gax/labels`, `gax/filters` | `yaml-mode` |
-| (default) | - | `markdown-mode` |
+```yaml
+---
+type: gax/sheet
+format: tsv
+source: https://...
+---
+```
 
-Format is read from the YAML header on mode initialization.
+| Format Value | Body Mode | Description |
+|--------------|-----------|-------------|
+| `csv` | `csv-mode` | Comma-separated values |
+| `tsv` | `csv-mode` | Tab-separated values |
+| `psv` | `csv-mode` | Pipe-separated values |
+| `json` | `json-mode` | JSON data |
+| `jsonl` | `json-mode` | JSON lines |
+| `yaml` | `yaml-mode` | YAML content (labels, filters) |
+| (absent) | `markdown-mode` | Default, no format field needed |
+
+Markdown is the default and does not require an explicit `format:` field.
 
 ### Keybindings
 
 | Key | Command | Description |
 |-----|---------|-------------|
 | `C-c C-c` | `gax-pull` | Update file from source |
-| `C-c C-p` | `gax-push` | Push changes to source |
-| `C-c C-d` | `gax-diff` | Show diff with remote |
 
 ### Commands
 
@@ -91,32 +99,12 @@ Format is read from the YAML header on mode initialization.
   (interactive)
   (save-buffer)
   (compile (format "gax pull %s" (shell-quote-argument (buffer-file-name)))))
-
-(defun gax-push ()
-  "Run appropriate push command based on file type."
-  (interactive)
-  (save-buffer)
-  (let* ((file (buffer-file-name))
-         (cmd (cond
-               ((string-match-p "\\.sheet\\.gax$" file) "sheet tab push")
-               ((string-match-p "\\.tab\\.gax$" file) "doc tab push")
-               ((string-match-p "\\.draft\\.gax$" file) "mail draft push")
-               (t (error "Push not supported for this file type")))))
-    (compile (format "gax %s %s" cmd (shell-quote-argument file)))))
 ```
 
 ### Auto-Mode Registration
 
 ```elisp
 (add-to-list 'auto-mode-alist '("\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.mail\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.sheet\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.doc\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.draft\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.cal\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.tab\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.label\\.mail\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.filter\\.mail\\.gax\\'" . gax-mode))
 ```
 
 ### Installation
@@ -165,16 +153,16 @@ Format is read from the YAML header on mode initialization.
 ## Consequences
 
 - **Native feel**: Proper syntax highlighting for both header and body
-- **Efficient workflow**: Pull/push without leaving Emacs
-- **Format-aware**: Body highlighting matches actual content format
+- **Efficient workflow**: Pull without leaving Emacs
+- **Format-aware**: Body highlighting matches `format:` header field
 - **Easy install**: Works with standard Emacs package managers
-- **No MELPA**: GitHub-only distribution initially (can add MELPA later)
+- **Consistent headers**: All gax files use `format:` field for body type
 
 ## Future Considerations
 
+- **Push support**: `C-c C-p` for sheets/docs/drafts
 - **Multipart support**: Highlight all YAML sections in multipart files
 - **Imenu integration**: Navigate between sections in multipart files
 - **Eldoc**: Show field documentation on hover
 - **Flycheck**: Validate YAML header structure
-- **Company**: Auto-complete header fields
 - **MELPA submission**: Once stable, submit to MELPA for easier discovery
