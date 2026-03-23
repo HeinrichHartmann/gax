@@ -205,8 +205,8 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
         elif file_type == "gax/cal-list":
             from .gcal import _parse_cal_list_file, _clone_events_to_file
 
-            days, calendar = _parse_cal_list_file(file_path)
-            count = _clone_events_to_file(file_path, days=days, calendar=calendar)
+            days, calendar, verbose = _parse_cal_list_file(file_path)
+            count = _clone_events_to_file(file_path, days=days, calendar=calendar, verbose=verbose)
             return True, f"{count} events"
 
         else:

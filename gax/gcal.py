@@ -257,11 +257,12 @@ def _event_to_api_body(event: CalendarEvent) -> dict:
 # =============================================================================
 
 
-def format_events_markdown(events: list[dict]) -> str:
+def format_events_markdown(events: list[dict], include_desc: bool = False) -> str:
     """Format events as compact agenda view.
 
     Args:
         events: List of event dicts from API
+        include_desc: Include event descriptions
 
     Returns:
         Markdown string grouped by date, calendar info on right.
@@ -299,7 +300,7 @@ def format_events_markdown(events: list[dict]) -> str:
         lines.append("")
 
         for event in sorted(by_date[date_str], key=_event_sort_key):
-            lines.append(_format_event_line(event))
+            lines.append(_format_event_line(event, include_desc))
 
         lines.append("")
 
@@ -312,7 +313,7 @@ def _event_sort_key(event: dict) -> str:
     return start.get("dateTime", start.get("date", ""))
 
 
-def _format_event_line(event: dict) -> str:
+def _format_event_line(event: dict, include_desc: bool = False) -> str:
     """Format a single event as compact line."""
     start = event.get("start", {})
     end = event.get("end", {})
@@ -352,19 +353,35 @@ def _format_event_line(event: dict) -> str:
     if cal_short:
         parts.append(f"  @{cal_short}")
 
-    return "".join(parts)
+    line = "".join(parts)
+
+    # Add description on next line if requested
+    if include_desc:
+        desc = event.get("description", "")
+        if desc:
+            # Truncate and clean up description
+            desc_clean = desc.replace("\n", " ").replace("\r", "")[:80]
+            if len(desc) > 80:
+                desc_clean += "..."
+            line += f"\n             {desc_clean}"
+
+    return line
 
 
-def format_events_tsv(events: list[dict]) -> str:
+def format_events_tsv(events: list[dict], include_desc: bool = False) -> str:
     """Format events as TSV.
 
     Args:
         events: List of event dicts from API
+        include_desc: Include description column
 
     Returns:
         TSV string with header row.
     """
-    lines = ["calendar\tdate\tstart\tend\ttitle\tid\tstatus\tlocation"]
+    header = "calendar\tdate\tstart\tend\ttitle\tid\tstatus\tlocation"
+    if include_desc:
+        header += "\tdescription"
+    lines = [header]
 
     for event in events:
         cal_name = event.get("_calendar_name", "")
@@ -388,10 +405,14 @@ def format_events_tsv(events: list[dict]) -> str:
         status = event.get("status", "confirmed")
         location = event.get("location", "").replace("\t", " ")
 
-        lines.append(
+        row = (
             f"{cal_name}\t{date_str}\t{start_time}\t{end_time}\t"
             f"{title}\t{event_id}\t{status}\t{location}"
         )
+        if include_desc:
+            desc = event.get("description", "").replace("\t", " ").replace("\n", " ")
+            row += f"\t{desc}"
+        lines.append(row)
 
     return "\n".join(lines) + "\n"
 
@@ -616,8 +637,9 @@ def _resolve_calendar_id(calendar: str | None) -> str | None:
     default="md",
     help="Output format (default: md)"
 )
+@click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
 @click.pass_context
-def list_group(ctx, days: int, calendar: str | None, fmt: str):
+def list_group(ctx, days: int, calendar: str | None, fmt: str, verbose: bool):
     """List upcoming events.
 
     Without subcommand, lists events to stdout.
@@ -627,6 +649,7 @@ def list_group(ctx, days: int, calendar: str | None, fmt: str):
         gax cal list                  # List next 7 days
         gax cal list -d 14            # List next 14 days
         gax cal list -c Moss          # Filter by calendar
+        gax cal list -v               # Include descriptions
         gax cal list clone week.cal.gax  # Clone to file
     """
     # Store options for subcommands
@@ -634,6 +657,7 @@ def list_group(ctx, days: int, calendar: str | None, fmt: str):
     ctx.obj["days"] = days
     ctx.obj["calendar"] = calendar
     ctx.obj["fmt"] = fmt
+    ctx.obj["verbose"] = verbose
 
     # If no subcommand, run default behavior
     if ctx.invoked_subcommand is None:
@@ -641,16 +665,17 @@ def list_group(ctx, days: int, calendar: str | None, fmt: str):
         events = list_events(days=days, calendar_id=calendar_id)
 
         if fmt == "tsv":
-            click.echo(format_events_tsv(events), nl=False)
+            click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
         else:
-            click.echo(format_events_markdown(events), nl=False)
+            click.echo(format_events_markdown(events, include_desc=verbose), nl=False)
 
 
 @list_group.command(name="clone")
 @click.argument("file", default="calendar.cal.gax")
 @click.option("--days", "-d", default=7, help="Number of days (default: 7)")
 @click.option("--cal", "-c", "calendar", help="Filter by calendar name or ID")
-def list_clone_cmd(file: str, days: int, calendar: str | None):
+@click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
+def list_clone_cmd(file: str, days: int, calendar: str | None, verbose: bool):
     """Clone upcoming events to a .cal.gax file.
 
     Creates a file with all events that can be updated with 'gax pull'.
@@ -660,6 +685,7 @@ def list_clone_cmd(file: str, days: int, calendar: str | None):
         gax cal list clone
         gax cal list clone week.cal.gax -d 7
         gax cal list clone moss.cal.gax -c Moss
+        gax cal list clone -v         # Include descriptions
     """
     from pathlib import Path
 
@@ -668,7 +694,7 @@ def list_clone_cmd(file: str, days: int, calendar: str | None):
         click.echo(f"Error: {file} already exists. Use 'gax pull' to update.", err=True)
         raise SystemExit(1)
 
-    count = _clone_events_to_file(path, days=days, calendar=calendar)
+    count = _clone_events_to_file(path, days=days, calendar=calendar, verbose=verbose)
     click.echo(f"Cloned {count} events to {file}")
 
 
@@ -684,8 +710,8 @@ def list_pull_cmd(file: str):
     from pathlib import Path
 
     path = Path(file)
-    days, calendar = _parse_cal_list_file(path)
-    count = _clone_events_to_file(path, days=days, calendar=calendar)
+    days, calendar, verbose = _parse_cal_list_file(path)
+    count = _clone_events_to_file(path, days=days, calendar=calendar, verbose=verbose)
     click.echo(f"Pulled {count} events to {file}")
 
 
@@ -693,6 +719,7 @@ def _clone_events_to_file(
     path: "Path",
     days: int = 7,
     calendar: str | None = None,
+    verbose: bool = False,
 ) -> int:
     """Clone events to file. Returns event count."""
     calendar_id = _resolve_calendar_id(calendar)
@@ -707,9 +734,11 @@ def _clone_events_to_file(
     }
     if calendar:
         header["calendar"] = calendar
+    if verbose:
+        header["verbose"] = True
 
     # Format TSV body
-    tsv_body = format_events_tsv(events)
+    tsv_body = format_events_tsv(events, include_desc=verbose)
 
     # Write file with frontmatter
     import yaml
@@ -722,8 +751,8 @@ def _clone_events_to_file(
     return len(events)
 
 
-def _parse_cal_list_file(path: "Path") -> tuple[int, str | None]:
-    """Parse cal list file header. Returns (days, calendar)."""
+def _parse_cal_list_file(path: "Path") -> tuple[int, str | None, bool]:
+    """Parse cal list file header. Returns (days, calendar, verbose)."""
     import yaml
 
     content = path.read_text()
@@ -738,7 +767,7 @@ def _parse_cal_list_file(path: "Path") -> tuple[int, str | None]:
     if header.get("type") != "gax/cal-list":
         raise ValueError(f"Expected type: gax/cal-list, got: {header.get('type')}")
 
-    return header.get("days", 7), header.get("calendar")
+    return header.get("days", 7), header.get("calendar"), header.get("verbose", False)
 
 
 @cal_cli.group(name="event")
