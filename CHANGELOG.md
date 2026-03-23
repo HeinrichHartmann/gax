@@ -19,8 +19,8 @@
 ### Changed
 - `gax/relabel` type renamed to `gax/list`
 - Labels/filters now use frontmatter format with `---` separator
-- Labels default file: `labels.yaml` → `labels.label.mail.gax`
-- Filters default file: `filters.yaml` → `filters.filter.mail.gax`
+- Labels default file: `labels.yaml` → `label.mail.gax`
+- Filters default file: `filters.yaml` → `filter.mail.gax`
 - OAuth scope: `documents.readonly` → `documents` (enables doc import)
 - Default mail list limit: 100 → 20
 - CLI consistency: all clone commands now use FILE/FOLDER as positional arg

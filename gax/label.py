@@ -137,7 +137,7 @@ def label_pull_to_file(path, include_all: bool = False) -> int:
 
 
 @label.command("clone")
-@click.argument("file", default="labels.label.mail.gax")
+@click.argument("file", default="label.mail.gax")
 @click.option("--all", "include_all", is_flag=True, help="Include system labels (read-only)")
 def label_clone(file: str, include_all: bool):
     """Clone Gmail labels to a .gax file.

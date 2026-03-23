@@ -309,7 +309,7 @@ def filter_pull_to_file(path) -> int:
 
 
 @filter_group.command("clone")
-@click.argument("file", default="filters.filter.mail.gax")
+@click.argument("file", default="filter.mail.gax")
 def filter_clone(file: str):
     """Clone Gmail filters to a .gax file.
 
