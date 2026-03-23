@@ -376,8 +376,7 @@ def _parse_filters_file(path: str) -> list:
 @filter_group.command("plan")
 @click.argument("file", type=click.Path(exists=True))
 @click.option("-o", "--output", default="filters.plan.yaml", help="Output plan file")
-@click.option("--delete", "allow_delete", is_flag=True, help="Include deletions in plan")
-def filter_plan(file: str, output: str, allow_delete: bool):
+def filter_plan(file: str, output: str):
     """Generate plan from edited filters file."""
     try:
         creds = get_authenticated_credentials()
@@ -447,13 +446,12 @@ def filter_plan(file: str, output: str, allow_delete: bool):
                     })
 
         # Check for deletes
-        if allow_delete:
-            for h, current in current_by_hash.items():
-                if h not in desired_by_hash:
-                    plan["delete"].append({
-                        "id": current["id"],
-                        "criteria": current["criteria"],
-                    })
+        for h, current in current_by_hash.items():
+            if h not in desired_by_hash:
+                plan["delete"].append({
+                    "id": current["id"],
+                    "criteria": current["criteria"],
+                })
 
         # Remove empty lists
         plan = {k: v for k, v in plan.items() if v or k in ("type", "source", "generated")}
@@ -478,12 +476,6 @@ def filter_plan(file: str, output: str, allow_delete: bool):
             for item in plan["delete"]:
                 name = _generate_filter_name(item.get("criteria", {}))
                 click.echo(f"    - {name}")
-
-        # Show potential deletes not included
-        if not allow_delete:
-            potential = sum(1 for h in current_by_hash if h not in desired_by_hash)
-            if potential:
-                click.echo(f"  (Skipped {potential} deletions, use --delete)")
 
         # Write plan
         with open(output, "w") as f:
