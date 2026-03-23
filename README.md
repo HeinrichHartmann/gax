@@ -2,13 +2,15 @@
 
 Sync Google Workspace (Sheets, Docs, Gmail, Calendar) to local files that are human-readable, machine-readable, and git-friendly.
 
+Designed to be equally usable by humans and AI agents, gax facilitates AI-enhanced workflows where LLMs can read, analyze, and modify Google Workspace content through familiar file operations.
+
 ## Design
 
-- **YAML frontmatter** stores metadata (source URL, IDs) for re-sync
-- **Plain text body** (CSV, Markdown, TSV) for easy editing and diffing
-- **Clone/Pull pattern** like git - clone once, pull to update
-- **Plan/Apply pattern** for bulk operations - preview changes before applying
-- **Bi-directional** for Sheets (push), declarative for Labels/List
+- **Native abstractions** - Work at the same level as upstream: email threads (not individual messages), documents and sheets with tabs (not pages or cells)
+- **Multipart YAML format** - Each file has a YAML header with provenance metadata, followed by plain text content (Markdown, CSV, TSV). Multi-section resources (threads, tabs) use concatenated YAML+content blocks
+- **Clone/Pull pattern** - Like git: `clone` creates a local file, `pull` updates it. The file extension encodes the resource type, so `gax pull *.gax` always works
+- **Plan/Apply pattern** - Bulk operations (labels, filters, mail triage) go through a two-phase workflow: `plan` generates a changeset for review, `apply` executes it. No `-y` prompts needed
+- **Bi-directional sync** - Sheets and Docs support `push` for edits. Labels, filters, and mail lists use declarative plan/apply
 
 ## Install
 
@@ -206,6 +208,77 @@ SEE ALSO
     gax <command> --help
 ```
 <!-- END GAX MAN -->
+
+## File Format
+
+Every `.gax` file is self-describing: a YAML header contains the resource type and source URL, followed by the content. This allows `gax pull FILE` to update any file without additional arguments.
+
+### Extension Convention
+
+The file extension mirrors the command path in reverse:
+
+| Command | Extension |
+|---------|-----------|
+| `gax mail thread` | `.mail.gax` |
+| `gax mail label` | `.label.mail.gax` |
+| `gax mail filter` | `.filter.mail.gax` |
+| `gax sheet` | `.sheet.gax` |
+| `gax doc` | `.doc.gax` |
+
+### Single-Section Files
+
+Simple resources have one YAML header followed by content:
+
+```
+---
+type: gax/sheet
+source: https://docs.google.com/spreadsheets/d/1ABC.../edit
+tab: Sheet1
+format: csv
+pulled: 2026-03-23T10:00:00Z
+---
+name,email,role
+Alice,alice@example.com,admin
+Bob,bob@example.com,user
+```
+
+### Multipart Files
+
+Resources with multiple sections (email threads, multi-tab documents) concatenate YAML+content blocks:
+
+```
+---
+type: gax/mail
+thread_id: 18abc123def
+source: https://mail.google.com/mail/u/0/#inbox/18abc123def
+subject: Project Update
+---
+From: alice@example.com
+Date: 2026-03-22 10:00
+
+Here's the latest update...
+
+---
+type: gax/mail
+thread_id: 18abc123def
+message_id: <reply-456@mail.gmail.com>
+---
+From: bob@example.com
+Date: 2026-03-22 11:30
+
+Thanks for the update!
+```
+
+### Folder Mode
+
+When cloning multiple resources to a folder (e.g., `gax mail list checkout Inbox/`), metadata is stored in `.gax.yaml` at the folder root instead of per-file headers:
+
+```
+Inbox/
+  .gax.yaml           # folder metadata
+  thread_18abc.md     # content only
+  thread_19def.md
+```
 
 ## License
 
