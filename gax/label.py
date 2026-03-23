@@ -119,6 +119,7 @@ def label_pull_to_file(path, include_all: bool = False) -> int:
     # Build header
     header = {
         "type": "gax/labels",
+        "content-type": "application/yaml",
         "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 

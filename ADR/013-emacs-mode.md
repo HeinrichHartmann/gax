@@ -60,30 +60,31 @@ All dependencies are available on MELPA and included in Doom Emacs by default.
 **V1 Scope:** Single header + body only. Multipart files (multiple `---` sections) will
 display but only the first header gets yaml-mode treatment.
 
-### Format Header Convention
+### Content-Type Header Convention
 
-All gax files consistently include a `format:` field in the YAML header to specify
-the body content type:
+All gax files use `content-type:` with standard MIME types (HTTP style) to specify
+the body format:
 
 ```yaml
 ---
-type: gax/sheet
-format: tsv
+type: gax/list
+content-type: text/tab-separated-values
 source: https://...
 ---
 ```
 
-| Format Value | Body Mode | Description |
-|--------------|-----------|-------------|
-| `csv` | `csv-mode` | Comma-separated values |
-| `tsv` | `csv-mode` | Tab-separated values |
-| `psv` | `csv-mode` | Pipe-separated values |
-| `json` | `json-mode` | JSON data |
-| `jsonl` | `json-mode` | JSON lines |
-| `yaml` | `yaml-mode` | YAML content (labels, filters) |
-| (absent) | `markdown-mode` | Default, no format field needed |
+| Content-Type | Body Mode | Features |
+|--------------|-----------|----------|
+| `text/csv` | `csv-mode` + `csv-align-mode` | Aligned columns |
+| `text/tab-separated-values` | `csv-mode` + `csv-align-mode` | Aligned columns |
+| `application/json` | `js-mode` | JSON syntax |
+| `application/yaml` | `yaml-mode` | YAML syntax |
+| (absent) | `markdown-mode` | Default |
 
-Markdown is the default and does not require an explicit `format:` field.
+Markdown is the default and does not require an explicit `content-type:` field.
+
+For tabular data (CSV/TSV), `csv-align-mode` is enabled by default to visually
+align columns without modifying the file content.
 
 ### Keybindings
 

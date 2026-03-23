@@ -3,7 +3,7 @@
 ;; Author: Heinrich Hartmann
 ;; URL: https://github.com/HeinrichHartmann/gax
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1") (polymode "0.2.2") (markdown-mode "2.5") (yaml-mode "0.0.15"))
+;; Package-Requires: ((emacs "27.1") (polymode "0.2.2") (markdown-mode "2.5") (yaml-mode "0.0.15") (csv-mode "1.21"))
 ;; Keywords: tools, google, sync
 
 ;;; Commentary:
@@ -53,11 +53,11 @@
         (compile (format "%s pull %s" gax-executable (shell-quote-argument file)))
       (error "Buffer is not visiting a file"))))
 
-;;; Format detection
+;;; Content-type detection
 
-(defun gax--parse-format ()
-  "Parse the `format:' field from the YAML header.
-Returns the format string or nil if not found."
+(defun gax--parse-content-type ()
+  "Parse the `content-type:' field from the YAML header.
+Returns the MIME type string or nil if not found."
   (save-excursion
     (goto-char (point-min))
     (when (looking-at "^---\n")
@@ -66,16 +66,20 @@ Returns the format string or nil if not found."
                           (if (re-search-forward "^---\n" nil t)
                               (match-beginning 0)
                             (point-max)))))
-        (when (re-search-forward "^format:\\s-*\\(.+\\)$" header-end t)
+        (when (re-search-forward "^content-type:\\s-*\\(.+\\)$" header-end t)
           (string-trim (match-string 1)))))))
 
-(defun gax--format-to-mode (format)
-  "Return the appropriate major mode for FORMAT string."
-  (pcase format
-    ((or "csv" "tsv" "psv") 'csv-mode)
-    ((or "json" "jsonl") 'js-mode)  ; js-mode is built-in, json-mode may not be
-    ("yaml" 'yaml-mode)
+(defun gax--content-type-to-mode (content-type)
+  "Return the appropriate major mode for CONTENT-TYPE MIME string."
+  (pcase content-type
+    ((or "text/csv" "text/tab-separated-values") 'csv-mode)
+    ("application/json" 'js-mode)  ; js-mode is built-in
+    ("application/yaml" 'yaml-mode)
     (_ 'markdown-mode)))
+
+(defun gax--content-type-tabular-p (content-type)
+  "Return non-nil if CONTENT-TYPE is a tabular format (CSV/TSV)."
+  (member content-type '("text/csv" "text/tab-separated-values")))
 
 ;;; Polymode definitions
 
@@ -103,18 +107,21 @@ Returns the format string or nil if not found."
     map)
   "Keymap for `gax-mode'.")
 
-;; Hook to set up format-specific body mode
+;; Hook to set up content-type-specific body mode
 (defun gax--setup-body-mode ()
-  "Set up the body mode based on the format: header field."
-  (let* ((format (gax--parse-format))
-         (mode (gax--format-to-mode format)))
-    ;; Update the hostmode for this buffer
-    (when (and format (not (eq mode 'markdown-mode)))
-      ;; For non-markdown formats, we adjust font-lock
-      (when (fboundp mode)
-        (funcall mode)
-        ;; Re-enable polymode after switching
-        (gax-mode)))))
+  "Set up the body mode based on the content-type: header field."
+  (let ((content-type (gax--parse-content-type)))
+    ;; Enable csv-align-mode for tabular data
+    (when (gax--content-type-tabular-p content-type)
+      (when (fboundp 'csv-mode)
+        ;; Set separator for TSV
+        (when (equal content-type "text/tab-separated-values")
+          (setq-local csv-separators '("\t")))
+        ;; Enable alignment
+        (when (fboundp 'csv-align-mode)
+          (csv-align-mode 1))))))
+
+(add-hook 'gax-mode-hook #'gax--setup-body-mode)
 
 ;; Auto-mode registration
 (add-to-list 'auto-mode-alist '("\\.gax\\'" . gax-mode))

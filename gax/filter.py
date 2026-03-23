@@ -301,6 +301,7 @@ def filter_pull_to_file(path) -> int:
 
     header = {
         "type": "gax/filters",
+        "content-type": "application/yaml",
         "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 

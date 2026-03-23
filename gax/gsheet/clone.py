@@ -31,6 +31,7 @@ def clone_all(
         df = client.read(spreadsheet_id, tab_name)
         data = formatter.write(df)
 
+        from ..formats import get_content_type
         section = Section(
             headers={
                 "type": "gax/sheet",
@@ -38,7 +39,7 @@ def clone_all(
                 "source": url,
                 "section": idx,
                 "tab": tab_name,
-                "format": fmt,
+                "content-type": get_content_type(fmt),
             },
             content=data,
         )
