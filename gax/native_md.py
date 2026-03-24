@@ -219,10 +219,19 @@ def split_doc_by_tabs(
     current_tab = None
     current_lines = []
 
+    def _normalize_header(text: str) -> str:
+        """Normalize Drive API header: strip bold markers and unescape markdown."""
+        text = text.strip()
+        if text.startswith("**") and text.endswith("**"):
+            text = text[2:-2]
+        # Unescape markdown special characters
+        text = re.sub(r'\\(.)', r'\1', text)
+        return text
+
     for line in lines:
         # Check if this line is a tab header
         if line.startswith("# "):
-            header_text = line[2:].strip()
+            header_text = _normalize_header(line[2:])
             if header_text in tab_titles:
                 # Save previous tab
                 if current_tab is not None:
@@ -238,6 +247,10 @@ def split_doc_by_tabs(
     # Save last tab
     if current_tab is not None:
         result[current_tab] = "\n".join(current_lines).strip()
+
+    # Fallback: single-tab doc with no H1 title header — use full content
+    if not result and len(tab_titles) == 1:
+        result[tab_titles[0]] = markdown.strip()
 
     return result
 
