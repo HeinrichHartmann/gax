@@ -1552,6 +1552,10 @@ def relabel_apply(plan_file: str):
 
         click.echo()
 
+        if not click.confirm("Apply these changes?"):
+            click.echo("Aborted.")
+            return
+
         # Create missing user labels (with parent labels for nesting)
         for label_name in sorted(labels_to_create):
             try:

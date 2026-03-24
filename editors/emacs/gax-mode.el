@@ -136,6 +136,7 @@ Returns the MIME type string or nil if not found."
 (add-to-list 'auto-mode-alist '("\\.draft\\.gax\\'" . gax-mode))
 (add-to-list 'auto-mode-alist '("\\.cal\\.gax\\'" . gax-mode))
 (add-to-list 'auto-mode-alist '("\\.tab\\.gax\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.form\\.gax\\'" . gax-mode))
 (add-to-list 'auto-mode-alist '("\\.label\\.mail\\.gax\\'" . gax-mode))
 (add-to-list 'auto-mode-alist '("\\.filter\\.mail\\.gax\\'" . gax-mode))
 

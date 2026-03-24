@@ -382,6 +382,10 @@ def label_apply(plan_file: str):
         if to_delete:
             click.echo(f"  Delete: {len(to_delete)}")
 
+        if not click.confirm("Apply these changes?"):
+            click.echo("Aborted.")
+            return
+
         # Execute changes
         # 1. Create (parents first for nesting)
         created = set()

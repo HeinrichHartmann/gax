@@ -526,6 +526,10 @@ def filter_apply(plan_file: str):
         if to_delete:
             click.echo(f"  Delete: {len(to_delete)}")
 
+        if not click.confirm("Apply these changes?"):
+            click.echo("Aborted.")
+            return
+
         # Get label mappings
         labels_result = service.users().labels().list(userId="me").execute()
         label_name_to_id = {lbl["name"]: lbl["id"] for lbl in labels_result.get("labels", [])}

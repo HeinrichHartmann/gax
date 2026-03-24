@@ -15,6 +15,7 @@ from . import auth
 from .gdoc import doc
 from .mail import mail
 from .gcal import cal_cli
+from .form import form
 
 
 @click.group()
@@ -96,6 +97,8 @@ def _detect_file_type(file_path: Path) -> str | None:
         return "gax/draft"
     if name.endswith(".cal.gax"):
         return "gax/cal"
+    if name.endswith(".form.gax"):
+        return "gax/form"
 
     return None
 
@@ -208,6 +211,29 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             days, calendar, verbose = _parse_cal_list_file(file_path)
             count = _clone_events_to_file(file_path, days=days, calendar=calendar, verbose=verbose)
             return True, f"{count} events"
+
+        elif file_type == "gax/form":
+            from .form import parse_form_file, get_form, form_to_yaml, form_to_markdown, extract_form_id
+
+            header = parse_form_file(file_path)
+            form_id = header.get("id")
+            if not form_id:
+                source = header.get("source", "")
+                if source:
+                    form_id = extract_form_id(source)
+                else:
+                    return False, "No form ID found"
+            source_url = header.get("source", f"https://docs.google.com/forms/d/{form_id}/edit")
+            content_type = header.get("content-type", "text/markdown")
+            form_data = get_form(form_id)
+            if content_type == "application/yaml":
+                content = form_to_yaml(form_data, source_url)
+            else:
+                content = form_to_markdown(form_data, source_url)
+            file_path.write_text(content, encoding="utf-8")
+            items = form_data.get("items", [])
+            questions = sum(1 for i in items if "questionItem" in i or "questionGroupItem" in i)
+            return True, f"{questions} questions"
 
         else:
             return False, f"Unsupported type: {file_type}"
@@ -356,6 +382,7 @@ def man(ctx):
         "    .mail.gax          Email thread",
         "    .draft.gax         Email draft",
         "    .cal.gax           Calendar event",
+        "    .form.gax          Google Form definition",
         "    .gax               Mail list (TSV with YAML header)",
         "    .label.mail.gax    Gmail labels state",
         "    .filter.mail.gax   Gmail filters state",
@@ -601,17 +628,31 @@ def tab_pull(file: Path):
 def tab_push(file: Path, with_formulas: bool):
     """Push local data to a single tab."""
     try:
+        # Preview: count rows in local file
+        from .frontmatter import parse_file
+        from .formats import get_format
+        config, data = parse_file(file)
+        fmt = get_format(config.format)
+        df = fmt.read(data)
+        row_count = len(df)
+
+        click.echo(f"Push {row_count} rows from {file} to {config.tab}?")
+        if not click.confirm("Proceed?"):
+            click.echo("Aborted.")
+            return
+
         rows = gsheet_push(file, with_formulas=with_formulas)
-        click.echo(f"Pushed {rows} rows from {file}")
+        click.echo(f"Pushed {rows} rows")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
-# Register doc, mail, and cal command groups
+# Register doc, mail, cal, and form command groups
 main.add_command(doc)
 main.add_command(mail)
 main.add_command(cal_cli, name="cal")
+main.add_command(form)
 
 
 if __name__ == "__main__":
