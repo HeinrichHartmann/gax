@@ -16,6 +16,7 @@ from .gdoc import doc
 from .mail import mail
 from .gcal import cal_cli
 from .form import form
+from .draft import draft
 
 
 @click.group()
@@ -303,6 +304,46 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
 
     if len(all_files) > 1:
         click.echo(f"Done: {success_count}/{len(all_files)} files updated")
+
+
+@main.command()
+@click.argument("url")
+@click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file")
+@click.option("--format", "fmt", type=click.Choice(["md", "yaml"]), default="md", help="Output format (for forms)")
+@click.pass_context
+def clone(ctx, url: str, output: Path | None, fmt: str):
+    """Clone a Google resource from URL.
+
+    Supports Google Docs, Sheets, Forms, Gmail, and Calendar events.
+    """
+    # Google Docs
+    if re.search(r"docs\.google\.com/document/d/", url):
+        ctx.invoke(doc.commands["clone"], url=url, output=output)
+
+    # Google Sheets
+    elif re.search(r"docs\.google\.com/spreadsheets/d/", url):
+        ctx.invoke(sheet_clone, url=url, output=output)
+
+    # Google Forms
+    elif re.search(r"docs\.google\.com/forms/d/", url):
+        ctx.invoke(form.commands["clone"], url=url, output=output, fmt=fmt)
+
+    # Gmail drafts (must come before general mail pattern)
+    elif re.search(r"mail\.google\.com/mail/[^#]*#drafts/", url):
+        ctx.invoke(draft.commands["clone"], draft_id_or_url=url, output=output)
+
+    # Gmail threads
+    elif re.search(r"mail\.google\.com/mail/", url):
+        ctx.invoke(mail.commands["thread"].commands["clone"], thread_id_or_url=url, output=output)
+
+    # Calendar events
+    elif re.search(r"calendar\.google\.com/calendar/", url):
+        ctx.invoke(cal_cli.commands["event"].commands["clone"], id_or_url=url, output_path=output)
+
+    else:
+        click.echo(f"Unrecognized URL: {url}", err=True)
+        click.echo("Supported: Google Docs/Sheets/Forms, Gmail, Calendar", err=True)
+        sys.exit(1)
 
 
 def _collect_commands(cmd: click.Command, prefix: str = "") -> list[tuple[str, str, list, list]]:
