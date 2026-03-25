@@ -17,6 +17,7 @@ from .mail import mail
 from .gcal import cal_cli
 from .form import form
 from .draft import draft
+from .contacts import contacts
 
 
 @click.group()
@@ -689,11 +690,12 @@ def tab_push(file: Path, with_formulas: bool):
         sys.exit(1)
 
 
-# Register doc, mail, cal, and form command groups
+# Register doc, mail, cal, form, and contacts command groups
 main.add_command(doc)
 main.add_command(mail)
 main.add_command(cal_cli, name="cal")
 main.add_command(form)
+main.add_command(contacts)
 
 
 if __name__ == "__main__":

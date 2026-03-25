@@ -44,12 +44,11 @@ gax contacts clone -f tsv --fields "name,email,phone"  # custom fields
 gax contacts pull contacts.jsonl
 gax contacts pull contacts.tsv
 
-# Push changes (JSONL or TSV only)
-gax contacts push contacts.jsonl
-gax contacts push contacts.tsv
+# Plan changes (JSONL only for now, TSV later)
+gax contacts plan contacts.jsonl -o contacts.plan.yaml
 
-# List available fields for TSV
-gax contacts fields
+# Apply changes
+gax contacts apply contacts.plan.yaml
 ```
 
 ### File Formats
@@ -178,10 +177,10 @@ people/c456	Bob Jones	bob@example.com;bob.jones@work.com	+1-555-0102
 
 ### Plan/Apply Workflow
 
-Push works with JSONL and TSV formats (MD is view-only):
+Plan/apply works with JSONL format (TSV later, MD is view-only):
 
 ```bash
-$ gax contacts push contacts.gax
+$ gax contacts plan contacts.jsonl
 Plan:
   Create: 2 contacts
   Update: 5 contacts
