@@ -108,34 +108,37 @@ def contacts_to_markdown(contacts: list[dict]) -> str:
     # Sort by name
     normalized.sort(key=lambda c: c.get("name", "").lower())
 
-    sections = []
+    entries = []
     for c in normalized:
-        lines = [f"## {c['name'] or '(unnamed)'}"]
+        lines = [f"- {c['name'] or '(unnamed)'}"]
         if c["email"]:
-            lines.append(f"- **Email**: {', '.join(c['email'])}")
+            lines.append(f"  - email: {', '.join(c['email'])}")
         if c["phone"]:
-            lines.append(f"- **Phone**: {', '.join(c['phone'])}")
+            lines.append(f"  - phone: {', '.join(c['phone'])}")
         if c["organization"] or c["title"]:
             org = c["organization"] or ""
             if c["title"]:
                 org = f"{org} ({c['title']})" if org else c["title"]
-            lines.append(f"- **Organization**: {org}")
+            lines.append(f"  - organization: {org}")
         if c["address"]:
-            lines.append(f"- **Address**: {c['address']}")
+            # Indent multiline addresses
+            addr = c["address"].replace("\n", "\n    ")
+            lines.append(f"  - address: {addr}")
         if c["birthday"]:
-            lines.append(f"- **Birthday**: {c['birthday']}")
+            lines.append(f"  - birthday: {c['birthday']}")
         if c["website"]:
-            lines.append(f"- **Website**: {c['website']}")
+            lines.append(f"  - website: {c['website']}")
         if c["notes"]:
-            # Truncate long notes
+            # Truncate long notes, indent multiline
             notes = c["notes"]
             if len(notes) > 100:
                 notes = notes[:100] + "..."
-            lines.append(f"- **Notes**: {notes}")
-        lines.append(f"\n<!-- resourceName: {c['resourceName']} -->")
-        sections.append("\n".join(lines))
+            notes = notes.replace("\n", "\n    ")
+            lines.append(f"  - notes: {notes}")
+        lines.append(f"  - id: {c['resourceName']}")
+        entries.append("\n".join(lines))
 
-    return "\n\n---\n\n".join(sections)
+    return "\n".join(entries)
 
 
 def format_header(fmt: str, count: int) -> str:
