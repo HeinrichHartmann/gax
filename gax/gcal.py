@@ -739,7 +739,7 @@ def list_cmd(calendar: str | None, days: int | None, date_from: str | None, date
 
 @cal_cli.command(name="clone")
 @click.argument("calendar", required=False)
-@click.argument("file", default="calendar.cal.gax")
+@click.option("-o", "--output", "file", default="calendar.cal.gax", help="Output file (default: calendar.cal.gax)")
 @click.option("--days", "-d", default=None, type=int, help="Number of days (default: 7)")
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
@@ -753,8 +753,8 @@ def clone_cmd(calendar: str | None, file: str, days: int | None, date_from: str 
     \b
     Examples:
         gax cal clone
-        gax cal clone Work week.cal.gax -d 7
-        gax cal clone --from 2026-03-01 --to 2026-03-31 march.cal.gax
+        gax cal clone Work -o week.cal.gax -d 7
+        gax cal clone --from 2026-03-01 --to 2026-03-31 -o march.cal.gax
     """
     from pathlib import Path
 
