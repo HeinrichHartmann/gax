@@ -6,7 +6,7 @@ Implements calendar viewing and event editing (ADR 007).
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -80,14 +80,16 @@ def list_calendars(*, service=None) -> list[dict]:
 
 def list_events(
     *,
-    days: int = 7,
+    time_min: datetime,
+    time_max: datetime,
     calendar_id: str = "primary",
     service=None,
 ) -> list[dict]:
-    """List events from a single calendar.
+    """List events from a single calendar within a time range.
 
     Args:
-        days: Number of days to look ahead
+        time_min: Start of time range (inclusive)
+        time_max: End of time range (exclusive)
         calendar_id: Calendar ID to query (default: "primary")
         service: Optional Calendar API service
 
@@ -97,9 +99,6 @@ def list_events(
     if service is None:
         service = get_calendar_service()
 
-    now = datetime.now(timezone.utc)
-    time_max = now + timedelta(days=days)
-
     # Resolve calendar name for display
     all_calendars = list_calendars(service=service)
     cal_id_to_name = {c["id"]: c["name"] for c in all_calendars}
@@ -107,7 +106,7 @@ def list_events(
 
     result = service.events().list(
         calendarId=calendar_id,
-        timeMin=now.isoformat(),
+        timeMin=time_min.isoformat(),
         timeMax=time_max.isoformat(),
         singleEvents=True,
         orderBy="startTime",
@@ -655,9 +654,48 @@ def _resolve_calendar_id(calendar: str | None) -> str:
     raise SystemExit(1)
 
 
+def _parse_date(s: str) -> date:
+    """Parse a YYYY-MM-DD date string."""
+    return date.fromisoformat(s)
+
+
+def _resolve_time_range(
+    days: int | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[datetime, datetime]:
+    """Compute time_min/time_max from CLI options.
+
+    --days and --from/--to are mutually exclusive.
+    """
+    has_range = date_from is not None or date_to is not None
+    has_days = days is not None
+
+    if has_range and has_days:
+        click.echo("Error: --days cannot be combined with --from/--to", err=True)
+        raise SystemExit(1)
+
+    if has_range:
+        if date_from is not None:
+            t_min = datetime.combine(_parse_date(date_from), datetime.min.time(), tzinfo=timezone.utc)
+        else:
+            t_min = datetime.now(timezone.utc)
+        if date_to is not None:
+            t_max = datetime.combine(_parse_date(date_to) + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+        else:
+            t_max = t_min + timedelta(days=7)
+        return t_min, t_max
+
+    # Default: --days mode (default 7)
+    now = datetime.now(timezone.utc)
+    return now, now + timedelta(days=days if days is not None else 7)
+
+
 @cal_cli.command(name="list")
 @click.argument("calendar", required=False)
-@click.option("--days", "-d", default=7, help="Number of days to show (default: 7)")
+@click.option("--days", "-d", default=None, type=int, help="Number of days to show (default: 7)")
+@click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
+@click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
 @click.option(
     "--format", "-f", "fmt",
     type=click.Choice(["md", "tsv"]),
@@ -665,8 +703,8 @@ def _resolve_calendar_id(calendar: str | None) -> str:
     help="Output format (default: md)"
 )
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-def list_cmd(calendar: str | None, days: int, fmt: str, verbose: bool):
-    """List upcoming events from a calendar.
+def list_cmd(calendar: str | None, days: int | None, date_from: str | None, date_to: str | None, fmt: str, verbose: bool):
+    """List events from a calendar.
 
     CALENDAR is a calendar name, ID, or numeric index (from 'gax cal calendars').
     Defaults to the primary calendar.
@@ -677,11 +715,12 @@ def list_cmd(calendar: str | None, days: int, fmt: str, verbose: bool):
         gax cal list -d 14            # Next 14 days
         gax cal list Work             # "Work" calendar
         gax cal list Work -d 3        # "Work" calendar, next 3 days
+        gax cal list --from 2026-03-01 --to 2026-03-15
         gax cal list -f tsv           # TSV output
-        gax cal list -v               # Include descriptions
     """
+    time_min, time_max = _resolve_time_range(days, date_from, date_to)
     calendar_id = _resolve_calendar_id(calendar)
-    events = list_events(days=days, calendar_id=calendar_id)
+    events = list_events(time_min=time_min, time_max=time_max, calendar_id=calendar_id)
 
     if fmt == "tsv":
         click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
@@ -692,10 +731,12 @@ def list_cmd(calendar: str | None, days: int, fmt: str, verbose: bool):
 @cal_cli.command(name="clone")
 @click.argument("calendar", required=False)
 @click.argument("file", default="calendar.cal.gax")
-@click.option("--days", "-d", default=7, help="Number of days (default: 7)")
+@click.option("--days", "-d", default=None, type=int, help="Number of days (default: 7)")
+@click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
+@click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-def clone_cmd(calendar: str | None, file: str, days: int, verbose: bool):
-    """Clone upcoming events to a .cal.gax file.
+def clone_cmd(calendar: str | None, file: str, days: int | None, date_from: str | None, date_to: str | None, verbose: bool):
+    """Clone events to a .cal.gax file.
 
     Creates a file with all events that can be updated with 'gax cal pull'.
     CALENDAR defaults to primary calendar.
@@ -704,17 +745,22 @@ def clone_cmd(calendar: str | None, file: str, days: int, verbose: bool):
     Examples:
         gax cal clone
         gax cal clone Work week.cal.gax -d 7
-        gax cal clone Work moss.cal.gax
-        gax cal clone -v verbose.cal.gax
+        gax cal clone --from 2026-03-01 --to 2026-03-31 march.cal.gax
     """
     from pathlib import Path
+
+    time_min, time_max = _resolve_time_range(days, date_from, date_to)
 
     path = Path(file)
     if path.exists():
         click.echo(f"Error: {file} already exists. Use 'gax cal pull' to update.", err=True)
         raise SystemExit(1)
 
-    count = _clone_events_to_file(path, days=days, calendar=calendar, verbose=verbose)
+    count = _clone_events_to_file(
+        path, time_min=time_min, time_max=time_max,
+        calendar=calendar, verbose=verbose,
+        days=days, date_from=date_from, date_to=date_to,
+    )
     click.echo(f"Cloned {count} events to {file}")
 
 
@@ -730,16 +776,27 @@ def pull_cmd(file: str):
     from pathlib import Path
 
     path = Path(file)
-    days, calendar, verbose = _parse_cal_list_file(path)
-    count = _clone_events_to_file(path, days=days, calendar=calendar, verbose=verbose)
+    time_min, time_max, calendar, verbose = _parse_cal_list_file(path)
+    # Recover original header values for re-serialization
+    import yaml as _yaml
+    _header = _yaml.safe_load(path.read_text().split("---", 2)[1])
+    count = _clone_events_to_file(
+        path, time_min=time_min, time_max=time_max,
+        calendar=calendar, verbose=verbose,
+        days=_header.get("days"),
+        date_from=str(_header["from"]) if "from" in _header else None,
+        date_to=str(_header["to"]) if "to" in _header else None,
+    )
     click.echo(f"Pulled {count} events to {file}")
 
 
 @cal_cli.command(name="checkout")
 @click.argument("calendar", required=False)
 @click.argument("folder", type=click.Path(path_type=Path))
-@click.option("--days", "-d", default=7, help="Number of days (default: 7)")
-def checkout_cmd(calendar: str | None, folder: Path, days: int):
+@click.option("--days", "-d", default=None, type=int, help="Number of days (default: 7)")
+@click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
+@click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
+def checkout_cmd(calendar: str | None, folder: Path, days: int | None, date_from: str | None, date_to: str | None):
     """Checkout events as individual .cal.gax files into a folder.
 
     Each event becomes a separate file that can be edited and pushed.
@@ -749,7 +806,7 @@ def checkout_cmd(calendar: str | None, folder: Path, days: int):
     Examples:
         gax cal checkout Week/
         gax cal checkout Work Week/ -d 7
-        gax cal checkout Work Moss/
+        gax cal checkout --from 2026-03-01 --to 2026-03-31 March/
 
     \b
     Workflow:
@@ -757,12 +814,13 @@ def checkout_cmd(calendar: str | None, folder: Path, days: int):
         2. edit files as needed
         3. gax push <file> to update calendar
     """
+    time_min, time_max = _resolve_time_range(days, date_from, date_to)
     # Create folder
     folder.mkdir(parents=True, exist_ok=True)
 
     # Get events
     calendar_id = _resolve_calendar_id(calendar)
-    events = list_events(days=days, calendar_id=calendar_id)
+    events = list_events(time_min=time_min, time_max=time_max, calendar_id=calendar_id)
 
     if not events:
         click.echo("No events found.")
@@ -825,21 +883,32 @@ def checkout_cmd(calendar: str | None, folder: Path, days: int):
 
 def _clone_events_to_file(
     path: "Path",
-    days: int = 7,
+    *,
+    time_min: datetime,
+    time_max: datetime,
     calendar: str | None = None,
     verbose: bool = False,
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> int:
     """Clone events to file. Returns event count."""
     calendar_id = _resolve_calendar_id(calendar)
-    events = list_events(days=days, calendar_id=calendar_id)
+    events = list_events(time_min=time_min, time_max=time_max, calendar_id=calendar_id)
 
-    # Build header
-    header = {
+    # Build header — store either days or from/to for pull
+    header: dict = {
         "type": "gax/cal-list",
         "content-type": "text/tab-separated-values",
-        "days": days,
-        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if date_from is not None or date_to is not None:
+        if date_from is not None:
+            header["from"] = date_from
+        if date_to is not None:
+            header["to"] = date_to
+    else:
+        header["days"] = days if days is not None else 7
+    header["pulled"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if calendar:
         header["calendar"] = calendar
     if verbose:
@@ -859,8 +928,8 @@ def _clone_events_to_file(
     return len(events)
 
 
-def _parse_cal_list_file(path: "Path") -> tuple[int, str | None, bool]:
-    """Parse cal list file header. Returns (days, calendar, verbose)."""
+def _parse_cal_list_file(path: "Path") -> tuple[datetime, datetime, str | None, bool]:
+    """Parse cal list file header. Returns (time_min, time_max, calendar, verbose)."""
     import yaml
 
     content = path.read_text()
@@ -875,7 +944,18 @@ def _parse_cal_list_file(path: "Path") -> tuple[int, str | None, bool]:
     if header.get("type") != "gax/cal-list":
         raise ValueError(f"Expected type: gax/cal-list, got: {header.get('type')}")
 
-    return header.get("days", 7), header.get("calendar"), header.get("verbose", False)
+    date_from = header.get("from")
+    date_to = header.get("to")
+    days = header.get("days")
+    calendar = header.get("calendar")
+    verbose = header.get("verbose", False)
+
+    time_min, time_max = _resolve_time_range(
+        days,
+        str(date_from) if date_from is not None else None,
+        str(date_to) if date_to is not None else None,
+    )
+    return time_min, time_max, calendar, verbose
 
 
 @cal_cli.group(name="event")

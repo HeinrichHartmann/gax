@@ -211,9 +211,17 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
 
         elif file_type == "gax/cal-list":
             from .gcal import _parse_cal_list_file, _clone_events_to_file
+            import yaml as _yaml
 
-            days, calendar, verbose = _parse_cal_list_file(file_path)
-            count = _clone_events_to_file(file_path, days=days, calendar=calendar, verbose=verbose)
+            time_min, time_max, calendar, verbose = _parse_cal_list_file(file_path)
+            _header = _yaml.safe_load(file_path.read_text().split("---", 2)[1])
+            count = _clone_events_to_file(
+                file_path, time_min=time_min, time_max=time_max,
+                calendar=calendar, verbose=verbose,
+                days=_header.get("days"),
+                date_from=str(_header["from"]) if "from" in _header else None,
+                date_to=str(_header["to"]) if "to" in _header else None,
+            )
             return True, f"{count} events"
 
         elif file_type == "gax/form":
