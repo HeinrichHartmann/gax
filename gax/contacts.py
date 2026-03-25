@@ -17,7 +17,7 @@ from .auth import get_authenticated_credentials
 
 ALL_PERSON_FIELDS = (
     "names,emailAddresses,phoneNumbers,organizations,"
-    "addresses,birthdays,biographies,nicknames,urls"
+    "addresses,birthdays,biographies,nicknames,urls,memberships"
 )
 
 
@@ -27,9 +27,37 @@ def get_contacts_service():
     return build("people", "v1", credentials=creds)
 
 
-def list_contacts(*, service=None) -> list[dict]:
-    """Fetch all contacts with all fields."""
+def get_contact_groups(*, service=None) -> dict[str, str]:
+    """Fetch contact groups and return mapping of resourceName -> name."""
     service = service or get_contacts_service()
+    groups = {}
+    page_token = None
+
+    while True:
+        result = (
+            service.contactGroups()
+            .list(pageSize=1000, pageToken=page_token)
+            .execute()
+        )
+        for group in result.get("contactGroups", []):
+            # Skip system groups like "myContacts", "starred"
+            if group.get("groupType") == "USER_CONTACT_GROUP":
+                groups[group["resourceName"]] = group.get("name", "")
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+
+    return groups
+
+
+def list_contacts(*, service=None) -> tuple[list[dict], dict[str, str]]:
+    """Fetch all contacts with all fields and contact groups."""
+    service = service or get_contacts_service()
+
+    # Fetch contact groups first
+    groups = get_contact_groups(service=service)
+
+    # Fetch contacts
     contacts = []
     page_token = None
 
@@ -50,10 +78,10 @@ def list_contacts(*, service=None) -> list[dict]:
         if not page_token:
             break
 
-    return contacts
+    return contacts, groups
 
 
-def normalize_contact(api_contact: dict) -> dict:
+def normalize_contact(api_contact: dict, groups: dict[str, str]) -> dict:
     """Normalize API contact to flat structure for JSONL."""
     names = api_contact.get("names") or [{}]
     orgs = api_contact.get("organizations") or [{}]
@@ -62,6 +90,7 @@ def normalize_contact(api_contact: dict) -> dict:
     bios = api_contact.get("biographies") or [{}]
     nicknames = api_contact.get("nicknames") or [{}]
     urls = api_contact.get("urls") or [{}]
+    memberships = api_contact.get("memberships") or []
 
     # Format birthday
     birthday = ""
@@ -75,6 +104,13 @@ def normalize_contact(api_contact: dict) -> dict:
                 birthday = f"{year:04d}-{month:02d}-{day:02d}"
             elif month and day:
                 birthday = f"--{month:02d}-{day:02d}"
+
+    # Extract labels from memberships (user-defined groups only)
+    labels = []
+    for m in memberships:
+        group_ref = m.get("contactGroupMembership", {}).get("contactGroupResourceName", "")
+        if group_ref in groups:
+            labels.append(groups[group_ref])
 
     return {
         "resourceName": api_contact.get("resourceName", ""),
@@ -91,20 +127,21 @@ def normalize_contact(api_contact: dict) -> dict:
         "notes": bios[0].get("value", ""),
         "nickname": nicknames[0].get("value", ""),
         "website": urls[0].get("value", ""),
+        "labels": labels,
     }
 
 
-def contacts_to_jsonl(contacts: list[dict]) -> str:
+def contacts_to_jsonl(contacts: list[dict], groups: dict[str, str]) -> str:
     """Format contacts as JSONL body (without header)."""
-    normalized = [normalize_contact(c) for c in contacts]
+    normalized = [normalize_contact(c, groups) for c in contacts]
     # Sort by name for consistent output
     normalized.sort(key=lambda c: c.get("name", "").lower())
     return "\n".join(json.dumps(c, ensure_ascii=False) for c in normalized)
 
 
-def contacts_to_markdown(contacts: list[dict]) -> str:
+def contacts_to_markdown(contacts: list[dict], groups: dict[str, str]) -> str:
     """Format contacts as markdown body (without header)."""
-    normalized = [normalize_contact(c) for c in contacts]
+    normalized = [normalize_contact(c, groups) for c in contacts]
     # Sort by name
     normalized.sort(key=lambda c: c.get("name", "").lower())
 
@@ -135,6 +172,8 @@ def contacts_to_markdown(contacts: list[dict]) -> str:
                 notes = notes[:100] + "..."
             notes = notes.replace("\n", "\n    ")
             lines.append(f"  - notes: {notes}")
+        if c["labels"]:
+            lines.append(f"  - labels: {', '.join(c['labels'])}")
         lines.append(f"  - id: {c['resourceName']}")
         entries.append("\n".join(lines))
 
@@ -230,13 +269,13 @@ def clone(fmt: str, output: Path | None):
     """
     try:
         click.echo("Fetching contacts...")
-        all_contacts = list_contacts()
+        all_contacts, groups = list_contacts()
 
         if fmt == "jsonl":
-            body = contacts_to_jsonl(all_contacts)
+            body = contacts_to_jsonl(all_contacts, groups)
             default_name = "contacts.jsonl"
         else:
-            body = contacts_to_markdown(all_contacts)
+            body = contacts_to_markdown(all_contacts, groups)
             default_name = "contacts.md"
 
         header = format_header(fmt, len(all_contacts))
@@ -270,12 +309,12 @@ def pull(file: Path):
         fmt = header.get("format", "md")
 
         click.echo("Fetching contacts...")
-        all_contacts = list_contacts()
+        all_contacts, groups = list_contacts()
 
         if fmt == "jsonl":
-            body = contacts_to_jsonl(all_contacts)
+            body = contacts_to_jsonl(all_contacts, groups)
         else:
-            body = contacts_to_markdown(all_contacts)
+            body = contacts_to_markdown(all_contacts, groups)
 
         new_header = format_header(fmt, len(all_contacts))
         content = f"{new_header}\n{body}\n"

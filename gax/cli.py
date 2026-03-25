@@ -245,11 +245,11 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
 
             header = parse_contacts_file(file_path)
             fmt = header.get("format", "md")
-            all_contacts = list_contacts()
+            all_contacts, groups = list_contacts()
             if fmt == "jsonl":
-                body = contacts_to_jsonl(all_contacts)
+                body = contacts_to_jsonl(all_contacts, groups)
             else:
-                body = contacts_to_markdown(all_contacts)
+                body = contacts_to_markdown(all_contacts, groups)
             new_header = format_header(fmt, len(all_contacts))
             content = f"{new_header}\n{body}\n"
             file_path.write_text(content, encoding="utf-8")
