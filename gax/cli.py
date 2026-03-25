@@ -101,6 +101,8 @@ def _detect_file_type(file_path: Path) -> str | None:
         return "gax/cal"
     if name.endswith(".form.gax"):
         return "gax/form"
+    if ".contacts." in name or name.endswith(".contacts.gax"):
+        return "gax/contacts"
 
     return None
 
@@ -236,6 +238,22 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             items = form_data.get("items", [])
             questions = sum(1 for i in items if "questionItem" in i or "questionGroupItem" in i)
             return True, f"{questions} questions"
+
+        elif file_type == "gax/contacts":
+            from .contacts import parse_contacts_file, list_contacts
+            from .contacts import contacts_to_jsonl, contacts_to_markdown, format_header
+
+            header = parse_contacts_file(file_path)
+            fmt = header.get("format", "md")
+            all_contacts = list_contacts()
+            if fmt == "jsonl":
+                body = contacts_to_jsonl(all_contacts)
+            else:
+                body = contacts_to_markdown(all_contacts)
+            new_header = format_header(fmt, len(all_contacts))
+            content = f"{new_header}\n{body}\n"
+            file_path.write_text(content, encoding="utf-8")
+            return True, f"{len(all_contacts)} contacts"
 
         else:
             return False, f"Unsupported type: {file_type}"
