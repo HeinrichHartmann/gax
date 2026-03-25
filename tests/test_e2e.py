@@ -343,7 +343,7 @@ class TestSheetE2E:
         output_file.write_text(updated_content)
 
         # Push
-        result = _run_gax("sheet", "tab", "push", str(output_file))
+        result = _run_gax("sheet", "tab", "push", str(output_file), "-y")
         assert result.returncode == 0, f"Push failed: {result.stderr}"
 
         # Verify via API

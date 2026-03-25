@@ -81,14 +81,14 @@ def list_calendars(*, service=None) -> list[dict]:
 def list_events(
     *,
     days: int = 7,
-    calendar_ids: list[str] | None = None,
+    calendar_id: str = "primary",
     service=None,
 ) -> list[dict]:
-    """List upcoming events.
+    """List events from a single calendar.
 
     Args:
         days: Number of days to look ahead
-        calendar_ids: Optional list of calendar IDs to filter (None = all calendars)
+        calendar_id: Calendar ID to query (default: "primary")
         service: Optional Calendar API service
 
     Returns:
@@ -100,43 +100,26 @@ def list_events(
     now = datetime.now(timezone.utc)
     time_max = now + timedelta(days=days)
 
-    # Get calendars to query
+    # Resolve calendar name for display
     all_calendars = list_calendars(service=service)
     cal_id_to_name = {c["id"]: c["name"] for c in all_calendars}
+    cal_name = cal_id_to_name.get(calendar_id, calendar_id)
 
-    if calendar_ids:
-        calendars = [{"id": cid, "name": cal_id_to_name.get(cid, cid)} for cid in calendar_ids]
-    else:
-        calendars = all_calendars
+    result = service.events().list(
+        calendarId=calendar_id,
+        timeMin=now.isoformat(),
+        timeMax=time_max.isoformat(),
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
 
-    all_events = []
+    events = []
+    for event in result.get("items", []):
+        event["_calendar_name"] = cal_name
+        event["_calendar_id"] = calendar_id
+        events.append(event)
 
-    for cal in calendars:
-        try:
-            result = service.events().list(
-                calendarId=cal["id"],
-                timeMin=now.isoformat(),
-                timeMax=time_max.isoformat(),
-                singleEvents=True,
-                orderBy="startTime",
-            ).execute()
-
-            for event in result.get("items", []):
-                event["_calendar_name"] = cal["name"]
-                event["_calendar_id"] = cal["id"]
-                all_events.append(event)
-        except Exception:
-            # Skip calendars we can't access
-            pass
-
-    # Sort by start time
-    def get_start(e):
-        start = e.get("start", {})
-        return start.get("dateTime", start.get("date", ""))
-
-    all_events.sort(key=get_start)
-
-    return all_events
+    return events
 
 
 def get_event(event_id: str, calendar_id: str = "primary", *, service=None) -> dict:
@@ -640,52 +623,41 @@ def calendars_cmd():
         click.echo(f"  {cal['id']}")
 
 
-def _resolve_calendar_ids(calendar: str | None) -> list[str] | None:
-    """Resolve calendar selector to list of IDs.
+def _resolve_calendar_id(calendar: str | None) -> str:
+    """Resolve calendar name or index to a calendar ID.
 
     Supports:
-        - Single name or ID: "Moss"
-        - Comma-separated: "Moss,Work"
-        - Numeric indices (1-based): "1,2,3"
-        - Mixed: "1,Moss,3"
+        - Name: "Moss"
+        - Full ID: "abc123@group.calendar.google.com"
+        - Numeric index (1-based): "2"
+
+    Returns "primary" if calendar is None.
     """
     if not calendar:
-        return None
+        return "primary"
 
     calendars = list_calendars()
-    result = []
 
-    for part in calendar.split(","):
-        part = part.strip()
-        if not part:
-            continue
+    # Try numeric index (1-based)
+    if calendar.isdigit():
+        idx = int(calendar) - 1
+        if 0 <= idx < len(calendars):
+            return calendars[idx]["id"]
+        click.echo(f"Calendar index out of range: {calendar} (have {len(calendars)})", err=True)
+        raise SystemExit(1)
 
-        # Try numeric index (1-based)
-        if part.isdigit():
-            idx = int(part) - 1
-            if 0 <= idx < len(calendars):
-                result.append(calendars[idx]["id"])
-            else:
-                click.echo(f"Calendar index out of range: {part} (have {len(calendars)})", err=True)
-                raise SystemExit(1)
-        else:
-            # Try name or ID match
-            found = False
-            for cal in calendars:
-                if cal["name"] == part or cal["id"] == part:
-                    result.append(cal["id"])
-                    found = True
-                    break
-            if not found:
-                click.echo(f"Calendar not found: {part}", err=True)
-                raise SystemExit(1)
+    # Try name or ID match
+    for cal in calendars:
+        if cal["name"] == calendar or cal["id"] == calendar:
+            return cal["id"]
 
-    return result if result else None
+    click.echo(f"Calendar not found: {calendar}", err=True)
+    raise SystemExit(1)
 
 
-@cal_cli.group(name="list", invoke_without_command=True)
+@cal_cli.command(name="list")
+@click.argument("calendar", required=False)
 @click.option("--days", "-d", default=7, help="Number of days to show (default: 7)")
-@click.option("--cal", "-c", "calendar", help="Filter by calendar (name, ID, or index 1-8). Comma-separated for multiple.")
 @click.option(
     "--format", "-f", "fmt",
     type=click.Choice(["md", "tsv"]),
@@ -693,75 +665,67 @@ def _resolve_calendar_ids(calendar: str | None) -> list[str] | None:
     help="Output format (default: md)"
 )
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-@click.pass_context
-def list_group(ctx, days: int, calendar: str | None, fmt: str, verbose: bool):
-    """List upcoming events.
+def list_cmd(calendar: str | None, days: int, fmt: str, verbose: bool):
+    """List upcoming events from a calendar.
 
-    Without subcommand, lists events to stdout.
+    CALENDAR is a calendar name, ID, or numeric index (from 'gax cal calendars').
+    Defaults to the primary calendar.
 
     \b
     Examples:
-        gax cal list                  # List next 7 days
-        gax cal list -d 14            # List next 14 days
-        gax cal list -c Moss          # Filter by calendar
+        gax cal list                  # Primary calendar, next 7 days
+        gax cal list -d 14            # Next 14 days
+        gax cal list Work             # "Work" calendar
+        gax cal list Work -d 3        # "Work" calendar, next 3 days
+        gax cal list -f tsv           # TSV output
         gax cal list -v               # Include descriptions
-        gax cal list clone week.cal.gax  # Clone to file
     """
-    # Store options for subcommands
-    ctx.ensure_object(dict)
-    ctx.obj["days"] = days
-    ctx.obj["calendar"] = calendar
-    ctx.obj["fmt"] = fmt
-    ctx.obj["verbose"] = verbose
+    calendar_id = _resolve_calendar_id(calendar)
+    events = list_events(days=days, calendar_id=calendar_id)
 
-    # If no subcommand, run default behavior
-    if ctx.invoked_subcommand is None:
-        calendar_ids = _resolve_calendar_ids(calendar)
-        events = list_events(days=days, calendar_ids=calendar_ids)
-
-        if fmt == "tsv":
-            click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
-        else:
-            click.echo(format_events_markdown(events, include_desc=verbose), nl=False)
+    if fmt == "tsv":
+        click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
+    else:
+        click.echo(format_events_markdown(events, include_desc=verbose), nl=False)
 
 
-@list_group.command(name="clone")
+@cal_cli.command(name="clone")
+@click.argument("calendar", required=False)
 @click.argument("file", default="calendar.cal.gax")
 @click.option("--days", "-d", default=7, help="Number of days (default: 7)")
-@click.option("--cal", "-c", "calendar", help="Filter by calendar (name, ID, or index). Comma-separated for multiple.")
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-def list_clone_cmd(file: str, days: int, calendar: str | None, verbose: bool):
+def clone_cmd(calendar: str | None, file: str, days: int, verbose: bool):
     """Clone upcoming events to a .cal.gax file.
 
-    Creates a file with all events that can be updated with 'gax pull'.
+    Creates a file with all events that can be updated with 'gax cal pull'.
+    CALENDAR defaults to primary calendar.
 
     \b
     Examples:
-        gax cal list clone
-        gax cal list clone week.cal.gax -d 7
-        gax cal list clone moss.cal.gax -c Moss
-        gax cal list clone -c 2,8     # Multiple calendars
-        gax cal list clone -v         # Include descriptions
+        gax cal clone
+        gax cal clone Work week.cal.gax -d 7
+        gax cal clone Work moss.cal.gax
+        gax cal clone -v verbose.cal.gax
     """
     from pathlib import Path
 
     path = Path(file)
     if path.exists():
-        click.echo(f"Error: {file} already exists. Use 'gax pull' to update.", err=True)
+        click.echo(f"Error: {file} already exists. Use 'gax cal pull' to update.", err=True)
         raise SystemExit(1)
 
     count = _clone_events_to_file(path, days=days, calendar=calendar, verbose=verbose)
     click.echo(f"Cloned {count} events to {file}")
 
 
-@list_group.command(name="pull")
+@cal_cli.command(name="pull")
 @click.argument("file", type=click.Path(exists=True))
-def list_pull_cmd(file: str):
+def pull_cmd(file: str):
     """Pull latest events to existing file.
 
     \b
     Example:
-        gax cal list pull week.cal.gax
+        gax cal pull week.cal.gax
     """
     from pathlib import Path
 
@@ -771,21 +735,21 @@ def list_pull_cmd(file: str):
     click.echo(f"Pulled {count} events to {file}")
 
 
-@list_group.command(name="checkout")
+@cal_cli.command(name="checkout")
+@click.argument("calendar", required=False)
 @click.argument("folder", type=click.Path(path_type=Path))
 @click.option("--days", "-d", default=7, help="Number of days (default: 7)")
-@click.option("--cal", "-c", "calendar", help="Filter by calendar (name, ID, or index). Comma-separated for multiple.")
-def list_checkout_cmd(folder: Path, days: int, calendar: str | None):
+def checkout_cmd(calendar: str | None, folder: Path, days: int):
     """Checkout events as individual .cal.gax files into a folder.
 
     Each event becomes a separate file that can be edited and pushed.
+    CALENDAR defaults to primary calendar.
 
     \b
     Examples:
-        gax cal list checkout Week/
-        gax cal list checkout Week/ -d 7
-        gax cal list checkout Moss/ -c Moss
-        gax cal list checkout Family/ -c 2,8
+        gax cal checkout Week/
+        gax cal checkout Work Week/ -d 7
+        gax cal checkout Work Moss/
 
     \b
     Workflow:
@@ -797,8 +761,8 @@ def list_checkout_cmd(folder: Path, days: int, calendar: str | None):
     folder.mkdir(parents=True, exist_ok=True)
 
     # Get events
-    calendar_ids = _resolve_calendar_ids(calendar)
-    events = list_events(days=days, calendar_ids=calendar_ids)
+    calendar_id = _resolve_calendar_id(calendar)
+    events = list_events(days=days, calendar_id=calendar_id)
 
     if not events:
         click.echo("No events found.")
@@ -866,8 +830,8 @@ def _clone_events_to_file(
     verbose: bool = False,
 ) -> int:
     """Clone events to file. Returns event count."""
-    calendar_ids = _resolve_calendar_ids(calendar)
-    events = list_events(days=days, calendar_ids=calendar_ids)
+    calendar_id = _resolve_calendar_id(calendar)
+    events = list_events(days=days, calendar_id=calendar_id)
 
     # Build header
     header = {

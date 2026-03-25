@@ -685,7 +685,8 @@ def tab_pull(file: Path):
 @click.option(
     "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
 )
-def tab_push(file: Path, with_formulas: bool):
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+def tab_push(file: Path, with_formulas: bool, yes: bool):
     """Push local data to a single tab."""
     try:
         # Preview: count rows in local file
@@ -697,7 +698,7 @@ def tab_push(file: Path, with_formulas: bool):
         row_count = len(df)
 
         click.echo(f"Push {row_count} rows from {file} to {config.tab}?")
-        if not click.confirm("Proceed?"):
+        if not yes and not click.confirm("Proceed?"):
             click.echo("Aborted.")
             return
 
