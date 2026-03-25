@@ -104,19 +104,28 @@ def list_events(
     cal_id_to_name = {c["id"]: c["name"] for c in all_calendars}
     cal_name = cal_id_to_name.get(calendar_id, calendar_id)
 
-    result = service.events().list(
-        calendarId=calendar_id,
-        timeMin=time_min.isoformat(),
-        timeMax=time_max.isoformat(),
-        singleEvents=True,
-        orderBy="startTime",
-    ).execute()
-
     events = []
-    for event in result.get("items", []):
-        event["_calendar_name"] = cal_name
-        event["_calendar_id"] = calendar_id
-        events.append(event)
+    page_token = None
+
+    while True:
+        result = service.events().list(
+            calendarId=calendar_id,
+            timeMin=time_min.isoformat(),
+            timeMax=time_max.isoformat(),
+            singleEvents=True,
+            orderBy="startTime",
+            maxResults=2500,
+            pageToken=page_token,
+        ).execute()
+
+        for event in result.get("items", []):
+            event["_calendar_name"] = cal_name
+            event["_calendar_id"] = calendar_id
+            events.append(event)
+
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
 
     return events
 
