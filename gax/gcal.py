@@ -739,12 +739,12 @@ def list_cmd(calendar: str | None, days: int | None, date_from: str | None, date
 
 @cal_cli.command(name="clone")
 @click.argument("calendar", required=False)
-@click.option("-o", "--output", "file", default="calendar.cal.gax", help="Output file (default: calendar.cal.gax)")
+@click.option("-o", "--output", default="calendar.cal.gax", help="Output file (default: calendar.cal.gax)")
 @click.option("--days", "-d", default=None, type=int, help="Number of days (default: 7)")
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-def clone_cmd(calendar: str | None, file: str, days: int | None, date_from: str | None, date_to: str | None, verbose: bool):
+def clone_cmd(calendar: str | None, output: str, days: int | None, date_from: str | None, date_to: str | None, verbose: bool):
     """Clone events to a .cal.gax file.
 
     Creates a file with all events that can be updated with 'gax cal pull'.
@@ -760,9 +760,9 @@ def clone_cmd(calendar: str | None, file: str, days: int | None, date_from: str 
 
     time_min, time_max = _resolve_time_range(days, date_from, date_to)
 
-    path = Path(file)
+    path = Path(output)
     if path.exists():
-        click.echo(f"Error: {file} already exists. Use 'gax cal pull' to update.", err=True)
+        click.echo(f"Error: {output} already exists. Use 'gax cal pull' to update.", err=True)
         raise SystemExit(1)
 
     count = _clone_events_to_file(
@@ -770,7 +770,7 @@ def clone_cmd(calendar: str | None, file: str, days: int | None, date_from: str 
         calendar=calendar, verbose=verbose,
         days=days, date_from=date_from, date_to=date_to,
     )
-    click.echo(f"Cloned {count} events to {file}")
+    click.echo(f"Cloned {count} events to {output}")
 
 
 @cal_cli.command(name="pull")
