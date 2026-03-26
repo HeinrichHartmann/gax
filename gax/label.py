@@ -138,9 +138,9 @@ def label_pull_to_file(path, include_all: bool = False) -> int:
 
 
 @label.command("clone")
-@click.argument("file", default="label.mail.gax")
+@click.option("-o", "--output", default="mail-labels.gax", help="Output file (default: mail-labels.gax)")
 @click.option("--all", "include_all", is_flag=True, help="Include system labels (read-only)")
-def label_clone(file: str, include_all: bool):
+def label_clone(output: str, include_all: bool):
     """Clone Gmail labels to a .gax file.
 
     Creates a state file with all user labels and their settings.
@@ -148,16 +148,16 @@ def label_clone(file: str, include_all: bool):
 
     \b
     Example:
-        gax mail label clone
-        gax mail label clone mylabels.label.mail.gax
-        gax mail label clone --all  # include system labels
+        gax mail-label clone
+        gax mail-label clone -o mylabels.gax
+        gax mail-label clone --all  # include system labels
     """
     try:
-        if Path(file).exists():
-            click.echo(f"Error: {file} already exists. Use 'pull' to update.", err=True)
+        if Path(output).exists():
+            click.echo(f"Error: {output} already exists. Use 'pull' to update.", err=True)
             sys.exit(1)
-        count = label_pull_to_file(file, include_all)
-        click.echo(f"Cloned {count} labels to {file}")
+        count = label_pull_to_file(output, include_all)
+        click.echo(f"Cloned {count} labels to {output}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

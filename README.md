@@ -51,6 +51,19 @@ COMMANDS
   cal:
     gax cal calendars
         List available calendars.
+    gax cal checkout [CALENDAR]
+        Checkout events as individual .cal.gax files into a folder.
+        -o, --output: Output folder (default: calendar.cal.gax.d)
+        --days, -d: Number of days (default: 7)
+        --from: Start date (YYYY-MM-DD)
+        --to: End date (YYYY-MM-DD)
+    gax cal clone [CALENDAR]
+        Clone events to a .cal.gax file.
+        -o, --output: Output file (default: calendar.cal.gax)
+        --days, -d: Number of days (default: 7)
+        --from: Start date (YYYY-MM-DD)
+        --to: End date (YYYY-MM-DD)
+        -v, --verbose: Include event descriptions
     gax cal event clone [ID_OR_URL]
         Clone an event to a local .cal.gax file.
         --cal, -c: Calendar ID (default: primary)
@@ -67,11 +80,34 @@ COMMANDS
     gax cal event push [FILE_PATH]
         Push local changes to API.
         -y, --yes: Skip confirmation
-    gax cal list
-        List upcoming events.
+    gax cal list [CALENDAR]
+        List events from a calendar.
         --days, -d: Number of days to show (default: 7)
-        --cal, -c: Filter by calendar name or ID
+        --from: Start date (YYYY-MM-DD)
+        --to: End date (YYYY-MM-DD)
         --format, -f: Output format (default: md)
+        -v, --verbose: Include event descriptions
+    gax cal pull [FILE]
+        Pull latest events to existing file.
+
+  clone:
+    gax clone [URL]
+        Clone a Google resource from URL.
+        -o, --output: Output file
+        --format: Output format (for forms)
+
+  contacts:
+    gax contacts apply [PLAN_FILE]
+        Apply a contacts plan to Google.
+    gax contacts clone
+        Clone all contacts to a local file.
+        -f, --format: Output format: md (view-only) or jsonl (editable)
+        -o, --output: Output file (default: contacts.<format>)
+    gax contacts plan [FILE]
+        Generate a plan for syncing local contacts to Google.
+        -o, --output: Output plan file (default: <file>.plan.yaml)
+    gax contacts pull [FILE]
+        Pull latest contacts from Google.
 
   doc:
     gax doc clone [URL]
@@ -97,74 +133,96 @@ COMMANDS
         Push local changes to a single tab (with confirmation).
         -y, --yes: Skip confirmation prompt
 
-  mail:
-    gax mail draft clone [DRAFT_ID_OR_URL]
+  draft:
+    gax draft clone [DRAFT_ID_OR_URL]
         Clone an existing draft from Gmail.
         --output, -o: Output file (default: <subject>.draft.gax)
-    gax mail draft list
+    gax draft list
         List Gmail drafts (TSV output).
         --limit: Maximum results (default: 100)
-    gax mail draft new
+    gax draft new
         Create a new local draft file.
         --output, -o: Output file (default: <subject>.draft.gax)
         --to: Recipient email address
         --subject: Email subject
-    gax mail draft pull [FILE]
+    gax draft pull [FILE]
         Pull latest content from Gmail draft.
-    gax mail draft push [FILE]
+    gax draft push [FILE]
         Push local draft to Gmail.
         -y, --yes: Skip confirmation prompt
-    gax mail filter apply [PLAN_FILE]
+
+  form:
+    gax form apply [PLAN_FILE]
+        Apply form changes from a plan file.
+    gax form clone [URL]
+        Clone a Google Form to a local .form.gax file.
+        --output, -o: Output file (default: <title>.form.gax)
+        --format, -f: Content format: md (readable, default) or yaml (round-trip safe)
+    gax form plan [FILE]
+        Generate a plan from edited form file.
+        -o, --output: Output plan file
+    gax form pull [FILE]
+        Pull latest form definition from Google Forms.
+
+  mail:
+    gax mail clone [THREAD_ID_OR_URL]
+        Clone a single email thread to a local .mail.gax file.
+        --output, -o: Output file
+    gax mail pull [PATH]
+        Pull latest messages for .mail.gax file(s).
+    gax mail reply [FILE_OR_URL]
+        Create a reply draft from a thread.
+        --output, -o: Output file (default: Re_<subject>.draft.gax)
+
+  mail-filter:
+    gax mail-filter apply [PLAN_FILE]
         Apply filter changes from plan file.
-    gax mail filter clone [FILE]
+    gax mail-filter clone
         Clone Gmail filters to a .gax file.
-    gax mail filter list
+        -o, --output: Output file (default: mail-filters.gax)
+    gax mail-filter list
         List Gmail filters (TSV output).
-    gax mail filter plan [FILE]
+    gax mail-filter plan [FILE]
         Generate plan from edited filters file.
         -o, --output: Output plan file
-        --delete: Include deletions in plan
-    gax mail filter pull [FILE]
+    gax mail-filter pull [FILE]
         Pull latest filters to existing file.
-    gax mail label apply [PLAN_FILE]
+
+  mail-label:
+    gax mail-label apply [PLAN_FILE]
         Apply label changes from plan file.
-    gax mail label clone [FILE]
+    gax mail-label clone
         Clone Gmail labels to a .gax file.
+        -o, --output: Output file (default: mail-labels.gax)
         --all: Include system labels (read-only)
-    gax mail label list
+    gax mail-label list
         List Gmail labels (TSV output).
-    gax mail label plan [FILE]
+    gax mail-label plan [FILE]
         Generate plan from edited labels file.
         -o, --output: Output plan file
         --delete: Include deletions in plan
-    gax mail label pull [FILE]
+    gax mail-label pull [FILE]
         Pull latest labels to existing file.
         --all: Include system labels (read-only)
-    gax mail list apply [PLAN_FILE]
+
+  mailbox:
+    gax mailbox apply [PLAN_FILE]
         Apply label changes from plan.
-    gax mail list checkout [FOLDER]
-        Checkout full threads matching query into a folder.
-        -q, --query: Search query (default: in:inbox)
-        --limit: Maximum threads (default: 50)
-    gax mail list clone [FILE]
+    gax mailbox clone
         Clone threads from Gmail for bulk labeling.
+        -o, --output: Output file (default: mailbox.gax)
         -q, --query: Search query (default: in:inbox)
         --limit: Maximum threads (default: 50)
-    gax mail list plan [FILE]
+    gax mailbox fetch
+        Fetch full threads matching query into a folder.
+        -o, --output: Output folder (default: mailbox.gax.d)
+        -q, --query: Search query (default: in:inbox)
+        --limit: Maximum threads (default: 50)
+    gax mailbox plan [FILE]
         Generate plan from edited list file.
-        -o, --output: Output file
-    gax mail list pull [FILE]
+        -o, --output: Output file (default: mailbox.plan.yaml)
+    gax mailbox pull [FILE]
         Update a .gax file by re-fetching from Gmail.
-    gax mail thread clone [QUERY_OR_ID]
-        Clone email thread(s) to local .mail.gax file(s).
-        --to: Clone to folder (bulk mode)
-        --output, -o: Output file (single thread mode)
-        --limit: Maximum threads to clone in bulk mode (default: 100)
-    gax mail thread pull [PATH]
-        Pull latest messages for .mail.gax file(s).
-    gax mail thread reply [FILE_OR_URL]
-        Create a reply draft from a thread.
-        --output, -o: Output file (default: Re_<subject>.draft.gax)
 
   pull:
     gax pull [FILES]
@@ -189,6 +247,7 @@ COMMANDS
     gax sheet tab push [FILE]
         Push local data to a single tab.
         --with-formulas: Interpret formulas (e.g. =SUM(A1:A10))
+        -y, --yes: Skip confirmation prompt
 
 FILES
     .sheet.gax         Spreadsheet data (single or multipart)
@@ -197,6 +256,7 @@ FILES
     .mail.gax          Email thread
     .draft.gax         Email draft
     .cal.gax           Calendar event
+    .form.gax          Google Form definition
     .gax               Mail list (TSV with YAML header)
     .label.mail.gax    Gmail labels state
     .filter.mail.gax   Gmail filters state
@@ -215,15 +275,18 @@ Every `.gax` file is self-describing: a YAML header contains the resource type a
 
 ### Extension Convention
 
-The file extension mirrors the command path in reverse:
+The file extension mirrors the command path:
 
 | Command | Extension |
 |---------|-----------|
-| `gax mail thread` | `.mail.gax` |
-| `gax mail label` | `.label.mail.gax` |
-| `gax mail filter` | `.filter.mail.gax` |
+| `gax mail` | `.mail.gax` |
+| `gax draft` | `.draft.gax` |
+| `gax mailbox` | `.mailbox.gax` |
+| `gax mail-label` | `mail-labels.gax` |
+| `gax mail-filter` | `mail-filters.gax` |
 | `gax sheet` | `.sheet.gax` |
 | `gax doc` | `.doc.gax` |
+| `gax cal` | `.cal.gax` |
 
 ### Single-Section Files
 

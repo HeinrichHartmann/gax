@@ -801,11 +801,11 @@ def pull_cmd(file: str):
 
 @cal_cli.command(name="checkout")
 @click.argument("calendar", required=False)
-@click.argument("folder", type=click.Path(path_type=Path))
+@click.option("-o", "--output", default="calendar.cal.gax.d", type=click.Path(path_type=Path), help="Output folder (default: calendar.cal.gax.d)")
 @click.option("--days", "-d", default=None, type=int, help="Number of days (default: 7)")
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
-def checkout_cmd(calendar: str | None, folder: Path, days: int | None, date_from: str | None, date_to: str | None):
+def checkout_cmd(calendar: str | None, output: Path, days: int | None, date_from: str | None, date_to: str | None):
     """Checkout events as individual .cal.gax files into a folder.
 
     Each event becomes a separate file that can be edited and pushed.
@@ -813,9 +813,10 @@ def checkout_cmd(calendar: str | None, folder: Path, days: int | None, date_from
 
     \b
     Examples:
-        gax cal checkout Week/
-        gax cal checkout Work Week/ -d 7
-        gax cal checkout --from 2026-03-01 --to 2026-03-31 March/
+        gax cal checkout
+        gax cal checkout -o Week/
+        gax cal checkout Work -o Week/ -d 7
+        gax cal checkout --from 2026-03-01 --to 2026-03-31 -o March/
 
     \b
     Workflow:
@@ -825,7 +826,7 @@ def checkout_cmd(calendar: str | None, folder: Path, days: int | None, date_from
     """
     time_min, time_max = _resolve_time_range(days, date_from, date_to)
     # Create folder
-    folder.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=True)
 
     # Get events
     calendar_id = _resolve_calendar_id(calendar)
@@ -837,9 +838,9 @@ def checkout_cmd(calendar: str | None, folder: Path, days: int | None, date_from
 
     click.echo(f"Found {len(events)} events")
 
-    # Get existing event IDs in folder
+    # Get existing event IDs in output folder
     existing_ids = set()
-    for f in folder.glob("*.cal.gax"):
+    for f in output.glob("*.cal.gax"):
         try:
             content = f.read_text()
             if "id:" in content:
@@ -873,11 +874,11 @@ def checkout_cmd(calendar: str | None, folder: Path, days: int | None, date_from
             date_str = start.get("dateTime", start.get("date", ""))[:10]
             filename = f"{date_str}_{safe_title}.cal.gax"
 
-            file_path = folder / filename
+            file_path = output / filename
 
             # Avoid overwriting
             if file_path.exists():
-                file_path = folder / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax"
+                file_path = output / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax"
 
             content = event_to_yaml(event_data)
             file_path.write_text(content)

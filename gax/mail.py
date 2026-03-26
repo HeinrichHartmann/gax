@@ -18,8 +18,7 @@ from .auth import get_authenticated_credentials
 from .store import store_blob
 from . import multipart
 from . import draft as draft_module
-from .label import label as label_group
-from .filter import filter_group
+# label and filter are now registered in cli.py as top-level commands (ADR 020)
 
 
 @dataclass
@@ -314,15 +313,11 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
 # =============================================================================
 
 
-@click.group()
-def mail():
-    """Gmail operations"""
-    pass
-
+# Old mail container group removed - thread is now the mail group (ADR 020)
 
 @click.group()
 def thread():
-    """Email thread operations"""
+    """Individual email thread operations (clone, pull, reply)"""
     pass
 
 
@@ -750,8 +745,8 @@ def reply(file_or_url: str, output: Optional[Path]):
         sys.exit(1)
 
 
-# Register draft subcommand group
-mail.add_command(draft_module.draft)
+# Draft is now a top-level command (registered in cli.py)
+# mail.add_command(draft_module.draft)  # Removed - see ADR 020
 
 
 # =============================================================================
@@ -763,16 +758,16 @@ mail.add_command(draft_module.draft)
 @click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
 @click.option("--limit", default=20, help="Maximum results (default: 20)")
 @click.pass_context
-def list_group(ctx, query: str, limit: int):
+def mailbox(ctx, query: str, limit: int):
     """Search/list Gmail threads and bulk label operations.
 
     Without subcommand, lists threads matching query (TSV output).
 
     \b
     Examples:
-        gax mail list                      # List inbox
-        gax mail list -q "from:alice"      # Search
-        gax mail list clone "in:inbox"     # Clone for bulk labeling
+        gax mailbox                        # List inbox
+        gax mailbox -q "from:alice"        # Search
+        gax mailbox clone                  # Clone for bulk labeling
     """
     if ctx.invoked_subcommand is None:
         # Default action: search/list threads
@@ -1021,25 +1016,25 @@ def _parse_gax_content(path: Path) -> str:
     return content[header_end + 5:]  # Skip \n---\n
 
 
-@list_group.command("checkout")
-@click.argument("folder", type=click.Path(path_type=Path))
+@mailbox.command("fetch")
+@click.option("-o", "--output", default="mailbox.gax.d", type=click.Path(path_type=Path), help="Output folder (default: mailbox.gax.d)")
 @click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
-def list_checkout(folder: Path, query: str, limit: int):
-    """Checkout full threads matching query into a folder.
+def mailbox_fetch(output: Path, query: str, limit: int):
+    """Fetch full threads matching query into a folder.
 
-    Searches Gmail and clones each matching thread as a full .mail.gax file.
+    Searches Gmail and retrieves each matching thread as a full .mail.gax file.
     Incremental: skips existing threads.
 
     \b
     Examples:
-        gax mail list checkout Inbox/
-        gax mail list checkout Inbox/ -q "in:inbox"
-        gax mail list checkout Alice/ -q "from:alice" --limit 100
+        gax mailbox fetch
+        gax mailbox fetch -o Inbox/ -q "in:inbox"
+        gax mailbox fetch -o Alice/ -q "from:alice" --limit 100
 
     \b
     Workflow:
-        1. checkout -> materialize full threads to folder
+        1. fetch -> retrieve full threads from Gmail to folder
         2. grep/search folder contents as needed
     """
     try:
@@ -1081,11 +1076,11 @@ def list_checkout(folder: Path, query: str, limit: int):
         thread_ids = [t["id"] for t in threads]
         click.echo(f"Found {len(thread_ids)} threads")
 
-        # Create folder
-        folder.mkdir(parents=True, exist_ok=True)
+        # Create output folder
+        output.mkdir(parents=True, exist_ok=True)
 
         # Get already cloned thread IDs
-        existing_ids = _get_existing_thread_ids(folder)
+        existing_ids = _get_existing_thread_ids(output)
 
         # Clone each thread
         cloned = 0
@@ -1105,12 +1100,12 @@ def list_checkout(folder: Path, query: str, limit: int):
                 filename = _make_filename(
                     first.date, first.from_addr, first.title, thread_id
                 )
-                file_path = folder / filename
+                file_path = output / filename
 
                 # Avoid overwriting
                 if file_path.exists():
                     base = file_path.stem
-                    file_path = folder / f"{base}_{thread_id}.mail.gax"
+                    file_path = output / f"{base}_{thread_id}.mail.gax"
 
                 file_path.write_text(content, encoding="utf-8")
                 cloned += 1
@@ -1126,11 +1121,11 @@ def list_checkout(folder: Path, query: str, limit: int):
         sys.exit(1)
 
 
-@list_group.command("clone")
-@click.argument("file")
+@mailbox.command("clone")
+@click.option("-o", "--output", default="mailbox.gax", help="Output file (default: mailbox.gax)")
 @click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
-def relabel_clone(file: str, query: str, limit: int):
+def mailbox_clone(output: str, query: str, limit: int):
     """Clone threads from Gmail for bulk labeling.
 
     Creates a .gax file with current state. Use 'pull' to update,
@@ -1144,9 +1139,9 @@ def relabel_clone(file: str, query: str, limit: int):
 
     \b
     Examples:
-        gax mail list clone inbox.gax
-        gax mail list clone inbox.gax -q "in:inbox"
-        gax mail list clone spam.gax -q "in:spam" --limit 100
+        gax mailbox clone
+        gax mailbox clone -o inbox.gax -q "in:inbox"
+        gax mailbox clone -o spam.gax -q "in:spam" --limit 100
 
     \b
     Workflow:
@@ -1156,11 +1151,11 @@ def relabel_clone(file: str, query: str, limit: int):
         4. plan   -> compute diff
         5. apply  -> execute changes
     """
-    output_path = file
+    output_path = Path(output)
 
     # Check for existing file
-    if Path(output_path).exists():
-        click.echo(f"Error: {output_path} already exists. Use 'pull' to update.", err=True)
+    if output_path.exists():
+        click.echo(f"Error: {output} already exists. Use 'pull' to update.", err=True)
         sys.exit(1)
 
     try:
@@ -1175,17 +1170,16 @@ def relabel_clone(file: str, query: str, limit: int):
 
         thread_data = _relabel_fetch_threads(service, query, limit, label_id_to_name)
 
-        path = Path(output_path)
-        _write_gax_file(path, query, limit, thread_data)
+        _write_gax_file(output_path, query, limit, thread_data)
 
-        click.echo(f"Cloned {len(thread_data)} threads to {output_path}")
+        click.echo(f"Cloned {len(thread_data)} threads to {output}")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
-@list_group.command("pull")
+@mailbox.command("pull")
 @click.argument("file", type=click.Path(exists=True))
 def relabel_pull(file: str):
     """Update a .gax file by re-fetching from Gmail.
@@ -1254,10 +1248,10 @@ def _parse_tsv_line(line: str) -> list[str]:
     return fields
 
 
-@list_group.command("plan")
+@mailbox.command("plan")
 @click.argument("file", type=click.Path(exists=True))
-@click.option("-o", "--output", "output_path", default="list.plan.yaml", help="Output file")
-def relabel_plan(file: str, output_path: str):
+@click.option("-o", "--output", default="mailbox.plan.yaml", help="Output file (default: mailbox.plan.yaml)")
+def mailbox_plan(file: str, output: str):
     """Generate plan from edited list file.
 
     Compares desired state (sys/cat/labels) with current state in Gmail.
@@ -1455,7 +1449,7 @@ def relabel_plan(file: str, output_path: str):
             "changes": changes,
         }
 
-        path = Path(output_path)
+        path = Path(output)
         with open(path, "w") as f:
             yaml.dump(plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
@@ -1466,7 +1460,7 @@ def relabel_plan(file: str, output_path: str):
         add_count = sum(1 for c in changes if c.get("add"))
         remove_count = sum(1 for c in changes if c.get("remove"))
 
-        click.echo(f"Wrote {len(changes)} changes to {output_path}")
+        click.echo(f"Wrote {len(changes)} changes to {output}")
         if sys_add_count or sys_remove_count:
             click.echo(f"  System label changes: {sys_add_count + sys_remove_count}")
         if cat_change_count:
@@ -1481,7 +1475,7 @@ def relabel_plan(file: str, output_path: str):
         sys.exit(1)
 
 
-@list_group.command("apply")
+@mailbox.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
 def relabel_apply(plan_file: str):
     """Apply label changes from plan.
@@ -1646,8 +1640,9 @@ def relabel_apply(plan_file: str):
         sys.exit(1)
 
 
-# Register subcommand groups
-mail.add_command(thread)
-mail.add_command(list_group, name="list")
-mail.add_command(label_group, name="label")
-mail.add_command(filter_group, name="filter")
+# All mail subcommands are now top-level (registered in cli.py) - see ADR 020
+# - thread → mail (individual threads)
+# - list → mailbox (thread collections)
+# - draft → draft (top-level)
+# - label → mail-label (top-level)
+# - filter → mail-filter (top-level)

@@ -315,8 +315,8 @@ def filter_pull_to_file(path) -> int:
 
 
 @filter_group.command("clone")
-@click.argument("file", default="filter.mail.gax")
-def filter_clone(file: str):
+@click.option("-o", "--output", default="mail-filters.gax", help="Output file (default: mail-filters.gax)")
+def filter_clone(output: str):
     """Clone Gmail filters to a .gax file.
 
     Creates a state file with all filters and their settings.
@@ -324,16 +324,16 @@ def filter_clone(file: str):
 
     \b
     Example:
-        gax mail filter clone
-        gax mail filter clone myfilters.filter.mail.gax
+        gax mail-filter clone
+        gax mail-filter clone -o myfilters.gax
     """
     from pathlib import Path
     try:
-        if Path(file).exists():
-            click.echo(f"Error: {file} already exists. Use 'pull' to update.", err=True)
+        if Path(output).exists():
+            click.echo(f"Error: {output} already exists. Use 'pull' to update.", err=True)
             sys.exit(1)
-        count = filter_pull_to_file(file)
-        click.echo(f"Cloned {count} filters to {file}")
+        count = filter_pull_to_file(output)
+        click.echo(f"Cloned {count} filters to {output}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

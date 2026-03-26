@@ -13,7 +13,9 @@ from .frontmatter import SheetConfig, format_content, parse_content
 from .formats import get_format
 from . import auth
 from .gdoc import doc
-from .mail import mail
+from .mail import thread as mail_group, mailbox
+from .label import label as mail_label
+from .filter import filter_group as mail_filter
 from .gcal import cal_cli
 from .form import form
 from .draft import draft
@@ -361,7 +363,7 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
 
     # Gmail threads
     elif re.search(r"mail\.google\.com/mail/", url):
-        ctx.invoke(mail.commands["thread"].commands["clone"], thread_id_or_url=url, output=output)
+        ctx.invoke(mail_group.commands["clone"], thread_id_or_url=url, output=output)
 
     # Calendar events
     elif re.search(r"calendar\.google\.com/calendar/", url):
@@ -373,16 +375,19 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
         sys.exit(1)
 
 
-def _collect_commands(cmd: click.Command, prefix: str = "") -> list[tuple[str, str, list, list]]:
+def _collect_commands(cmd: click.Command, prefix: str = "", override_name: str | None = None) -> list[tuple[str, str, list, list]]:
     """Collect all commands as (full_name, help, arguments, options) tuples."""
     results = []
-    name = f"{prefix} {cmd.name}".strip() if prefix else cmd.name
+    # Use override_name if provided (for renamed commands), otherwise use cmd.name
+    cmd_name = override_name if override_name else cmd.name
+    name = f"{prefix} {cmd_name}".strip() if prefix else cmd_name
 
     if isinstance(cmd, click.Group):
         for subcmd_name in sorted(cmd.list_commands(None)):
             subcmd = cmd.get_command(None, subcmd_name)
             if subcmd:
-                results.extend(_collect_commands(subcmd, name))
+                # Pass subcmd_name as override to preserve registered names
+                results.extend(_collect_commands(subcmd, name, subcmd_name))
     else:
         # Get first line of help only
         help_text = (cmd.help or "").split("\n")[0]
@@ -421,7 +426,8 @@ def man(ctx):
             continue
         cmd = root.get_command(ctx, cmd_name)
         if cmd:
-            commands = _collect_commands(cmd)
+            # Pass cmd_name to preserve registered names (e.g., "mail" not "thread")
+            commands = _collect_commands(cmd, override_name=cmd_name)
             if commands:
                 groups[cmd_name] = commands
 
@@ -719,9 +725,13 @@ def tab_push(file: Path, with_formulas: bool, yes: bool):
 
 # Register doc, mail, cal, form, and contacts command groups
 main.add_command(doc)
-main.add_command(mail)
+main.add_command(mail_group, name="mail")  # Flattened from mail.thread (ADR 020)
+main.add_command(mailbox)  # Flattened from mail.list (ADR 020)
+main.add_command(mail_label, name="mail-label")  # Flattened from mail.label (ADR 020)
+main.add_command(mail_filter, name="mail-filter")  # Flattened from mail.filter (ADR 020)
 main.add_command(cal_cli, name="cal")
 main.add_command(form)
+main.add_command(draft)  # Flattened from mail.draft (ADR 020)
 main.add_command(contacts)
 
 
