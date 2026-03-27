@@ -240,21 +240,75 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
         click.echo(f"\nChanges for {folder_path}/:")
         click.echo("-" * 60)
 
+        def filter_timestamps(lines: list[str]) -> list[str]:
+            """Remove timestamp lines from YAML headers."""
+            import re
+            filtered = []
+            for line in lines:
+                # Skip lines that are just timestamps
+                if re.match(r'^\s*(pulled|checked_out|time):\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$', line):
+                    continue
+                filtered.append(line)
+            return filtered
+
+        def count_diff_lines(file1: Path, file2: Path) -> tuple[int, int] | None:
+            """Count added/removed lines between two files, excluding timestamps.
+
+            Returns (added, removed) or None if files are identical after filtering.
+            """
+            import difflib
+
+            try:
+                content1 = file1.read_text(encoding='utf-8').splitlines(keepends=True)
+                content2 = file2.read_text(encoding='utf-8').splitlines(keepends=True)
+
+                # Filter timestamps
+                filtered1 = filter_timestamps(content1)
+                filtered2 = filter_timestamps(content2)
+
+                # Check if identical after filtering
+                if filtered1 == filtered2:
+                    return None
+
+                # Count changes
+                diff = list(difflib.unified_diff(filtered1, filtered2, lineterm=''))
+                added = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
+                removed = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
+
+                return (added, removed)
+            except Exception:
+                # If we can't read/diff, treat as changed
+                return (1, 1)
+
+        real_changes = 0
+
         def show_diff(dcmp: dircmp, prefix: str = ""):
+            nonlocal real_changes
+
             # Files only in scratch (new files)
             for name in dcmp.left_only:
                 if not name.startswith("."):
                     click.echo(f"  + {prefix}{name}")
+                    real_changes += 1
 
             # Files only in current (deleted files)
             for name in dcmp.right_only:
                 if not name.startswith("."):
                     click.echo(f"  - {prefix}{name}")
+                    real_changes += 1
 
-            # Modified files
+            # Modified files - check if really changed beyond timestamps
             for name in dcmp.diff_files:
                 if not name.startswith("."):
-                    click.echo(f"  M {prefix}{name}")
+                    scratch_file = Path(dcmp.left) / name
+                    current_file = Path(dcmp.right) / name
+
+                    diff_stats = count_diff_lines(scratch_file, current_file)
+                    if diff_stats is not None:
+                        added, removed = diff_stats
+                        click.echo(f"  M {prefix}{name} (+{added}/-{removed} lines)")
+                        real_changes += 1
+                    # else: only timestamps changed, don't show or count
 
             # Recurse into subdirectories
             for sub_dcmp in dcmp.subdirs.values():
@@ -263,9 +317,7 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
         dcmp = dircmp(str(scratch_path), str(folder_path))
         show_diff(dcmp)
 
-        # Count changes
-        total_changes = len(dcmp.left_only) + len(dcmp.right_only) + len(dcmp.diff_files)
-        if total_changes == 0:
+        if real_changes == 0:
             click.echo("  (no changes)")
             shutil.rmtree(scratch_path)
             return True, "up to date"
@@ -294,7 +346,7 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
         # Clean up scratch
         shutil.rmtree(scratch_path)
 
-        return True, f"{total_changes} changes applied"
+        return True, f"{real_changes} changes applied"
 
     except Exception as e:
         # Clean up scratch on error
