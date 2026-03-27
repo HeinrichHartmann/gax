@@ -229,7 +229,7 @@ COMMANDS
 
   pull:
     gax pull [FILES]
-        Pull/update .gax file(s) from their sources.
+        Pull/update .gax file(s) or .gax.d folder(s) from their sources.
         -v, --verbose: Verbose output
 
   sheet:

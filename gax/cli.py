@@ -110,6 +110,199 @@ def _detect_file_type(file_path: Path) -> str | None:
     return None
 
 
+def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
+    """Pull a .gax.d folder. Returns (success, message).
+
+    Performs a checkout to a scratch directory, shows diff, and asks for confirmation.
+    """
+    import shutil
+    import yaml
+    from filecmp import dircmp
+
+    # Read .gax.yaml metadata
+    metadata_path = folder_path / ".gax.yaml"
+    if not metadata_path.exists():
+        return False, "No .gax.yaml metadata file found"
+
+    try:
+        with open(metadata_path, "r") as f:
+            metadata = yaml.safe_load(f)
+    except Exception as e:
+        return False, f"Failed to read .gax.yaml: {e}"
+
+    checkout_type = metadata.get("type")
+    if not checkout_type:
+        return False, "No type in .gax.yaml"
+
+    # Create scratch directory in .gax/
+    scratch_base = Path(".gax")
+    scratch_base.mkdir(exist_ok=True)
+
+    # Use folder name for scratch dir
+    scratch_name = f"{folder_path.name}.tmp"
+    scratch_path = scratch_base / scratch_name
+
+    # Remove scratch dir if it exists
+    if scratch_path.exists():
+        shutil.rmtree(scratch_path)
+
+    try:
+        # Perform checkout to scratch directory
+        if checkout_type == "gax/sheet-checkout":
+            url = metadata.get("url")
+            if not url:
+                return False, "No URL in .gax.yaml"
+            fmt = metadata.get("format", "md")
+
+            # Import sheet checkout logic
+            spreadsheet_id = metadata.get("spreadsheet_id")
+            if not spreadsheet_id:
+                return False, "No spreadsheet_id in .gax.yaml"
+
+            # Run checkout to scratch dir
+            from .gsheet.client import GSheetClient
+            client = GSheetClient()
+            info = client.get_spreadsheet_info(spreadsheet_id)
+            tabs = info['tabs']
+
+            scratch_path.mkdir(parents=True, exist_ok=True)
+
+            # Write metadata
+            new_metadata = {
+                'type': 'gax/sheet-checkout',
+                'spreadsheet_id': spreadsheet_id,
+                'url': url,
+                'title': info['title'],
+                'format': fmt,
+                'checked_out': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            with open(scratch_path / '.gax.yaml', 'w') as f:
+                yaml.dump(new_metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+            # Create tab files
+            for tab_info in tabs:
+                tab_name = tab_info['title']
+                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
+                file_name = f"{safe_tab_name}.tab.sheet.gax"
+
+                df = client.read(spreadsheet_id, tab_name)
+                formatter = get_format(fmt)
+                data = formatter.write(df)
+
+                config = SheetConfig(
+                    spreadsheet_id=spreadsheet_id,
+                    tab=tab_name,
+                    format=fmt,
+                    url=url,
+                )
+                content = format_content(config, data)
+                (scratch_path / file_name).write_text(content, encoding="utf-8")
+
+        elif checkout_type == "gax/doc-checkout":
+            url = metadata.get("url")
+            document_id = metadata.get("document_id")
+            if not url or not document_id:
+                return False, "No URL or document_id in .gax.yaml"
+
+            # Run checkout to scratch dir
+            from .gdoc import pull_doc, format_section
+            sections = pull_doc(document_id, url)
+
+            scratch_path.mkdir(parents=True, exist_ok=True)
+
+            # Write metadata
+            new_metadata = {
+                "type": "gax/doc-checkout",
+                "document_id": document_id,
+                "url": url,
+                "title": sections[0].title if sections else metadata.get("title", ""),
+                "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            with open(scratch_path / ".gax.yaml", "w") as f:
+                yaml.dump(new_metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+            # Create tab files
+            for section in sections:
+                if section.section_type == "comments":
+                    continue
+                tab_name = section.section_title
+                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
+                file_name = f"{safe_tab_name}.tab.gax"
+
+                content = format_section(section)
+                (scratch_path / file_name).write_text(content, encoding="utf-8")
+        else:
+            return False, f"Unsupported checkout type: {checkout_type}"
+
+        # Show diff
+        click.echo(f"\nChanges for {folder_path}/:")
+        click.echo("-" * 60)
+
+        def show_diff(dcmp: dircmp, prefix: str = ""):
+            # Files only in scratch (new files)
+            for name in dcmp.left_only:
+                if not name.startswith("."):
+                    click.echo(f"  + {prefix}{name}")
+
+            # Files only in current (deleted files)
+            for name in dcmp.right_only:
+                if not name.startswith("."):
+                    click.echo(f"  - {prefix}{name}")
+
+            # Modified files
+            for name in dcmp.diff_files:
+                if not name.startswith("."):
+                    click.echo(f"  M {prefix}{name}")
+
+            # Recurse into subdirectories
+            for sub_dcmp in dcmp.subdirs.values():
+                show_diff(sub_dcmp, prefix + sub_dcmp.left + "/")
+
+        dcmp = dircmp(str(scratch_path), str(folder_path))
+        show_diff(dcmp)
+
+        # Count changes
+        total_changes = len(dcmp.left_only) + len(dcmp.right_only) + len(dcmp.diff_files)
+        if total_changes == 0:
+            click.echo("  (no changes)")
+            shutil.rmtree(scratch_path)
+            return True, "up to date"
+
+        click.echo("-" * 60)
+
+        # Prompt for confirmation
+        if not click.confirm(f"\nApply these changes to {folder_path}?"):
+            shutil.rmtree(scratch_path)
+            return False, "cancelled"
+
+        # Apply changes by syncing scratch to folder
+        # Delete files that are in folder but not in scratch
+        for name in dcmp.right_only:
+            if not name.startswith("."):
+                (folder_path / name).unlink()
+
+        # Copy new and modified files from scratch to folder
+        for name in dcmp.left_only + dcmp.diff_files:
+            if not name.startswith("."):
+                shutil.copy2(scratch_path / name, folder_path / name)
+
+        # Copy metadata file
+        shutil.copy2(scratch_path / ".gax.yaml", folder_path / ".gax.yaml")
+
+        # Clean up scratch
+        shutil.rmtree(scratch_path)
+
+        return True, f"{total_changes} changes applied"
+
+    except Exception as e:
+        # Clean up scratch on error
+        if scratch_path.exists():
+            shutil.rmtree(scratch_path)
+        return False, str(e)
+
+
 def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
     """Pull a single .gax file. Returns (success, message)."""
     file_type = _detect_file_type(file_path)
@@ -277,63 +470,85 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
 @click.argument("files", nargs=-1, required=True)
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
 def unified_pull(files: tuple[str, ...], verbose: bool):
-    """Pull/update .gax file(s) from their sources.
+    """Pull/update .gax file(s) or .gax.d folder(s) from their sources.
 
     Automatically detects file type from YAML header and calls
-    the appropriate pull command.
+    the appropriate pull command. For .gax.d folders, performs
+    a checkout to a scratch directory, shows diff, and prompts
+    for confirmation.
 
     \b
     Examples:
         gax pull file.doc.gax           # Pull a single doc
         gax pull *.gax                   # Pull all .gax files
         gax pull inbox.gax notes.doc.gax # Pull multiple files
+        gax pull folder.doc.gax.d/       # Pull a checkout folder
     """
     # Expand globs and '.'
-    all_files: list[Path] = []
+    all_paths: list[Path] = []
     for pattern in files:
         if pattern == ".":
-            # Current directory - find all .gax files
-            all_files.extend(Path(".").glob("*.gax"))
+            # Current directory - find all .gax files and .gax.d folders
+            all_paths.extend(Path(".").glob("*.gax"))
+            all_paths.extend(Path(".").glob("*.gax.d"))
         elif "*" in pattern or "?" in pattern:
             # Glob pattern
-            all_files.extend(Path(p) for p in glob.glob(pattern))
+            all_paths.extend(Path(p) for p in glob.glob(pattern))
         else:
-            all_files.append(Path(pattern))
+            all_paths.append(Path(pattern))
 
-    if not all_files:
-        click.echo("No .gax files found.", err=True)
+    if not all_paths:
+        click.echo("No .gax files or .gax.d folders found.", err=True)
         sys.exit(1)
 
     success_count = 0
-    for file_path in all_files:
-        if not file_path.exists():
-            click.echo(f"Error: {file_path} not found", err=True)
+    for path in all_paths:
+        if not path.exists():
+            click.echo(f"Error: {path} not found", err=True)
             continue
 
-        file_type = _detect_file_type(file_path)
-        type_str = f"({file_type})" if file_type else "(unknown)"
+        # Check if it's a folder
+        if path.is_dir():
+            if not path.name.endswith(".gax.d"):
+                click.echo(f"Skipping directory: {path} (not a .gax.d folder)", err=True)
+                continue
 
-        if verbose:
-            click.echo(f"Pulling {file_path} {type_str}...", nl=False)
+            # Pull folder
+            success, message = _pull_folder(path, verbose)
 
-        success, message = _pull_file(file_path, verbose)
-
-        if verbose:
             if success:
-                click.echo(f" {message}")
+                if message != "cancelled":
+                    click.echo(f"Pulled {path}: {message}")
+                success_count += 1
             else:
-                click.echo(f" ERROR: {message}")
+                if message != "cancelled":
+                    click.echo(f"Error: {path}: {message}", err=True)
         else:
-            if success:
-                click.echo(f"Pulling {file_path} {type_str}... {message}")
+            # Pull file
+            file_type = _detect_file_type(path)
+            type_str = f"({file_type})" if file_type else "(unknown)"
+
+            if verbose:
+                click.echo(f"Pulling {path} {type_str}...", nl=False)
+
+            success, message = _pull_file(path, verbose)
+
+            if verbose:
+                if success:
+                    click.echo(f" {message}")
+                else:
+                    click.echo(f" ERROR: {message}")
             else:
-                click.echo(f"Error: {file_path}: {message}", err=True)
+                if success:
+                    click.echo(f"Pulling {path} {type_str}... {message}")
+                else:
+                    click.echo(f"Error: {path}: {message}", err=True)
 
-        if success:
-            success_count += 1
+            if success:
+                success_count += 1
 
-    if len(all_files) > 1:
-        click.echo(f"Done: {success_count}/{len(all_files)} files updated")
+    if len(all_paths) > 1:
+        click.echo(f"Done: {success_count}/{len(all_paths)} updated")
 
 
 @main.command()
