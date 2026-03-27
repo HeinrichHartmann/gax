@@ -604,6 +604,98 @@ def sheet_pull(file: Path):
         sys.exit(1)
 
 
+@sheet.command("checkout")
+@click.argument("url")
+@click.option(
+    "-o", "--output",
+    type=click.Path(path_type=Path),
+    help="Output folder (default: <title>.sheet.gax.d)"
+)
+@click.option(
+    "-f", "--format", "fmt", default="md", help="Output format: md, csv, tsv, psv, json, jsonl"
+)
+def sheet_checkout(url: str, output: Path | None, fmt: str):
+    """Checkout all tabs to individual files in a folder.
+
+    Creates a folder with individual .sheet.gax files for each tab.
+    Incremental: skips existing files.
+
+    \b
+    Examples:
+        gax sheet checkout <url>
+        gax sheet checkout <url> -o MyBudget/
+        gax sheet checkout <url> -f csv
+    """
+    try:
+        spreadsheet_id = _extract_spreadsheet_id(url)
+        client = GSheetClient()
+        info = client.get_spreadsheet_info(spreadsheet_id)
+
+        title = info['title']
+        tabs = info['tabs']
+
+        # Determine output folder
+        if output:
+            folder = output
+        else:
+            safe_name = re.sub(r'[<>:"/\\|?*]', "-", title)
+            safe_name = re.sub(r"\s+", "_", safe_name)
+            folder = Path(f"{safe_name}.sheet.gax.d")
+
+        # Create folder
+        folder.mkdir(parents=True, exist_ok=True)
+
+        click.echo(f"Checking out {len(tabs)} tabs to {folder}/")
+
+        created = 0
+        skipped = 0
+
+        for tab_info in tabs:
+            tab_name = tab_info['title']
+
+            # Generate filename
+            safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+            safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
+            file_path = folder / f"{safe_tab_name}.sheet.gax"
+
+            # Skip if exists
+            if file_path.exists():
+                skipped += 1
+                continue
+
+            try:
+                # Read tab data
+                df = client.read(spreadsheet_id, tab_name)
+
+                # Format data
+                formatter = get_format(fmt)
+                data = formatter.write(df)
+
+                # Create config
+                config = SheetConfig(
+                    spreadsheet_id=spreadsheet_id,
+                    tab=tab_name,
+                    format=fmt,
+                    url=url,
+                )
+
+                # Write file
+                content = format_content(config, data)
+                file_path.write_text(content, encoding="utf-8")
+
+                created += 1
+                click.echo(f"  {file_path.name} ({len(df)} rows)")
+
+            except Exception as e:
+                click.echo(f"  Error with tab '{tab_name}': {e}", err=True)
+
+        click.echo(f"Checked out: {created}, Skipped: {skipped} (already present)")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 @sheet.group()
 def tab():
     """Single tab operations"""

@@ -230,6 +230,10 @@ COMMANDS
         -v, --verbose: Verbose output
 
   sheet:
+    gax sheet checkout [URL]
+        Checkout all tabs to individual files in a folder.
+        -o, --output: Output folder (default: <title>.sheet.gax.d)
+        -f, --format: Output format: md, csv, tsv, psv, json, jsonl
     gax sheet clone [URL]
         Clone all tabs from a spreadsheet to a multipart .sheet.gax file.
         --output, -o: Output file (default: <title>.sheet.gax)

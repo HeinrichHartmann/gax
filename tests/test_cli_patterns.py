@@ -78,6 +78,7 @@ WRITABLE_RESOURCES = [
 CHECKOUT_RESOURCES = {
     'cal': 'checkout',
     'mailbox': 'fetch',
+    'sheet': 'checkout',
 }
 
 
