@@ -79,6 +79,7 @@ CHECKOUT_RESOURCES = {
     'cal': 'checkout',
     'mailbox': 'fetch',
     'sheet': 'checkout',
+    'doc': 'checkout',
 }
 
 

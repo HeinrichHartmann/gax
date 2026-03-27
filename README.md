@@ -110,6 +110,9 @@ COMMANDS
         Pull latest contacts from Google.
 
   doc:
+    gax doc checkout [URL]
+        Checkout all tabs to individual files in a folder.
+        -o, --output: Output folder (default: <title>.doc.gax.d)
     gax doc clone [URL]
         Clone a Google Doc to a local .doc.gax file.
         --output, -o: Output file (default: <title>.doc.gax)

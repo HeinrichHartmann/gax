@@ -929,3 +929,97 @@ def pull(file: Path, with_comments: bool):
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@doc.command()
+@click.argument("url")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help="Output folder (default: <title>.doc.gax.d)",
+)
+def checkout(url: str, output: Optional[Path]):
+    """Checkout all tabs to individual files in a folder.
+
+    Creates a folder with individual .tab.gax files for each tab.
+    Incremental: skips existing files.
+    """
+    try:
+        import yaml
+
+        document_id = extract_doc_id(url)
+        source_url = f"https://docs.google.com/document/d/{document_id}/edit"
+
+        click.echo(f"Fetching: {document_id}")
+        sections = pull_doc(document_id, source_url)
+
+        if not sections:
+            click.echo("Error: No sections found in document", err=True)
+            sys.exit(1)
+
+        title = sections[0].title
+
+        # Determine output folder
+        if output:
+            folder = output
+        else:
+            safe_name = re.sub(r'[<>:"/\\|?*]', "-", title)
+            safe_name = re.sub(r"\s+", "_", safe_name)
+            folder = Path(f"{safe_name}.doc.gax.d")
+
+        # Create folder
+        folder.mkdir(parents=True, exist_ok=True)
+
+        # Write .gax.yaml metadata file
+        metadata = {
+            "type": "gax/doc-checkout",
+            "document_id": document_id,
+            "url": source_url,
+            "title": title,
+            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        metadata_path = folder / ".gax.yaml"
+        with open(metadata_path, "w") as f:
+            yaml.dump(
+                metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+            )
+
+        click.echo(f"Checking out {len(sections)} tabs to {folder}/")
+
+        created = 0
+        skipped = 0
+
+        for section in sections:
+            tab_name = section.section_title
+
+            # Skip comment sections
+            if section.section_type == "comments":
+                continue
+
+            # Generate filename
+            safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+            safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
+            file_path = folder / f"{safe_tab_name}.tab.gax"
+
+            # Skip if exists
+            if file_path.exists():
+                skipped += 1
+                continue
+
+            try:
+                # Write file with full YAML header
+                content = format_section(section)
+                file_path.write_text(content, encoding="utf-8")
+
+                created += 1
+                click.echo(f"  {file_path.name}")
+
+            except Exception as e:
+                click.echo(f"  Error with tab '{tab_name}': {e}", err=True)
+
+        click.echo(f"Checked out: {created}, Skipped: {skipped} (already present)")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
