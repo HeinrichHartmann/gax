@@ -45,7 +45,7 @@ def download_file(file_id: str, output_path: Path) -> dict:
     # Get file metadata
     file_metadata = service.files().get(
         fileId=file_id,
-        fields='id,name,mimeType,size,webViewLink'
+        fields='id,name,mimeType,size,webViewLink,webContentLink'
     ).execute()
 
     # Download file content
@@ -92,12 +92,17 @@ def upload_file(
     file = service.files().create(
         body=file_metadata,
         media_body=media,
-        fields='id,name,mimeType,size,webViewLink'
+        fields='id,name,mimeType,size,webViewLink,webContentLink'
     ).execute()
 
     # Set public permissions if requested
     if public:
         set_public(file['id'], True)
+        # Re-fetch to get webContentLink after making public
+        file = service.files().get(
+            fileId=file['id'],
+            fields='id,name,mimeType,size,webViewLink,webContentLink'
+        ).execute()
 
     return file
 
@@ -121,12 +126,17 @@ def update_file(file_id: str, file_path: Path, public: Optional[bool] = None) ->
     file = service.files().update(
         fileId=file_id,
         media_body=media,
-        fields='id,name,mimeType,size,webViewLink'
+        fields='id,name,mimeType,size,webViewLink,webContentLink'
     ).execute()
 
     # Update sharing if specified
     if public is not None:
         set_public(file_id, public)
+        # Re-fetch to get updated webContentLink
+        file = service.files().get(
+            fileId=file_id,
+            fields='id,name,mimeType,size,webViewLink,webContentLink'
+        ).execute()
 
     return file
 
@@ -184,6 +194,10 @@ def create_tracking_file(file_path: Path, metadata: dict) -> Path:
         'size': int(metadata.get('size', 0)),
     }
 
+    # Add download link if available (for public files)
+    if metadata.get('webContentLink'):
+        tracking_data['download'] = metadata['webContentLink']
+
     with open(tracking_path, 'w') as f:
         yaml.dump(tracking_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
@@ -228,7 +242,7 @@ def clone(url_or_id: str, output: Optional[Path]):
         service = build('drive', 'v3', credentials=creds)
         metadata = service.files().get(
             fileId=file_id,
-            fields='id,name,mimeType,size,webViewLink'
+            fields='id,name,mimeType,size,webViewLink,webContentLink'
         ).execute()
 
         # Determine output path
@@ -251,6 +265,8 @@ def clone(url_or_id: str, output: Optional[Path]):
         click.echo(f"Created: {file_path}")
         click.echo(f"Tracking: {tracking_path}")
         click.echo(f"Size: {metadata.get('size', 'unknown')} bytes")
+        if metadata.get('webContentLink'):
+            click.echo(f"Public download: {metadata.get('webContentLink')}")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -338,7 +354,9 @@ def push(file_path: Path, public: bool, yes: bool):
             create_tracking_file(file_path, metadata)
 
             click.echo(f"Updated: {metadata['name']}")
-            click.echo(f"URL: {metadata.get('webViewLink')}")
+            click.echo(f"View: {metadata.get('webViewLink')}")
+            if metadata.get('webContentLink'):
+                click.echo(f"Download: {metadata.get('webContentLink')}")
 
         else:
             # Upload new file
@@ -359,7 +377,9 @@ def push(file_path: Path, public: bool, yes: bool):
 
             click.echo(f"Uploaded: {metadata['name']}")
             click.echo(f"Tracking: {tracking_path}")
-            click.echo(f"URL: {metadata.get('webViewLink')}")
+            click.echo(f"View: {metadata.get('webViewLink')}")
+            if metadata.get('webContentLink'):
+                click.echo(f"Download: {metadata.get('webContentLink')}")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
