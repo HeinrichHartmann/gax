@@ -4,6 +4,7 @@ import glob
 import re
 import sys
 import click
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .gsheet import pull as gsheet_pull, push as gsheet_push, clone_all, pull_all
@@ -645,6 +646,20 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
         # Create folder
         folder.mkdir(parents=True, exist_ok=True)
 
+        # Write .gax.yaml metadata file
+        import yaml
+        metadata = {
+            'type': 'gax/sheet-checkout',
+            'spreadsheet_id': spreadsheet_id,
+            'url': url,
+            'title': title,
+            'format': fmt,
+            'checked_out': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        metadata_path = folder / '.gax.yaml'
+        with open(metadata_path, 'w') as f:
+            yaml.dump(metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
         click.echo(f"Checking out {len(tabs)} tabs to {folder}/")
 
         created = 0
@@ -656,7 +671,7 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
             # Generate filename
             safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
             safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-            file_path = folder / f"{safe_tab_name}.sheet.gax"
+            file_path = folder / f"{safe_tab_name}.tab.sheet.gax"
 
             # Skip if exists
             if file_path.exists():

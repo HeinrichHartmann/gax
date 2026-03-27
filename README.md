@@ -281,16 +281,20 @@ Every `.gax` file is self-describing: a YAML header contains the resource type a
 
 The file extension mirrors the command path:
 
-| Command | Extension |
-|---------|-----------|
-| `gax mail` | `.mail.gax` |
-| `gax draft` | `.draft.gax` |
-| `gax mailbox` | `.mailbox.gax` |
-| `gax mail-label` | `mail-labels.gax` |
-| `gax mail-filter` | `mail-filters.gax` |
-| `gax sheet` | `.sheet.gax` |
-| `gax doc` | `.doc.gax` |
-| `gax cal` | `.cal.gax` |
+| Command | Extension | Notes |
+|---------|-----------|-------|
+| `gax mail` | `.mail.gax` | Individual thread |
+| `gax draft` | `.draft.gax` | Email draft |
+| `gax mailbox` | `.mailbox.gax` | Thread collection |
+| `gax mail-label` | `mail-labels.gax` | Gmail labels |
+| `gax mail-filter` | `mail-filters.gax` | Gmail filters |
+| `gax sheet` | `.sheet.gax` | Multipart spreadsheet |
+| `gax sheet tab` | `.tab.sheet.gax` | Individual tab |
+| `gax doc` | `.doc.gax` | Multipart document |
+| `gax doc tab` | `.tab.gax` | Individual doc tab |
+| `gax cal` | `.cal.gax` | Calendar event |
+| `gax form` | `.form.gax` | Google Form |
+| `gax contacts` | `.contacts.gax` or `.jsonl` | Contact list |
 
 ### Single-Section Files
 
@@ -336,16 +340,23 @@ Date: 2026-03-22 11:30
 Thanks for the update!
 ```
 
-### Folder Mode
+### Checkout Folders (`.gax.d` directories)
 
-When cloning multiple resources to a folder (e.g., `gax mail list checkout Inbox/`), metadata is stored in `.gax.yaml` at the folder root instead of per-file headers:
+Checkout commands create folders with individual resource files plus shared metadata:
 
 ```
-Inbox/
-  .gax.yaml           # folder metadata
-  thread_18abc.md     # content only
-  thread_19def.md
+Budget.sheet.gax.d/
+  .gax.yaml                  # Folder metadata (spreadsheet_id, url, format)
+  Summary.tab.sheet.gax      # Individual tab (full YAML header + content)
+  Expenses.tab.sheet.gax     # Individual tab (full YAML header + content)
 ```
+
+Each file in a `.gax.d` folder is:
+- **Self-describing** - Contains full YAML headers for independent pulling
+- **Pullable** - Can be updated with `gax pull *.tab.sheet.gax`
+- **Named by command** - Extension matches the command path (e.g., `gax sheet tab` → `.tab.sheet.gax`)
+
+The `.gax.yaml` file contains shared metadata (spreadsheet URL, format, etc.) for the entire checkout.
 
 ## License
 
