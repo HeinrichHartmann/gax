@@ -94,7 +94,7 @@ COMMANDS
     gax clone [URL]
         Clone a Google resource from URL.
         -o, --output: Output file
-        --format: Output format (for forms)
+        -f, --format: Output format (for forms)
 
   contacts:
     gax contacts apply [PLAN_FILE]
@@ -233,13 +233,13 @@ COMMANDS
     gax sheet clone [URL]
         Clone all tabs from a spreadsheet to a multipart .sheet.gax file.
         --output, -o: Output file (default: <title>.sheet.gax)
-        --format: Output format: md, csv, tsv, psv, json, jsonl
+        -f, --format: Output format: md, csv, tsv, psv, json, jsonl
     gax sheet pull [FILE]
         Pull latest data for all tabs in a multipart file.
     gax sheet tab clone [URL] [TAB_NAME]
         Clone a single tab to a .sheet.gax file.
         --output, -o: Output file (default: <tab>.sheet.gax)
-        --format: Output format: md, csv, tsv, psv, json, jsonl
+        -f, --format: Output format: md, csv, tsv, psv, json, jsonl
     gax sheet tab list [URL]
         List tabs in a spreadsheet (TSV output).
     gax sheet tab pull [FILE]

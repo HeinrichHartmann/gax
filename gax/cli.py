@@ -338,7 +338,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
 @main.command()
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file")
-@click.option("--format", "fmt", type=click.Choice(["md", "yaml"]), default="md", help="Output format (for forms)")
+@click.option("-f", "--format", "fmt", type=click.Choice(["md", "yaml"]), default="md", help="Output format (for forms)")
 @click.pass_context
 def clone(ctx, url: str, output: Path | None, fmt: str):
     """Clone a Google resource from URL.
@@ -559,7 +559,7 @@ def sheet():
     help="Output file (default: <title>.sheet.gax)",
 )
 @click.option(
-    "--format", "fmt", default="md", help="Output format: md, csv, tsv, psv, json, jsonl"
+    "-f", "--format", "fmt", default="md", help="Output format: md, csv, tsv, psv, json, jsonl"
 )
 def sheet_clone(url: str, output: Path | None, fmt: str):
     """Clone all tabs from a spreadsheet to a multipart .sheet.gax file."""
@@ -639,7 +639,7 @@ def tab_list(url: str):
     help="Output file (default: <tab>.sheet.gax)",
 )
 @click.option(
-    "--format", "fmt", default="md", help="Output format: md, csv, tsv, psv, json, jsonl"
+    "-f", "--format", "fmt", default="md", help="Output format: md, csv, tsv, psv, json, jsonl"
 )
 def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
     """Clone a single tab to a .sheet.gax file."""

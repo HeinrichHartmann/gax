@@ -248,3 +248,48 @@ class TestCrossCuttingConsistency:
 
         assert not missing_help, \
             "Commands missing help text:\n" + "\n".join(missing_help)
+
+    def test_all_format_options_use_same_flags(self):
+        """All format options should use -f/--format consistently."""
+        format_violations = []
+
+        def check_command(cmd, path=""):
+            for param in cmd.params:
+                if param.name == 'fmt' and isinstance(param, click.Option):
+                    # Should have both -f and --format
+                    if set(param.opts) != {'-f', '--format'}:
+                        format_violations.append(
+                            f"{path}: has {param.opts}, expected {{'-f', '--format'}}"
+                        )
+
+            if isinstance(cmd, click.Group):
+                for name, subcmd in cmd.commands.items():
+                    check_command(subcmd, f"{path}/{name}" if path else name)
+
+        check_command(cli)
+
+        assert not format_violations, \
+            "Format option flag inconsistencies:\n" + "\n".join(format_violations)
+
+    def test_apply_commands_have_no_yes_flag(self):
+        """Apply commands must NOT have -y/--yes flag (confirmation always required)."""
+        apply_violations = []
+
+        def check_command(cmd, path=""):
+            # Check if this is an apply command
+            if cmd.name == 'apply' and not isinstance(cmd, click.Group):
+                # Check for yes parameter
+                yes_param = next((p for p in cmd.params if p.name == 'yes'), None)
+                if yes_param is not None:
+                    apply_violations.append(
+                        f"{path}: apply command should NOT have -y/--yes flag"
+                    )
+
+            if isinstance(cmd, click.Group):
+                for name, subcmd in cmd.commands.items():
+                    check_command(subcmd, f"{path}/{name}" if path else name)
+
+        check_command(cli)
+
+        assert not apply_violations, \
+            "Apply commands with -y/--yes flag:\n" + "\n".join(apply_violations)
