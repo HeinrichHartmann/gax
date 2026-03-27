@@ -21,6 +21,7 @@ from .gcal import cal_cli
 from .form import form
 from .draft import draft
 from .contacts import contacts
+from .gdrive import file as gdrive_file
 
 
 @click.group()
@@ -576,7 +577,36 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
                 if message != "cancelled":
                     click.echo(f"Error: {path}: {message}", err=True)
         else:
-            # Pull file
+            # Check if this is a file with a .gax tracking file (Drive file)
+            if not path.name.endswith('.gax'):
+                tracking_path = path.with_suffix(path.suffix + '.gax')
+                if tracking_path.exists():
+                    # This is a tracked Drive file
+                    from .gdrive import download_file, read_tracking_file, create_tracking_file
+
+                    try:
+                        tracking_data = read_tracking_file(tracking_path)
+                        file_id = tracking_data.get('file_id')
+
+                        if file_id:
+                            if verbose:
+                                click.echo(f"Pulling Drive file {path}...", nl=False)
+
+                            metadata = download_file(file_id, path)
+                            create_tracking_file(path, metadata)
+
+                            if verbose:
+                                click.echo(" updated")
+                            else:
+                                click.echo(f"Pulling Drive file {path}... updated")
+
+                            success_count += 1
+                            continue
+                    except Exception as e:
+                        click.echo(f"Error pulling Drive file {path}: {e}", err=True)
+                        continue
+
+            # Pull regular .gax file
             file_type = _detect_file_type(path)
             type_str = f"({file_type})" if file_type else "(unknown)"
 
@@ -1097,7 +1127,7 @@ def tab_push(file: Path, with_formulas: bool, yes: bool):
         sys.exit(1)
 
 
-# Register doc, mail, cal, form, and contacts command groups
+# Register doc, mail, cal, form, file, and contacts command groups
 main.add_command(doc)
 main.add_command(mail_group, name="mail")  # Flattened from mail.thread (ADR 020)
 main.add_command(mailbox)  # Flattened from mail.list (ADR 020)
@@ -1107,6 +1137,7 @@ main.add_command(cal_cli, name="cal")
 main.add_command(form)
 main.add_command(draft)  # Flattened from mail.draft (ADR 020)
 main.add_command(contacts)
+main.add_command(gdrive_file, name="file")
 
 
 if __name__ == "__main__":

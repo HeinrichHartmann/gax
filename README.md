@@ -154,6 +154,17 @@ COMMANDS
         Push local draft to Gmail.
         -y, --yes: Skip confirmation prompt
 
+  file:
+    gax file clone [URL_OR_ID]
+        Clone a file from Google Drive.
+        -o, --output: Output file path
+    gax file pull [FILE_PATH]
+        Pull latest version of a file from Google Drive.
+    gax file push [FILE_PATH]
+        Push local file to Google Drive.
+        --public: Make file publicly accessible
+        -y, --yes: Skip confirmation
+
   form:
     gax form apply [PLAN_FILE]
         Apply form changes from a plan file.
