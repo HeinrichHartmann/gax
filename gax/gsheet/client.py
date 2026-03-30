@@ -58,15 +58,21 @@ class GSheetClient:
         df: pd.DataFrame,
         with_formulas: bool = False,
     ) -> int:
-        """Write DataFrame to a Google Sheet tab. Returns number of rows written."""
+        """Write DataFrame to a Google Sheet tab. Returns number of rows written.
+
+        Clears the sheet first to ensure deleted rows are removed.
+        """
         sh = self.gc.open_by_key(spreadsheet_id)
         ws = sh.worksheet(tab)
+
+        # Clear the entire sheet first to remove any stale data
+        ws.clear()
 
         # Fill NaN with empty string and convert to list of lists
         df = df.fillna("")
         values = [df.columns.tolist()] + df.astype(str).values.tolist()
 
-        # Update starting from A1, preserving formatting
+        # Update starting from A1
         # USER_ENTERED interprets formulas, RAW writes literals
         value_input_option = "USER_ENTERED" if with_formulas else "RAW"
         ws.update(range_name="A1", values=values, value_input_option=value_input_option)
