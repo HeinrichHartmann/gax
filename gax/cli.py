@@ -107,6 +107,14 @@ def _detect_file_type(file_path: Path) -> str | None:
         return "gax/form"
     if ".contacts." in name or name.endswith(".contacts.gax"):
         return "gax/contacts"
+    # Mailbox/list files often don't have specific extension, just .gax
+    if name.endswith(".gax") or name.endswith(".mailbox.gax"):
+        # Could be a mailbox file - check for query: field as last resort
+        try:
+            if "query:" in content:
+                return "gax/list"
+        except Exception:
+            pass
 
     return None
 
