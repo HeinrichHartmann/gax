@@ -14,7 +14,7 @@ import click
 import yaml
 
 from .auth import get_authenticated_credentials
-from .ui import operation, success, error
+from .ui import operation, success
 from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)

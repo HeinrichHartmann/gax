@@ -198,7 +198,7 @@ def fetch_comments(document_id: str) -> list[Comment]:
     comments = []
     page_token = None
 
-    with operation("Fetching comments") as op:
+    with operation("Fetching comments"):
         while True:
             result = (
                 service.comments()

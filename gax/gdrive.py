@@ -267,7 +267,7 @@ def clone(url_or_id: str, output: Optional[Path]):
         with operation(f"Downloading to: {file_path}") as op:
             logger.info(f"Downloading: {file_path}")
             metadata = download_file(file_id, file_path)
-            op.update(f"Creating tracking file")
+            op.update("Creating tracking file")
 
         # Create tracking file
         tracking_path = create_tracking_file(file_path, metadata)
@@ -308,9 +308,9 @@ def pull(file_path: Path):
 
         # Download updated file
         with operation(f"Pulling: {file_path}") as op:
-            logger.info(f"Downloading latest version")
+            logger.info("Downloading latest version")
             metadata = download_file(file_id, file_path)
-            op.update(f"Updating tracking file")
+            op.update("Updating tracking file")
 
         # Update tracking file
         create_tracking_file(file_path, metadata)
@@ -359,9 +359,9 @@ def push(file_path: Path, public: bool, yes: bool):
                     return
 
             with operation(f"Pushing changes to {file_id}") as op:
-                logger.info(f"Updating Drive file")
+                logger.info("Updating Drive file")
                 metadata = update_file(file_id, file_path, public=public if public else None)
-                op.update(f"Updating tracking file")
+                op.update("Updating tracking file")
 
             # Update tracking file
             create_tracking_file(file_path, metadata)
@@ -383,9 +383,9 @@ def push(file_path: Path, public: bool, yes: bool):
                     return
 
             with operation(f"Uploading: {file_path.name}") as op:
-                logger.info(f"Uploading to Drive")
+                logger.info("Uploading to Drive")
                 metadata = upload_file(file_path, public=public)
-                op.update(f"Creating tracking file")
+                op.update("Creating tracking file")
 
             # Create tracking file
             tracking_path = create_tracking_file(file_path, metadata)
