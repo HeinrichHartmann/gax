@@ -4,6 +4,7 @@ Implements pull command for archiving email threads as multipart markdown (ADR 0
 """
 
 import base64
+import logging
 import re
 import sys
 from dataclasses import dataclass, field
@@ -15,6 +16,9 @@ import click
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
+from .ui import operation, success, error
+
+logger = logging.getLogger(__name__)
 from .store import store_blob
 from . import multipart
 from . import draft as draft_module
@@ -1552,89 +1556,95 @@ def relabel_apply(plan_file: str, yes: bool):
             return
 
         # Create missing user labels (with parent labels for nesting)
-        for label_name in sorted(labels_to_create):
-            try:
-                # For nested labels (with /), create parents first
-                if "/" in label_name:
-                    parts = label_name.split("/")
-                    for i in range(len(parts)):
-                        partial = "/".join(parts[:i+1])
-                        if partial not in label_map:
-                            result = service.users().labels().create(
-                                userId="me",
-                                body={"name": partial}
-                            ).execute()
-                            label_map[partial] = result["id"]
-                            click.echo(f"Created label: {partial}")
-                else:
-                    if label_name not in label_map:
-                        result = service.users().labels().create(
-                            userId="me",
-                            body={"name": label_name}
-                        ).execute()
-                        label_map[label_name] = result["id"]
-                        click.echo(f"Created label: {label_name}")
-            except Exception as e:
-                if "Label name exists" not in str(e):
-                    click.echo(f"Error creating label '{label_name}': {e}", err=True)
+        if labels_to_create:
+            with operation("Creating labels", total=len(labels_to_create)) as op:
+                for label_name in sorted(labels_to_create):
+                    try:
+                        # For nested labels (with /), create parents first
+                        if "/" in label_name:
+                            parts = label_name.split("/")
+                            for i in range(len(parts)):
+                                partial = "/".join(parts[:i+1])
+                                if partial not in label_map:
+                                    logger.info(f"Creating: {partial}")
+                                    result = service.users().labels().create(
+                                        userId="me",
+                                        body={"name": partial}
+                                    ).execute()
+                                    label_map[partial] = result["id"]
+                        else:
+                            if label_name not in label_map:
+                                logger.info(f"Creating: {label_name}")
+                                result = service.users().labels().create(
+                                    userId="me",
+                                    body={"name": label_name}
+                                ).execute()
+                                label_map[label_name] = result["id"]
+                    except Exception as e:
+                        if "Label name exists" not in str(e):
+                            error(f"Error creating label '{label_name}': {e}")
+                    op.advance()
 
         # Apply changes
-        success = 0
+        succeeded = 0
         failed = 0
 
-        for change in changes:
-            thread_id = change["id"]
-            try:
-                add_ids = []
-                remove_ids = []
+        with operation("Applying label changes", total=len(changes)) as op:
+            for change in changes:
+                thread_id = change["id"]
+                try:
+                    add_ids = []
+                    remove_ids = []
 
-                # System labels to add
-                if change.get("add_sys"):
-                    add_ids.extend(change["add_sys"])
+                    # System labels to add
+                    if change.get("add_sys"):
+                        add_ids.extend(change["add_sys"])
 
-                # System labels to remove
-                if change.get("remove_sys"):
-                    remove_ids.extend(change["remove_sys"])
+                    # System labels to remove
+                    if change.get("remove_sys"):
+                        remove_ids.extend(change["remove_sys"])
 
-                # Category to add
-                if change.get("add_cat"):
-                    add_ids.append(change["add_cat"])
+                    # Category to add
+                    if change.get("add_cat"):
+                        add_ids.append(change["add_cat"])
 
-                # Category to remove
-                if change.get("remove_cat"):
-                    remove_ids.append(change["remove_cat"])
+                    # Category to remove
+                    if change.get("remove_cat"):
+                        remove_ids.append(change["remove_cat"])
 
-                # User labels to add
-                if change.get("add"):
-                    add_ids.extend(label_map[name] for name in change["add"])
+                    # User labels to add
+                    if change.get("add"):
+                        add_ids.extend(label_map[name] for name in change["add"])
 
-                # User labels to remove
-                if change.get("remove"):
-                    remove_ids.extend(label_map[name] for name in change["remove"])
+                    # User labels to remove
+                    if change.get("remove"):
+                        remove_ids.extend(label_map[name] for name in change["remove"])
 
-                modify_body = {}
-                if add_ids:
-                    modify_body["addLabelIds"] = add_ids
-                if remove_ids:
-                    modify_body["removeLabelIds"] = remove_ids
+                    modify_body = {}
+                    if add_ids:
+                        modify_body["addLabelIds"] = add_ids
+                    if remove_ids:
+                        modify_body["removeLabelIds"] = remove_ids
 
-                if modify_body:
-                    service.users().threads().modify(
-                        userId="me",
-                        id=thread_id,
-                        body=modify_body,
-                    ).execute()
+                    if modify_body:
+                        logger.info(f"Thread {thread_id[:8]}...")
+                        service.users().threads().modify(
+                            userId="me",
+                            id=thread_id,
+                            body=modify_body,
+                        ).execute()
 
-                success += 1
+                    succeeded += 1
 
-            except Exception as e:
-                click.echo(f"Error on {thread_id}: {e}", err=True)
-                failed += 1
+                except Exception as e:
+                    error(f"Error on {thread_id}: {e}")
+                    failed += 1
 
-        click.echo()
-        click.echo(f"Applied: {success} threads")
+                op.advance()
+
+        success(f"Applied: {succeeded} threads")
         if failed:
-            click.echo(f"Failed: {failed} threads")
+            error(f"Failed: {failed} threads")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

@@ -5,6 +5,7 @@ Declarative label management following ADR 010:
 - push: Apply label changes (create, rename, delete, visibility)
 """
 
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,10 @@ import click
 import yaml
 
 from .auth import get_authenticated_credentials
+from .ui import operation, success, error
 from googleapiclient.discovery import build
+
+logger = logging.getLogger(__name__)
 
 
 # Visibility mappings
@@ -388,31 +392,39 @@ def label_apply(plan_file: str, yes: bool):
             return
 
         # Execute changes
-        # 1. Create (parents first for nesting)
-        created = set()
-        for item in sorted(to_create, key=lambda x: x["name"].count("/")):
-            _create_label_with_parents(service, item["name"], item, current_labels, created)
+        total_changes = len(to_create) + len(to_rename) + len(to_update) + len(to_delete)
 
-        # 2. Rename
-        for item in to_rename:
-            body = {"name": item["to"]}
-            _apply_settings(body, item)
-            service.users().labels().patch(userId="me", id=item["id"], body=body).execute()
-            click.echo(f"Renamed: {item['from']} -> {item['to']}")
+        with operation("Applying label changes", total=total_changes) as op:
+            # 1. Create (parents first for nesting)
+            created = set()
+            for item in sorted(to_create, key=lambda x: x["name"].count("/")):
+                logger.info(f"Creating: {item['name']}")
+                _create_label_with_parents(service, item["name"], item, current_labels, created)
+                op.advance()
 
-        # 3. Update
-        for item in to_update:
-            body = {}
-            _apply_settings(body, item)
-            service.users().labels().patch(userId="me", id=item["id"], body=body).execute()
-            click.echo(f"Updated: {item['name']}")
+            # 2. Rename
+            for item in to_rename:
+                logger.info(f"Renaming: {item['from']} -> {item['to']}")
+                body = {"name": item["to"]}
+                _apply_settings(body, item)
+                service.users().labels().patch(userId="me", id=item["id"], body=body).execute()
+                op.advance()
 
-        # 4. Delete
-        for item in to_delete:
-            service.users().labels().delete(userId="me", id=item["id"]).execute()
-            click.echo(f"Deleted: {item['name']}")
+            # 3. Update
+            for item in to_update:
+                logger.info(f"Updating: {item['name']}")
+                body = {}
+                _apply_settings(body, item)
+                service.users().labels().patch(userId="me", id=item["id"], body=body).execute()
+                op.advance()
 
-        click.echo("Done.")
+            # 4. Delete
+            for item in to_delete:
+                logger.info(f"Deleting: {item['name']}")
+                service.users().labels().delete(userId="me", id=item["id"]).execute()
+                op.advance()
+
+        success("Done.")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

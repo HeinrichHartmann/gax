@@ -9,6 +9,7 @@ Declarative filter management following ADR 011:
 
 import hashlib
 import json
+import logging
 import sys
 from datetime import datetime, timezone
 
@@ -16,7 +17,10 @@ import click
 import yaml
 
 from .auth import get_authenticated_credentials
+from .ui import operation, success
 from googleapiclient.discovery import build
+
+logger = logging.getLogger(__name__)
 
 
 @click.group("filter")
@@ -535,33 +539,34 @@ def filter_apply(plan_file: str, yes: bool):
         labels_result = service.users().labels().list(userId="me").execute()
         label_name_to_id = {lbl["name"]: lbl["id"] for lbl in labels_result.get("labels", [])}
 
-        # 1. Delete (including updates - delete first, recreate later)
-        for item in to_delete + to_update:
-            service.users().settings().filters().delete(
-                userId="me", id=item["id"]
-            ).execute()
-            name = item.get("name") or _generate_filter_name(item.get("criteria", {}))
-            if item in to_delete:
-                click.echo(f"Deleted: {name}")
-            else:
-                click.echo(f"Deleted (for update): {name}")
+        # Total operations: deletes + updates (delete+create) + creates
+        total_ops = len(to_delete) + len(to_update) * 2 + len(to_create)
 
-        # 2. Create (including recreate for updates)
-        for item in to_create + to_update:
-            body = {
-                "criteria": _yaml_to_api_criteria(item.get("criteria", {})),
-                "action": _yaml_to_api_action(item.get("action", {}), label_name_to_id, service),
-            }
-            service.users().settings().filters().create(
-                userId="me", body=body
-            ).execute()
-            name = item.get("name") or _generate_filter_name(item.get("criteria", {}))
-            if item in to_create:
-                click.echo(f"Created: {name}")
-            else:
-                click.echo(f"Recreated: {name}")
+        with operation("Applying filter changes", total=total_ops) as op:
+            # 1. Delete (including updates - delete first, recreate later)
+            for item in to_delete + to_update:
+                name = item.get("name") or _generate_filter_name(item.get("criteria", {}))
+                logger.info(f"Deleting: {name}")
+                service.users().settings().filters().delete(
+                    userId="me", id=item["id"]
+                ).execute()
+                op.advance()
 
-        click.echo("Done.")
+            # 2. Create (including recreate for updates)
+            for item in to_create + to_update:
+                name = item.get("name") or _generate_filter_name(item.get("criteria", {}))
+                action = "Creating" if item in to_create else "Recreating"
+                logger.info(f"{action}: {name}")
+                body = {
+                    "criteria": _yaml_to_api_criteria(item.get("criteria", {})),
+                    "action": _yaml_to_api_action(item.get("action", {}), label_name_to_id, service),
+                }
+                service.users().settings().filters().create(
+                    userId="me", body=body
+                ).execute()
+                op.advance()
+
+        success("Done.")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
