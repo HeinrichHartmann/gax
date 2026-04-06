@@ -365,6 +365,296 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) -> tuple[bool, str]:
+    """Push a single .gax file. Returns (success, message).
+
+    Args:
+        file_path: Path to the .gax file
+        yes: Skip confirmation prompts
+        with_formulas: For sheets, interpret formulas
+
+    Returns:
+        Tuple of (success, message)
+    """
+    file_type = _detect_file_type(file_path)
+
+    if not file_type:
+        return False, f"Unknown file type for {file_path}"
+
+    try:
+        if file_type == "gax/sheet-tab":
+            # Push single sheet tab
+            from .frontmatter import parse_file
+            from .formats import get_format as get_fmt
+
+            config, data = parse_file(file_path)
+            fmt = get_fmt(config.format)
+            df = fmt.read(data)
+            row_count = len(df)
+
+            if not yes:
+                click.echo(f"Push {row_count} rows from {file_path} to {config.tab}?")
+                if not click.confirm("Proceed?"):
+                    return False, "cancelled"
+
+            rows = gsheet_push(file_path, with_formulas=with_formulas)
+            return True, f"pushed {rows} rows"
+
+        elif file_type == "gax/doc":
+            # Check if it's a single tab file
+            content = file_path.read_text(encoding="utf-8")
+            sections = parse_multipart(content)
+            if not sections:
+                return False, "No sections found"
+
+            # Single tab push
+            if len(sections) == 1:
+                from .gdoc import extract_doc_id, pull_single_tab, update_tab_content
+                from . import native_md
+                import difflib
+
+                local_section = sections[0]
+                source_url = local_section.headers.get("source", "")
+                tab_name = local_section.headers.get("tab", local_section.headers.get("section_title", ""))
+
+                if not source_url:
+                    return False, "No source URL found"
+
+                document_id = extract_doc_id(source_url)
+
+                # Get remote content for diff
+                remote_section = pull_single_tab(document_id, tab_name, source_url)
+
+                local_lines = local_section.content.splitlines(keepends=True)
+                remote_lines = remote_section.content.splitlines(keepends=True)
+
+                diff = list(difflib.unified_diff(
+                    remote_lines, local_lines,
+                    fromfile="remote", tofile="local", lineterm="",
+                ))
+
+                if not diff:
+                    return True, "no changes"
+
+                if not yes:
+                    click.echo("Changes to push:")
+                    click.echo("-" * 40)
+                    for line in diff:
+                        click.echo(line.rstrip("\n"))
+                    click.echo("-" * 40)
+                    if not click.confirm("Push these changes?"):
+                        return False, "cancelled"
+
+                content_to_push = native_md.inline_images_from_store(local_section.content)
+                update_tab_content(document_id, tab_name, content_to_push)
+                return True, "pushed"
+            else:
+                return False, "Multipart doc push not supported. Use 'gax doc tab push' for individual tabs."
+
+        elif file_type == "gax/draft":
+            from .draft import parse_draft, get_draft, create_draft, update_draft, format_draft
+            import difflib
+
+            content = file_path.read_text(encoding="utf-8")
+            config, body = parse_draft(content)
+
+            if not config.to:
+                return False, "'to' field is required"
+            if not config.subject:
+                return False, "'subject' field is required"
+
+            if not config.draft_id:
+                # Create new draft
+                if not yes:
+                    click.echo(f"Create new draft '{config.subject}' to {config.to}?")
+                    if not click.confirm("Proceed?"):
+                        return False, "cancelled"
+
+                result = create_draft(config, body)
+
+                # Update local file with draft_id
+                config.draft_id = result["id"]
+                config.message_id = result.get("message", {}).get("id", "")
+                config.source = f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
+                config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                new_content = format_draft(config, body)
+                file_path.write_text(new_content, encoding="utf-8")
+
+                return True, f"created draft {config.draft_id}"
+            else:
+                # Update existing draft
+                try:
+                    remote_config, remote_body = get_draft(config.draft_id)
+                except Exception as e:
+                    if "404" in str(e) or "not found" in str(e).lower():
+                        return False, f"Draft {config.draft_id} no longer exists"
+                    raise
+
+                local_lines = body.splitlines(keepends=True)
+                remote_lines = remote_body.splitlines(keepends=True)
+
+                diff = list(difflib.unified_diff(
+                    remote_lines, local_lines,
+                    fromfile="remote", tofile="local", lineterm="",
+                ))
+
+                header_changes = []
+                if config.to != remote_config.to:
+                    header_changes.append(f"to: {remote_config.to} -> {config.to}")
+                if config.subject != remote_config.subject:
+                    header_changes.append(f"subject: {remote_config.subject} -> {config.subject}")
+
+                if not diff and not header_changes:
+                    return True, "no changes"
+
+                if not yes:
+                    if header_changes:
+                        click.echo("Header changes:")
+                        for change in header_changes:
+                            click.echo(f"  {change}")
+                    if diff:
+                        click.echo("Body changes:")
+                        click.echo("-" * 40)
+                        for line in diff:
+                            click.echo(line.rstrip("\n"))
+                        click.echo("-" * 40)
+                    if not click.confirm("Push these changes?"):
+                        return False, "cancelled"
+
+                update_draft(config.draft_id, config, body)
+
+                config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                new_content = format_draft(config, body)
+                file_path.write_text(new_content, encoding="utf-8")
+
+                return True, "pushed"
+
+        elif file_type == "gax/cal":
+            from .gcal import yaml_to_event, create_event, update_event, event_to_yaml
+
+            content = file_path.read_text(encoding="utf-8")
+            local_event = yaml_to_event(content)
+
+            if local_event.id:
+                # Update existing event
+                if not yes:
+                    click.echo(f"Update event '{local_event.title}'?")
+                    if not click.confirm("Proceed?"):
+                        return False, "cancelled"
+
+                result = update_event(local_event)
+                return True, f"updated {result.get('htmlLink', '')}"
+            else:
+                # Create new event
+                if not yes:
+                    click.echo(f"Create new event '{local_event.title}'?")
+                    if not click.confirm("Proceed?"):
+                        return False, "cancelled"
+
+                result = create_event(local_event)
+
+                # Update local file with new ID
+                local_event.id = result["id"]
+                local_event.source = f"https://calendar.google.com/calendar/event?eid={result['id']}"
+                local_event.synced = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+                new_content = event_to_yaml(local_event)
+                file_path.write_text(new_content, encoding="utf-8")
+
+                return True, f"created {result.get('htmlLink', '')}"
+
+        elif file_type == "gax/file":
+            # This is a tracking file, find the actual file
+            from .gdrive import read_tracking_file, update_file, create_tracking_file
+
+            tracking_data = read_tracking_file(file_path)
+            file_id = tracking_data.get('file_id')
+
+            if not file_id:
+                return False, "No file_id in tracking file"
+
+            # Find the actual file (tracking file without .gax suffix)
+            actual_file = file_path.with_suffix('')
+            if not actual_file.exists():
+                # Try removing the .gax to find base file
+                name = file_path.name
+                if name.endswith('.gax'):
+                    base_name = name[:-4]  # Remove .gax
+                    actual_file = file_path.parent / base_name
+                    if not actual_file.exists():
+                        return False, f"Cannot find actual file for {file_path}"
+
+            if not yes:
+                click.echo(f"Update Drive file: {tracking_data.get('name')}")
+                click.echo(f"From local file: {actual_file}")
+                if not click.confirm("Proceed?"):
+                    return False, "cancelled"
+
+            metadata = update_file(file_id, actual_file)
+            create_tracking_file(actual_file, metadata)
+
+            return True, f"pushed to {metadata.get('webViewLink', file_id)}"
+
+        elif file_type == "gax/sheet":
+            return False, "Multipart sheet push not supported. Use 'gax push <folder>.sheet.gax.d' or 'gax sheet tab push' for individual tabs."
+
+        else:
+            return False, f"Push not supported for type: {file_type}"
+
+    except Exception as e:
+        return False, str(e)
+
+
+def _push_folder(folder_path: Path, yes: bool = False, with_formulas: bool = False) -> tuple[bool, str]:
+    """Push a .gax.d folder. Returns (success, message).
+
+    Args:
+        folder_path: Path to the .gax.d folder
+        yes: Skip confirmation prompts
+        with_formulas: For sheets, interpret formulas
+
+    Returns:
+        Tuple of (success, message)
+    """
+    import yaml
+
+    # Read .gax.yaml metadata
+    metadata_path = folder_path / ".gax.yaml"
+    if not metadata_path.exists():
+        return False, "No .gax.yaml metadata file found"
+
+    try:
+        with open(metadata_path, "r") as f:
+            metadata = yaml.safe_load(f)
+    except Exception as e:
+        return False, f"Failed to read .gax.yaml: {e}"
+
+    checkout_type = metadata.get("type")
+    if not checkout_type:
+        return False, "No type in .gax.yaml"
+
+    try:
+        if checkout_type == "gax/sheet-checkout":
+            from .gsheet.folder_push import push_folder
+
+            success_result, message = push_folder(
+                folder_path,
+                with_formulas=with_formulas,
+                auto_approve=yes
+            )
+            return success_result, message
+
+        elif checkout_type == "gax/doc-checkout":
+            return False, "Doc folder push not yet supported. Use 'gax doc tab push' for individual tabs."
+
+        else:
+            return False, f"Push not supported for checkout type: {checkout_type}"
+
+    except Exception as e:
+        return False, str(e)
+
+
 def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
     """Pull a single .gax file. Returns (success, message)."""
     file_type = _detect_file_type(file_path)
@@ -640,6 +930,116 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
 
     if len(all_paths) > 1:
         click.echo(f"Done: {success_count}/{len(all_paths)} updated")
+
+
+@main.command("push")
+@click.argument("files", nargs=-1, required=True)
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
+@click.option("--with-formulas", is_flag=True, help="Interpret formulas (sheets only)")
+def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
+    """Push local .gax file(s) or .gax.d folder(s) to their sources.
+
+    Automatically detects file type from YAML header and calls
+    the appropriate push command. Shows diff/confirmation unless -y is passed.
+
+    \b
+    Supported types:
+        .sheet.gax       Single sheet tab
+        .sheet.gax.d/    Sheet checkout folder
+        .tab.gax         Single doc tab
+        .draft.gax       Gmail draft
+        .cal.gax         Calendar event
+        <file>.gax       Drive file tracking
+
+    \b
+    Examples:
+        gax push file.sheet.gax          # Push a single sheet tab
+        gax push *.draft.gax             # Push all drafts
+        gax push Budget.sheet.gax.d/     # Push a checkout folder
+        gax push event.cal.gax -y        # Push without confirmation
+    """
+    # Expand globs
+    all_paths: list[Path] = []
+    for pattern in files:
+        if "*" in pattern or "?" in pattern:
+            all_paths.extend(Path(p) for p in glob.glob(pattern))
+        else:
+            all_paths.append(Path(pattern))
+
+    if not all_paths:
+        click.echo("No .gax files or .gax.d folders found.", err=True)
+        sys.exit(1)
+
+    success_count = 0
+    for path in all_paths:
+        if not path.exists():
+            click.echo(f"Error: {path} not found", err=True)
+            continue
+
+        # Check if it's a folder
+        if path.is_dir():
+            if not path.name.endswith(".gax.d"):
+                click.echo(f"Skipping directory: {path} (not a .gax.d folder)", err=True)
+                continue
+
+            # Push folder
+            result, message = _push_folder(path, yes=yes, with_formulas=with_formulas)
+
+            if result:
+                if message != "cancelled":
+                    click.echo(f"Pushed {path}: {message}")
+                success_count += 1
+            else:
+                if message != "cancelled":
+                    click.echo(f"Error: {path}: {message}", err=True)
+        else:
+            # Check if this is a non-.gax file with a .gax tracking file (Drive file)
+            if not path.name.endswith('.gax'):
+                tracking_path = path.with_suffix(path.suffix + '.gax')
+                if tracking_path.exists():
+                    # This is a tracked Drive file - push using the tracking file
+                    from .gdrive import read_tracking_file, update_file, create_tracking_file
+
+                    try:
+                        tracking_data = read_tracking_file(tracking_path)
+                        file_id = tracking_data.get('file_id')
+
+                        if file_id:
+                            if not yes:
+                                click.echo(f"Update Drive file: {tracking_data.get('name')}")
+                                click.echo(f"From local file: {path}")
+                                if not click.confirm("Proceed?"):
+                                    click.echo("Cancelled.")
+                                    continue
+
+                            metadata = update_file(file_id, path)
+                            create_tracking_file(path, metadata)
+
+                            click.echo(f"Pushed {path} to Drive")
+                            success_count += 1
+                            continue
+                    except Exception as e:
+                        click.echo(f"Error pushing Drive file {path}: {e}", err=True)
+                        continue
+
+            # Push regular .gax file
+            file_type = _detect_file_type(path)
+            type_str = f"({file_type})" if file_type else "(unknown)"
+
+            click.echo(f"Pushing {path} {type_str}...")
+
+            result, message = _push_file(path, yes=yes, with_formulas=with_formulas)
+
+            if result:
+                if message != "cancelled":
+                    click.echo(f"  {message}")
+                success_count += 1
+            else:
+                if message != "cancelled":
+                    click.echo(f"Error: {path}: {message}", err=True)
+
+    if len(all_paths) > 1:
+        click.echo(f"Done: {success_count}/{len(all_paths)} pushed")
 
 
 @main.command()
