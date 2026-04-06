@@ -14,33 +14,46 @@ class MarkdownFormat(Format):
         if len(lines) < 2:
             return pd.DataFrame()
 
-        # Parse header row
-        headers = [c.strip() for c in lines[0].split("|")]
-        # Remove empty strings from leading/trailing pipes
-        if headers and headers[0] == "":
-            headers = headers[1:]
-        if headers and headers[-1] == "":
-            headers = headers[:-1]
+        # First pass: parse all rows to find maximum column count
+        # This handles files with multiple tables of different widths
+        all_rows = []
+        max_cols = 0
 
-        # Skip separator row (|---|---|)
-        data_start = 1
-        if len(lines) > 1 and re.match(r"^\|?[\s\-:|]+\|?$", lines[1]):
-            data_start = 2
-
-        # Parse data rows
-        rows = []
-        for line in lines[data_start:]:
+        for line in lines:
             if not line.strip():
                 continue
+            # Skip separator rows
+            if re.match(r"^\|?[\s\-:|]+\|?$", line):
+                continue
+
             cells = [c.strip() for c in line.split("|")]
+            # Remove empty strings from leading/trailing pipes
             if cells and cells[0] == "":
                 cells = cells[1:]
             if cells and cells[-1] == "":
                 cells = cells[:-1]
-            # Pad row to match header length
-            while len(cells) < len(headers):
+
+            if cells:  # Only add non-empty rows
+                all_rows.append(cells)
+                max_cols = max(max_cols, len(cells))
+
+        if not all_rows or max_cols == 0:
+            return pd.DataFrame()
+
+        # Use first row as headers
+        headers = all_rows[0]
+
+        # If first row has fewer columns than max, pad headers
+        while len(headers) < max_cols:
+            headers.append("")
+
+        # Process data rows (skip first row which is headers)
+        rows = []
+        for cells in all_rows[1:]:
+            # Pad row to match max column count
+            while len(cells) < max_cols:
                 cells.append("")
-            rows.append(cells[: len(headers)])
+            rows.append(cells[:max_cols])
 
         df = pd.DataFrame(rows, columns=headers)
         df = df.fillna("")
