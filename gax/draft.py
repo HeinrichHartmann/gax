@@ -6,6 +6,7 @@ See ADR 006 for design details.
 
 import base64
 import difflib
+import logging
 import re
 import sys
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
 from . import multipart
+from .ui import operation, success, error
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -408,11 +412,11 @@ def draft_new(output: Optional[Path], to_addr: str, subject: str):
         file_path = Path(f"{safe_subject}.draft.gax")
 
     if file_path.exists():
-        click.echo(f"Error: File already exists: {file_path}", err=True)
+        error(f"File already exists: {file_path}")
         sys.exit(1)
 
     file_path.write_text(content, encoding="utf-8")
-    click.echo(f"Created: {file_path}")
+    success(f"Created: {file_path}")
     click.echo(f"Edit the file, then run: gax mail draft push {file_path}")
 
 
@@ -435,7 +439,7 @@ def draft_clone(draft_id_or_url: str, output: Optional[Path]):
     """
     try:
         draft_id = extract_draft_id(draft_id_or_url)
-        click.echo(f"Fetching draft: {draft_id}")
+        logger.info(f"Fetching draft: {draft_id}")
 
         config, body = get_draft(draft_id)
         content = format_draft(config, body)
@@ -449,16 +453,16 @@ def draft_clone(draft_id_or_url: str, output: Optional[Path]):
             file_path = Path(f"{safe_subject}.draft.gax")
 
         if file_path.exists():
-            click.echo(f"Error: File already exists: {file_path}", err=True)
+            error(f"File already exists: {file_path}")
             sys.exit(1)
 
         file_path.write_text(content, encoding="utf-8")
-        click.echo(f"Created: {file_path}")
+        success(f"Created: {file_path}")
         click.echo(f"Subject: {config.subject}")
         click.echo(f"To: {config.to}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"{e}")
         sys.exit(1)
 
 
@@ -482,16 +486,19 @@ def draft_list(limit: int):
         # Print header
         click.echo("draft_id\tthread_id\tdate\tto\tsubject")
 
-        for draft_info in drafts:
-            draft_id = draft_info["id"]
-            try:
-                summary = get_draft_summary(draft_id, service=service)
-                click.echo(
-                    f"{summary['draft_id']}\t{summary['thread_id']}\t"
-                    f"{summary['date']}\t{summary['to']}\t{summary['subject']}"
-                )
-            except Exception as e:
-                click.echo(f"# Error fetching {draft_id}: {e}", err=True)
+        with operation("Fetching draft details", total=len(drafts)) as op:
+            for draft_info in drafts:
+                draft_id = draft_info["id"]
+                logger.info(f"Fetching: {draft_id}")
+                try:
+                    summary = get_draft_summary(draft_id, service=service)
+                    click.echo(
+                        f"{summary['draft_id']}\t{summary['thread_id']}\t"
+                        f"{summary['date']}\t{summary['to']}\t{summary['subject']}"
+                    )
+                except Exception as e:
+                    click.echo(f"# Error fetching {draft_id}: {e}", err=True)
+                op.advance()
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -518,10 +525,10 @@ def draft_push(file: Path, yes: bool):
 
         # Validate required fields
         if not config.to:
-            click.echo("Error: 'to' field is required", err=True)
+            error("'to' field is required")
             sys.exit(1)
         if not config.subject:
-            click.echo("Error: 'subject' field is required", err=True)
+            error("'subject' field is required")
             sys.exit(1)
 
         creds = get_authenticated_credentials()
@@ -529,7 +536,7 @@ def draft_push(file: Path, yes: bool):
 
         if not config.draft_id:
             # Create new draft
-            click.echo(f"Creating draft: {config.subject}")
+            logger.info(f"Creating draft: {config.subject}")
             result = create_draft(config, body, service=service)
 
             # Update local file with draft_id
@@ -541,8 +548,8 @@ def draft_push(file: Path, yes: bool):
             new_content = format_draft(config, body)
             file.write_text(new_content, encoding="utf-8")
 
-            click.echo(f"Created draft: {config.draft_id}")
-            click.echo(f"Updated: {file}")
+            success(f"Created draft: {config.draft_id}")
+            success(f"Updated: {file}")
 
         else:
             # Update existing draft - show diff first
@@ -550,14 +557,8 @@ def draft_push(file: Path, yes: bool):
                 remote_config, remote_body = get_draft(config.draft_id, service=service)
             except Exception as e:
                 if "404" in str(e) or "not found" in str(e).lower():
-                    click.echo(
-                        f"Error: Draft {config.draft_id} no longer exists in Gmail.",
-                        err=True,
-                    )
-                    click.echo(
-                        "Clear draft_id in the file and push again to create a new draft.",
-                        err=True,
-                    )
+                    error(f"Draft {config.draft_id} no longer exists in Gmail.")
+                    error("Clear draft_id in the file and push again to create a new draft.")
                     sys.exit(1)
                 raise
 
@@ -610,7 +611,7 @@ def draft_push(file: Path, yes: bool):
                     return
 
             # Update draft
-            click.echo(f"Updating draft: {config.draft_id}")
+            logger.info(f"Updating draft: {config.draft_id}")
             update_draft(config.draft_id, config, body, service=service)
 
             # Update local file with new timestamp
@@ -618,10 +619,10 @@ def draft_push(file: Path, yes: bool):
             new_content = format_draft(config, body)
             file.write_text(new_content, encoding="utf-8")
 
-            click.echo("Pushed successfully.")
+            success("Pushed successfully.")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"{e}")
         sys.exit(1)
 
 
@@ -641,10 +642,7 @@ def draft_pull(file: Path):
         config, local_body = parse_draft(content)
 
         if not config.draft_id:
-            click.echo(
-                "Error: No draft_id in file. Use 'push' first to create a draft.",
-                err=True,
-            )
+            error("No draft_id in file. Use 'push' first to create a draft.")
             sys.exit(1)
 
         creds = get_authenticated_credentials()
@@ -654,26 +652,23 @@ def draft_pull(file: Path):
             remote_config, remote_body = get_draft(config.draft_id, service=service)
         except Exception as e:
             if "404" in str(e) or "not found" in str(e).lower():
-                click.echo(
-                    f"Error: Draft {config.draft_id} no longer exists in Gmail.",
-                    err=True,
-                )
-                click.echo("The draft may have been sent or deleted.", err=True)
+                error(f"Draft {config.draft_id} no longer exists in Gmail.")
+                error("The draft may have been sent or deleted.")
                 sys.exit(1)
             raise
 
         # Check for local changes that would be overwritten
         if local_body.strip() != remote_body.strip():
-            click.echo("Warning: Local changes will be overwritten.", err=True)
+            logger.warning("Local changes will be overwritten.")
 
         # Update local file with remote content
         new_content = format_draft(remote_config, remote_body)
         file.write_text(new_content, encoding="utf-8")
 
-        click.echo(f"Updated: {file}")
+        success(f"Updated: {file}")
         click.echo(f"Subject: {remote_config.subject}")
         click.echo(f"To: {remote_config.to}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"{e}")
         sys.exit(1)

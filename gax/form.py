@@ -3,6 +3,7 @@
 Implements clone/pull commands for Google Forms definitions (ADR 014).
 """
 
+import logging
 import re
 import sys
 from datetime import datetime, timezone
@@ -14,6 +15,9 @@ import yaml
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
+from .ui import operation, success, error
+
+logger = logging.getLogger(__name__)
 
 
 def extract_form_id(url: str) -> str:
@@ -150,173 +154,188 @@ def form_to_markdown(form: dict, source_url: str) -> str:
     items = form.get("items", [])
     question_num = 0
 
-    for item in items:
-        item_title = item.get("title", "")
-        item_desc = item.get("description", "")
+    with operation("Processing form items", total=len(items)) as op:
+        for item in items:
+            item_title = item.get("title", "")
+            item_desc = item.get("description", "")
 
-        # Page break
-        if "pageBreakItem" in item:
-            lines.append("---")
-            lines.append("")
-            if item_title:
-                lines.append(f"### {item_title}")
+            # Page break
+            if "pageBreakItem" in item:
+                lines.append("---")
                 lines.append("")
-            continue
+                if item_title:
+                    lines.append(f"### {item_title}")
+                    lines.append("")
+                logger.info(f"Processing page break: {item_title or '(untitled)'}")
+                op.advance()
+                continue
 
-        # Section header
-        if "textItem" in item:
-            if item_title:
-                lines.append(f"### {item_title}")
+            # Section header
+            if "textItem" in item:
+                if item_title:
+                    lines.append(f"### {item_title}")
+                    if item_desc:
+                        lines.append("")
+                        lines.append(item_desc)
+                    lines.append("")
+                logger.info(f"Processing text: {item_title or '(untitled)'}")
+                op.advance()
+                continue
+
+            # Image item
+            if "imageItem" in item:
+                image = item.get("imageItem", {}).get("image", {})
+                source_uri = image.get("sourceUri", "")
+                alt_text = image.get("altText", "Image")
+                if source_uri:
+                    lines.append(f"![{alt_text}]({source_uri})")
+                else:
+                    lines.append(f"_[Image: {alt_text}]_")
+                lines.append("")
+                logger.info(f"Processing image: {alt_text}")
+                op.advance()
+                continue
+
+            # Video item
+            if "videoItem" in item:
+                video = item.get("videoItem", {}).get("video", {})
+                youtube_uri = video.get("youtubeUri", "")
+                if youtube_uri:
+                    lines.append(f"[Video: {youtube_uri}]")
+                else:
+                    lines.append("_[Video]_")
+                lines.append("")
+                logger.info("Processing video item")
+                op.advance()
+                continue
+
+            # Question item
+            if "questionItem" in item:
+                question_num += 1
+                question = item.get("questionItem", {}).get("question", {})
+                required = question.get("required", False)
+                required_marker = " *" if required else ""
+
+                lines.append(f"## {question_num}. {item_title}{required_marker}")
+                lines.append("")
+
                 if item_desc:
+                    lines.append(f"_{item_desc}_")
                     lines.append("")
-                    lines.append(item_desc)
-                lines.append("")
-            continue
 
-        # Image item
-        if "imageItem" in item:
-            image = item.get("imageItem", {}).get("image", {})
-            source_uri = image.get("sourceUri", "")
-            alt_text = image.get("altText", "Image")
-            if source_uri:
-                lines.append(f"![{alt_text}]({source_uri})")
-            else:
-                lines.append(f"_[Image: {alt_text}]_")
-            lines.append("")
-            continue
-
-        # Video item
-        if "videoItem" in item:
-            video = item.get("videoItem", {}).get("video", {})
-            youtube_uri = video.get("youtubeUri", "")
-            if youtube_uri:
-                lines.append(f"[Video: {youtube_uri}]")
-            else:
-                lines.append("_[Video]_")
-            lines.append("")
-            continue
-
-        # Question item
-        if "questionItem" in item:
-            question_num += 1
-            question = item.get("questionItem", {}).get("question", {})
-            required = question.get("required", False)
-            required_marker = " *" if required else ""
-
-            lines.append(f"## {question_num}. {item_title}{required_marker}")
-            lines.append("")
-
-            if item_desc:
-                lines.append(f"_{item_desc}_")
-                lines.append("")
-
-            # Format based on question type
-            if "textQuestion" in question:
-                text_q = question["textQuestion"]
-                if text_q.get("paragraph"):
-                    lines.append("_Long answer text_")
-                else:
-                    lines.append("_Short answer text_")
-                lines.append("")
-
-            elif "scaleQuestion" in question:
-                scale = question["scaleQuestion"]
-                low = scale.get("low", 1)
-                high = scale.get("high", 5)
-                low_label = scale.get("lowLabel", "")
-                high_label = scale.get("highLabel", "")
-                low_str = f"{low}" + (f" ({low_label})" if low_label else "")
-                high_str = f"{high}" + (f" ({high_label})" if high_label else "")
-                lines.append(f"Scale: {low_str} - {high_str}")
-                lines.append("")
-
-            elif "choiceQuestion" in question:
-                choice = question["choiceQuestion"]
-                q_type = choice.get("type", "RADIO")
-                options = choice.get("options", [])
-                shuffle = choice.get("shuffle", False)
-
-                for opt in options:
-                    value = opt.get("value", "")
-                    is_other = opt.get("isOther", False)
-                    if is_other:
-                        value = "Other..."
-                    if q_type == "CHECKBOX":
-                        lines.append(f"- [ ] {value}")
-                    elif q_type == "DROP_DOWN":
-                        lines.append(f"  - {value}")
-                    else:  # RADIO
-                        lines.append(f"- ( ) {value}")
-
-                if shuffle:
+                # Format based on question type
+                if "textQuestion" in question:
+                    text_q = question["textQuestion"]
+                    if text_q.get("paragraph"):
+                        lines.append("_Long answer text_")
+                    else:
+                        lines.append("_Short answer text_")
                     lines.append("")
-                    lines.append("_(Options shuffled)_")
+
+                elif "scaleQuestion" in question:
+                    scale = question["scaleQuestion"]
+                    low = scale.get("low", 1)
+                    high = scale.get("high", 5)
+                    low_label = scale.get("lowLabel", "")
+                    high_label = scale.get("highLabel", "")
+                    low_str = f"{low}" + (f" ({low_label})" if low_label else "")
+                    high_str = f"{high}" + (f" ({high_label})" if high_label else "")
+                    lines.append(f"Scale: {low_str} - {high_str}")
+                    lines.append("")
+
+                elif "choiceQuestion" in question:
+                    choice = question["choiceQuestion"]
+                    q_type = choice.get("type", "RADIO")
+                    options = choice.get("options", [])
+                    shuffle = choice.get("shuffle", False)
+
+                    for opt in options:
+                        value = opt.get("value", "")
+                        is_other = opt.get("isOther", False)
+                        if is_other:
+                            value = "Other..."
+                        if q_type == "CHECKBOX":
+                            lines.append(f"- [ ] {value}")
+                        elif q_type == "DROP_DOWN":
+                            lines.append(f"  - {value}")
+                        else:  # RADIO
+                            lines.append(f"- ( ) {value}")
+
+                    if shuffle:
+                        lines.append("")
+                        lines.append("_(Options shuffled)_")
+                    lines.append("")
+
+                elif "dateQuestion" in question:
+                    date_q = question["dateQuestion"]
+                    include_time = date_q.get("includeTime", False)
+                    include_year = date_q.get("includeYear", True)
+                    if include_time:
+                        lines.append("_Date and time_")
+                    elif not include_year:
+                        lines.append("_Date (month/day only)_")
+                    else:
+                        lines.append("_Date_")
+                    lines.append("")
+
+                elif "timeQuestion" in question:
+                    time_q = question["timeQuestion"]
+                    duration = time_q.get("duration", False)
+                    if duration:
+                        lines.append("_Duration_")
+                    else:
+                        lines.append("_Time_")
+                    lines.append("")
+
+                elif "fileUploadQuestion" in question:
+                    file_q = question["fileUploadQuestion"]
+                    max_files = file_q.get("maxFiles", 1)
+                    types = file_q.get("types", [])
+                    type_str = ", ".join(types) if types else "any"
+                    lines.append(f"_File upload ({type_str}, max {max_files} files)_")
+                    lines.append("")
+
+                elif "rowQuestion" in question:
+                    # Grid/matrix question - part of questionGroupItem
+                    pass
+
+                logger.info(f"Processing question {question_num}: {item_title}")
+                op.advance()
+                continue
+
+            # Question group (grid/matrix)
+            if "questionGroupItem" in item:
+                question_num += 1
+                group = item.get("questionGroupItem", {})
+                grid = group.get("grid", {})
+                columns = grid.get("columns", {}).get("options", [])
+
+                lines.append(f"## {question_num}. {item_title}")
                 lines.append("")
 
-            elif "dateQuestion" in question:
-                date_q = question["dateQuestion"]
-                include_time = date_q.get("includeTime", False)
-                include_year = date_q.get("includeYear", True)
-                if include_time:
-                    lines.append("_Date and time_")
-                elif not include_year:
-                    lines.append("_Date (month/day only)_")
-                else:
-                    lines.append("_Date_")
+                if item_desc:
+                    lines.append(f"_{item_desc}_")
+                    lines.append("")
+
+                # Column headers
+                col_values = [c.get("value", "") for c in columns]
+                lines.append("| | " + " | ".join(col_values) + " |")
+                lines.append("|---" + "|---" * len(col_values) + "|")
+
+                # Rows
+                questions = group.get("questions", [])
+                for q in questions:
+                    row_q = q.get("rowQuestion", {})
+                    row_title = row_q.get("title", "")
+                    cells = " | ".join(["( )" for _ in col_values])
+                    lines.append(f"| {row_title} | {cells} |")
+
                 lines.append("")
+                logger.info(f"Processing grid question {question_num}: {item_title}")
+                op.advance()
+                continue
 
-            elif "timeQuestion" in question:
-                time_q = question["timeQuestion"]
-                duration = time_q.get("duration", False)
-                if duration:
-                    lines.append("_Duration_")
-                else:
-                    lines.append("_Time_")
-                lines.append("")
-
-            elif "fileUploadQuestion" in question:
-                file_q = question["fileUploadQuestion"]
-                max_files = file_q.get("maxFiles", 1)
-                types = file_q.get("types", [])
-                type_str = ", ".join(types) if types else "any"
-                lines.append(f"_File upload ({type_str}, max {max_files} files)_")
-                lines.append("")
-
-            elif "rowQuestion" in question:
-                # Grid/matrix question - part of questionGroupItem
-                pass
-
-            continue
-
-        # Question group (grid/matrix)
-        if "questionGroupItem" in item:
-            question_num += 1
-            group = item.get("questionGroupItem", {})
-            grid = group.get("grid", {})
-            columns = grid.get("columns", {}).get("options", [])
-
-            lines.append(f"## {question_num}. {item_title}")
-            lines.append("")
-
-            if item_desc:
-                lines.append(f"_{item_desc}_")
-                lines.append("")
-
-            # Column headers
-            col_values = [c.get("value", "") for c in columns]
-            lines.append("| | " + " | ".join(col_values) + " |")
-            lines.append("|---" + "|---" * len(col_values) + "|")
-
-            # Rows
-            questions = group.get("questions", [])
-            for q in questions:
-                row_q = q.get("rowQuestion", {})
-                row_title = row_q.get("title", "")
-                cells = " | ".join(["( )" for _ in col_values])
-                lines.append(f"| {row_title} | {cells} |")
-
-            lines.append("")
-            continue
+            op.advance()
 
     body = "\n".join(lines)
     return f"---\n{header_yaml}---\n{body}"
@@ -542,7 +561,7 @@ def clone(url: str, output: Optional[Path], fmt: str):
         items = form_data.get("items", [])
         questions = sum(1 for i in items if "questionItem" in i or "questionGroupItem" in i)
 
-        click.echo(f"Created: {file_path}")
+        success(f"Created: {file_path}")
         click.echo(f"Title: {doc_title}")
         click.echo(f"Questions: {questions}")
         if fmt == "md":
@@ -587,7 +606,7 @@ def pull(file: Path):
         items = form_data.get("items", [])
         questions = sum(1 for i in items if "questionItem" in i or "questionGroupItem" in i)
 
-        click.echo(f"Updated: {file}")
+        success(f"Updated: {file}")
         click.echo(f"Questions: {questions}")
 
     except Exception as e:
@@ -658,74 +677,84 @@ def plan(file: Path, output: str):
         seen_remote_ids = set()
 
         # Process local items in order
-        for local_idx, local_item in enumerate(local_items):
-            item_id = local_item.get("itemId")
+        with operation("Analyzing local items", total=len(local_items)) as op:
+            for local_idx, local_item in enumerate(local_items):
+                item_id = local_item.get("itemId")
+                item_title = local_item.get("title", "(untitled)")
 
-            if not item_id:
-                # New item - needs to be created
-                plan_data["create"].append({
-                    "index": local_idx,
-                    "title": local_item.get("title", "(untitled)"),
-                    "item": local_item,
-                })
-            else:
-                seen_remote_ids.add(item_id)
-                if item_id in remote_by_id:
-                    remote_item = remote_by_id[item_id]["item"]
-                    # Check if item type changed (e.g., pageBreakItem -> textItem)
-                    item_types = ["questionItem", "pageBreakItem", "textItem", "imageItem", "videoItem"]
-                    local_type = next((t for t in item_types if t in local_item), None)
-                    remote_type = next((t for t in item_types if t in remote_item), None)
-
-                    if local_type != remote_type:
-                        # Type changed - need delete + create (can't update item type)
-                        plan_data["delete"].append({
-                            "itemId": item_id,
-                            "index": remote_by_id[item_id]["index"],
-                            "title": remote_item.get("title", "(untitled)"),
-                        })
-                        # Create without itemId so it gets a new one
-                        new_item = {k: v for k, v in local_item.items() if k != "itemId"}
-                        plan_data["create"].append({
-                            "index": local_idx,
-                            "title": local_item.get("title", "(untitled)"),
-                            "item": new_item,
-                        })
-                    elif not _items_equal(local_item, remote_item):
-                        # Same type but content changed - update
-                        plan_data["update"].append({
-                            "index": local_idx,
-                            "itemId": item_id,
-                            "title": local_item.get("title", "(untitled)"),
-                            "item": local_item,
-                        })
-
-                    # Check if position changed (needs move)
-                    remote_idx = remote_by_id[item_id]["index"]
-                    if local_idx != remote_idx:
-                        plan_data["move"].append({
-                            "itemId": item_id,
-                            "from_index": remote_idx,
-                            "to_index": local_idx,
-                            "title": local_item.get("title", "(untitled)"),
-                        })
-                else:
-                    # Item has ID but not in remote - treat as create
-                    click.echo(f"Warning: Item {item_id} not found remotely, will create new", err=True)
+                if not item_id:
+                    # New item - needs to be created
+                    logger.info(f"New item: {item_title}")
                     plan_data["create"].append({
                         "index": local_idx,
-                        "title": local_item.get("title", "(untitled)"),
+                        "title": item_title,
                         "item": local_item,
                     })
+                else:
+                    seen_remote_ids.add(item_id)
+                    if item_id in remote_by_id:
+                        remote_item = remote_by_id[item_id]["item"]
+                        # Check if item type changed (e.g., pageBreakItem -> textItem)
+                        item_types = ["questionItem", "pageBreakItem", "textItem", "imageItem", "videoItem"]
+                        local_type = next((t for t in item_types if t in local_item), None)
+                        remote_type = next((t for t in item_types if t in remote_item), None)
+
+                        if local_type != remote_type:
+                            # Type changed - need delete + create (can't update item type)
+                            logger.info(f"Type changed: {item_title}")
+                            plan_data["delete"].append({
+                                "itemId": item_id,
+                                "index": remote_by_id[item_id]["index"],
+                                "title": remote_item.get("title", "(untitled)"),
+                            })
+                            # Create without itemId so it gets a new one
+                            new_item = {k: v for k, v in local_item.items() if k != "itemId"}
+                            plan_data["create"].append({
+                                "index": local_idx,
+                                "title": item_title,
+                                "item": new_item,
+                            })
+                        elif not _items_equal(local_item, remote_item):
+                            # Same type but content changed - update
+                            logger.info(f"Item changed: {item_title}")
+                            plan_data["update"].append({
+                                "index": local_idx,
+                                "itemId": item_id,
+                                "title": item_title,
+                                "item": local_item,
+                            })
+
+                        # Check if position changed (needs move)
+                        remote_idx = remote_by_id[item_id]["index"]
+                        if local_idx != remote_idx:
+                            logger.info(f"Item moved: {item_title}")
+                            plan_data["move"].append({
+                                "itemId": item_id,
+                                "from_index": remote_idx,
+                                "to_index": local_idx,
+                                "title": item_title,
+                            })
+                    else:
+                        # Item has ID but not in remote - treat as create
+                        logger.warning(f"Item {item_id} not found remotely, will create new")
+                        plan_data["create"].append({
+                            "index": local_idx,
+                            "title": item_title,
+                            "item": local_item,
+                        })
+                op.advance()
 
         # Check for deletes - remote items not in local
-        for item_id, remote_data in remote_by_id.items():
-            if item_id not in seen_remote_ids:
-                plan_data["delete"].append({
-                    "itemId": item_id,
-                    "index": remote_data["index"],
-                    "title": remote_data["item"].get("title", "(untitled)"),
-                })
+        with operation("Checking for deletions", total=len(remote_by_id)) as op:
+            for item_id, remote_data in remote_by_id.items():
+                if item_id not in seen_remote_ids:
+                    logger.info(f"Item to delete: {remote_data['item'].get('title', '(untitled)')}")
+                    plan_data["delete"].append({
+                        "itemId": item_id,
+                        "index": remote_data["index"],
+                        "title": remote_data["item"].get("title", "(untitled)"),
+                    })
+                op.advance()
 
         # Remove empty lists for cleaner output
         plan_data = {k: v for k, v in plan_data.items()
@@ -763,7 +792,7 @@ def plan(file: Path, output: str):
         with open(output, "w") as f:
             yaml.dump(plan_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-        click.echo(f"\nWrote plan to {output}")
+        success(f"Wrote plan to {output}")
         click.echo(f"Review and run: gax form apply {output}")
 
     except Exception as e:
@@ -860,29 +889,40 @@ def apply(plan_file: Path):
                 id_to_index[item["itemId"]] = idx
 
         # Updates - use current remote index, not local index
-        for item in to_update:
-            item_id = item.get("itemId")
-            if item_id and item_id in id_to_index:
-                current_idx = id_to_index[item_id]
-                requests.append(_generate_update_request(item["item"], current_idx))
-                click.echo(f"  ~ Updating: {item['title']}")
-            else:
-                click.echo(f"  ! Skipping update (item not found): {item['title']}", err=True)
+        with operation("Processing updates", total=len(to_update)) as op:
+            for item in to_update:
+                item_id = item.get("itemId")
+                if item_id and item_id in id_to_index:
+                    current_idx = id_to_index[item_id]
+                    requests.append(_generate_update_request(item["item"], current_idx))
+                    logger.info(f"Updating: {item['title']}")
+                    click.echo(f"  ~ Updating: {item['title']}")
+                else:
+                    click.echo(f"  ! Skipping update (item not found): {item['title']}", err=True)
+                op.advance()
 
         # Deletes - process in reverse index order to maintain correct indices
-        for item in sorted(to_delete, key=lambda x: x["index"], reverse=True):
-            requests.append(_generate_delete_request(item["index"]))
-            click.echo(f"  - Deleting: {item['title']}")
+        sorted_deletes = sorted(to_delete, key=lambda x: x["index"], reverse=True)
+        with operation("Processing deletions", total=len(sorted_deletes)) as op:
+            for item in sorted_deletes:
+                requests.append(_generate_delete_request(item["index"]))
+                logger.info(f"Deleting: {item['title']}")
+                click.echo(f"  - Deleting: {item['title']}")
+                op.advance()
 
         # Creates - process in order (lowest index first)
         # The target index is the FINAL position we want in the local YAML.
         # When we insert at position N, items at N and after shift down.
         # Processing in order from low to high means each insert happens at its
         # final position because previous inserts have already shifted items correctly.
-        for item in sorted(to_create, key=lambda x: x["index"]):
-            target_idx = item["index"]
-            requests.append(_generate_create_request(item["item"], target_idx))
-            click.echo(f"  + Creating: {item['title']} at index {target_idx}")
+        sorted_creates = sorted(to_create, key=lambda x: x["index"])
+        with operation("Processing creations", total=len(sorted_creates)) as op:
+            for item in sorted_creates:
+                target_idx = item["index"]
+                requests.append(_generate_create_request(item["item"], target_idx))
+                logger.info(f"Creating: {item['title']} at index {target_idx}")
+                click.echo(f"  + Creating: {item['title']} at index {target_idx}")
+                op.advance()
 
         # Execute non-move requests first
         if requests:
@@ -899,43 +939,46 @@ def apply(plan_file: Path):
 
         # Handle moves separately - need to process one at a time due to index shifting
         if to_move:
-            click.echo(f"\nProcessing {len(to_move)} move(s)...")
             # Sort moves by target index (lowest first) so each item ends at correct position
-            for move in sorted(to_move, key=lambda x: x["to_index"]):
-                # Re-fetch current form state to get accurate indices
-                current_form = service.forms().get(formId=form_id).execute()
-                current_items = current_form.get("items", [])
+            sorted_moves = sorted(to_move, key=lambda x: x["to_index"])
+            with operation("Processing moves", total=len(sorted_moves)) as op:
+                for move in sorted_moves:
+                    # Re-fetch current form state to get accurate indices
+                    current_form = service.forms().get(formId=form_id).execute()
+                    current_items = current_form.get("items", [])
 
-                # Find current position of this item
-                item_id = move["itemId"]
-                current_idx = None
-                for idx, item in enumerate(current_items):
-                    if item.get("itemId") == item_id:
-                        current_idx = idx
-                        break
+                    # Find current position of this item
+                    item_id = move["itemId"]
+                    current_idx = None
+                    for idx, item in enumerate(current_items):
+                        if item.get("itemId") == item_id:
+                            current_idx = idx
+                            break
 
-                if current_idx is None:
-                    click.echo(f"  ! Item {item_id} not found, skipping move", err=True)
-                    continue
+                    if current_idx is None:
+                        click.echo(f"  ! Item {item_id} not found, skipping move", err=True)
+                        op.advance()
+                        continue
 
-                target_idx = move["to_index"]
-                if current_idx == target_idx:
-                    continue  # Already in position
+                    target_idx = move["to_index"]
+                    if current_idx == target_idx:
+                        op.advance()
+                        continue  # Already in position
 
-                # Execute move
-                move_request = {
-                    "moveItem": {
-                        "originalLocation": {"index": current_idx},
-                        "newLocation": {"index": target_idx}
+                    # Execute move
+                    move_request = {
+                        "moveItem": {
+                            "originalLocation": {"index": current_idx},
+                            "newLocation": {"index": target_idx}
+                        }
                     }
-                }
-                service.forms().batchUpdate(
-                    formId=form_id,
-                    body={"requests": [move_request]}
-                ).execute()
-                click.echo(f"  > Moved: {move['title']} [{current_idx}] -> [{target_idx}]")
-
-            click.echo(f"Done: {len(to_move)} move(s) completed")
+                    service.forms().batchUpdate(
+                        formId=form_id,
+                        body={"requests": [move_request]}
+                    ).execute()
+                    logger.info(f"Moved: {move['title']} [{current_idx}] -> [{target_idx}]")
+                    click.echo(f"  > Moved: {move['title']} [{current_idx}] -> [{target_idx}]")
+                    op.advance()
 
         if not requests and not to_move:
             click.echo("No API requests to execute.")

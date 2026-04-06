@@ -3,6 +3,7 @@
 Implements calendar viewing and event editing (ADR 007).
 """
 
+import logging
 import re
 import sys
 from dataclasses import dataclass, field
@@ -15,6 +16,9 @@ import yaml
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
+from .ui import operation, success, error
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -770,7 +774,7 @@ def clone_cmd(calendar: str | None, output: str, days: int | None, date_from: st
         calendar=calendar, verbose=verbose,
         days=days, date_from=date_from, date_to=date_to,
     )
-    click.echo(f"Cloned {count} events to {output}")
+    success(f"Cloned {count} events to {output}")
 
 
 @cal_cli.command(name="pull")
@@ -796,7 +800,7 @@ def pull_cmd(file: str):
         date_from=str(_header["from"]) if "from" in _header else None,
         date_to=str(_header["to"]) if "to" in _header else None,
     )
-    click.echo(f"Pulled {count} events to {file}")
+    success(f"Pulled {count} events to {file}")
 
 
 @cal_cli.command(name="checkout")
@@ -855,40 +859,46 @@ def checkout_cmd(calendar: str | None, output: Path, days: int | None, date_from
     cloned = 0
     skipped = 0
 
-    for event in events:
-        event_id = event.get("id", "")
-        if event_id in existing_ids:
-            skipped += 1
-            continue
+    with operation("Checking out events", total=len(events)) as op:
+        for event in events:
+            event_id = event.get("id", "")
+            if event_id in existing_ids:
+                skipped += 1
+                op.advance()
+                continue
 
-        try:
-            cal_id = event.get("_calendar_id", "primary")
-            cal_name = event.get("_calendar_name", cal_id)
-            event_data = api_event_to_dataclass(event, cal_id, cal_name)
+            try:
+                cal_id = event.get("_calendar_id", "primary")
+                cal_name = event.get("_calendar_name", cal_id)
+                event_data = api_event_to_dataclass(event, cal_id, cal_name)
 
-            # Generate filename
-            title = event.get("summary", "event")
-            safe_title = re.sub(r"[^\w\s-]", "", title)[:30].strip()
-            safe_title = re.sub(r"\s+", "_", safe_title)
-            start = event.get("start", {})
-            date_str = start.get("dateTime", start.get("date", ""))[:10]
-            filename = f"{date_str}_{safe_title}.cal.gax"
+                # Generate filename
+                title = event.get("summary", "event")
+                safe_title = re.sub(r"[^\w\s-]", "", title)[:30].strip()
+                safe_title = re.sub(r"\s+", "_", safe_title)
+                start = event.get("start", {})
+                date_str = start.get("dateTime", start.get("date", ""))[:10]
+                filename = f"{date_str}_{safe_title}.cal.gax"
 
-            file_path = output / filename
+                logger.info(f"Writing {filename}")
 
-            # Avoid overwriting
-            if file_path.exists():
-                file_path = output / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax"
+                file_path = output / filename
 
-            content = event_to_yaml(event_data)
-            file_path.write_text(content)
-            cloned += 1
-            click.echo(f"  {filename}")
+                # Avoid overwriting
+                if file_path.exists():
+                    file_path = output / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax"
 
-        except Exception as e:
-            click.echo(f"  Error cloning event: {e}", err=True)
+                content = event_to_yaml(event_data)
+                file_path.write_text(content)
+                cloned += 1
+                click.echo(f"  {filename}")
 
-    click.echo(f"Checked out: {cloned}, Skipped: {skipped} (already present)")
+            except Exception as e:
+                click.echo(f"  Error cloning event: {e}", err=True)
+
+            op.advance()
+
+    success(f"Checked out: {cloned}, Skipped: {skipped} (already present)")
 
 
 def _clone_events_to_file(
@@ -1011,7 +1021,7 @@ def event_clone_cmd(id_or_url: str, calendar: str, output_path: str | None):
     content = event_to_yaml(event)
     Path(output_path).write_text(content)
 
-    click.echo(f"Cloned event to {output_path}")
+    success(f"Cloned event to {output_path}")
 
 
 @event_group.command(name="new")
@@ -1044,7 +1054,7 @@ def event_new_cmd(calendar: str, output_path: str | None):
     content = event_to_yaml(event)
     Path(output_path).write_text(content)
 
-    click.echo(f"Created event template at {output_path}")
+    success(f"Created event template at {output_path}")
     click.echo("Edit the file, then run: gax cal event push " + output_path)
 
 
@@ -1077,7 +1087,7 @@ def event_pull_cmd(file_path: str):
     new_content = event_to_yaml(updated_event)
     path.write_text(new_content)
 
-    click.echo(f"Pulled latest data to {file_path}")
+    success(f"Pulled latest data to {file_path}")
 
 
 @event_group.command(name="push")
@@ -1098,7 +1108,7 @@ def event_push_cmd(file_path: str, yes: bool):
                 return
 
         result = update_event(local_event)
-        click.echo(f"Updated event: {result.get('htmlLink', '')}")
+        success(f"Updated event: {result.get('htmlLink', '')}")
     else:
         # Create new event
         if not yes:
@@ -1117,7 +1127,7 @@ def event_push_cmd(file_path: str, yes: bool):
         new_content = event_to_yaml(local_event)
         path.write_text(new_content)
 
-        click.echo(f"Created event: {result.get('htmlLink', '')}")
+        success(f"Created event: {result.get('htmlLink', '')}")
 
 
 @event_group.command(name="delete")
@@ -1143,4 +1153,4 @@ def event_delete_cmd(file_path: str, yes: bool):
     delete_event(local_event.id, local_event.calendar)
     path.unlink()
 
-    click.echo(f"Deleted event '{local_event.title}'")
+    success(f"Deleted event '{local_event.title}'")

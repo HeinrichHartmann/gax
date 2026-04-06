@@ -3,6 +3,7 @@
 Handles upload/download of arbitrary files to/from Google Drive.
 """
 
+import logging
 import re
 import sys
 from datetime import datetime, timezone
@@ -15,6 +16,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from .auth import get_authenticated_credentials
+from .ui import operation, success, error
+
+logger = logging.getLogger(__name__)
 
 
 def extract_file_id(url_or_id: str) -> str:
@@ -164,12 +168,16 @@ def set_public(file_id: str, public: bool = True):
     else:
         # Remove public permissions
         permissions = service.permissions().list(fileId=file_id).execute()
-        for perm in permissions.get('permissions', []):
-            if perm.get('type') == 'anyone':
-                service.permissions().delete(
-                    fileId=file_id,
-                    permissionId=perm['id']
-                ).execute()
+        perms = permissions.get('permissions', [])
+        with operation("Removing public permissions", total=len(perms)) as op:
+            for perm in perms:
+                if perm.get('type') == 'anyone':
+                    logger.info(f"Removing permission: {perm['id']}")
+                    service.permissions().delete(
+                        fileId=file_id,
+                        permissionId=perm['id']
+                    ).execute()
+                op.advance()
 
 
 def create_tracking_file(file_path: Path, metadata: dict) -> Path:
@@ -235,7 +243,7 @@ def clone(url_or_id: str, output: Optional[Path]):
     try:
         file_id = extract_file_id(url_or_id)
 
-        click.echo(f"Fetching file: {file_id}")
+        logger.info(f"Fetching file: {file_id}")
 
         # Get metadata first to determine filename
         creds = get_authenticated_credentials()
@@ -252,24 +260,26 @@ def clone(url_or_id: str, output: Optional[Path]):
             file_path = Path(metadata['name'])
 
         if file_path.exists():
-            click.echo(f"Error: File already exists: {file_path}", err=True)
+            error(f"File already exists: {file_path}")
             sys.exit(1)
 
         # Download file
-        click.echo(f"Downloading to: {file_path}")
-        metadata = download_file(file_id, file_path)
+        with operation(f"Downloading to: {file_path}") as op:
+            logger.info(f"Downloading: {file_path}")
+            metadata = download_file(file_id, file_path)
+            op.update(f"Creating tracking file")
 
         # Create tracking file
         tracking_path = create_tracking_file(file_path, metadata)
 
-        click.echo(f"Created: {file_path}")
+        success(f"Created: {file_path}")
         click.echo(f"Tracking: {tracking_path}")
         click.echo(f"Size: {metadata.get('size', 'unknown')} bytes")
         if metadata.get('webContentLink'):
             click.echo(f"Public download: {metadata.get('webContentLink')}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -284,7 +294,7 @@ def pull(file_path: Path):
         # Find tracking file
         tracking_path = file_path.with_suffix(file_path.suffix + '.gax')
         if not tracking_path.exists():
-            click.echo(f"Error: No tracking file found: {tracking_path}", err=True)
+            error(f"No tracking file found: {tracking_path}")
             click.echo("Use 'gax file clone' to download a tracked file.", err=True)
             sys.exit(1)
 
@@ -293,22 +303,23 @@ def pull(file_path: Path):
         file_id = tracking_data.get('file_id')
 
         if not file_id:
-            click.echo("Error: No file_id in tracking file", err=True)
+            error("No file_id in tracking file")
             sys.exit(1)
 
-        click.echo(f"Pulling: {file_path}")
-
         # Download updated file
-        metadata = download_file(file_id, file_path)
+        with operation(f"Pulling: {file_path}") as op:
+            logger.info(f"Downloading latest version")
+            metadata = download_file(file_id, file_path)
+            op.update(f"Updating tracking file")
 
         # Update tracking file
         create_tracking_file(file_path, metadata)
 
-        click.echo(f"Updated: {file_path}")
+        success(f"Updated: {file_path}")
         click.echo(f"Size: {metadata.get('size', 'unknown')} bytes")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -332,7 +343,7 @@ def push(file_path: Path, public: bool, yes: bool):
             file_id = tracking_data.get('file_id')
 
             if not file_id:
-                click.echo("Error: No file_id in tracking file", err=True)
+                error("No file_id in tracking file")
                 sys.exit(1)
 
             # Show what will be updated
@@ -347,13 +358,15 @@ def push(file_path: Path, public: bool, yes: bool):
                     click.echo("Aborted.")
                     return
 
-            click.echo("Pushing changes...")
-            metadata = update_file(file_id, file_path, public=public if public else None)
+            with operation(f"Pushing changes to {file_id}") as op:
+                logger.info(f"Updating Drive file")
+                metadata = update_file(file_id, file_path, public=public if public else None)
+                op.update(f"Updating tracking file")
 
             # Update tracking file
             create_tracking_file(file_path, metadata)
 
-            click.echo(f"Updated: {metadata['name']}")
+            success(f"Updated: {metadata['name']}")
             click.echo(f"View: {metadata.get('webViewLink')}")
             if metadata.get('webContentLink'):
                 click.echo(f"Download: {metadata.get('webContentLink')}")
@@ -369,18 +382,20 @@ def push(file_path: Path, public: bool, yes: bool):
                     click.echo("Aborted.")
                     return
 
-            click.echo("Uploading...")
-            metadata = upload_file(file_path, public=public)
+            with operation(f"Uploading: {file_path.name}") as op:
+                logger.info(f"Uploading to Drive")
+                metadata = upload_file(file_path, public=public)
+                op.update(f"Creating tracking file")
 
             # Create tracking file
             tracking_path = create_tracking_file(file_path, metadata)
 
-            click.echo(f"Uploaded: {metadata['name']}")
+            success(f"Uploaded: {metadata['name']}")
             click.echo(f"Tracking: {tracking_path}")
             click.echo(f"View: {metadata.get('webViewLink')}")
             if metadata.get('webContentLink'):
                 click.echo(f"Download: {metadata.get('webContentLink')}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)

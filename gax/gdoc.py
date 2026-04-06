@@ -3,6 +3,7 @@
 Implements pull/init/cat commands using the multipart YAML-markdown format (ADR 002).
 """
 
+import logging
 import re
 import sys
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ from googleapiclient.discovery import build
 from .auth import get_authenticated_credentials
 from . import multipart
 from . import native_md
+from .ui import operation, success, error
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -160,20 +164,23 @@ def pull_doc(
     time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     sections = []
 
-    for i, tab in enumerate(tabs, start=1):
-        tab_title = tab["title"]
-        content = tab_contents.get(tab_title, "")
+    with operation("Processing tabs", total=len(tabs)) as op:
+        for i, tab in enumerate(tabs, start=1):
+            tab_title = tab["title"]
+            logger.info(f"Processing tab: {tab_title}")
+            content = tab_contents.get(tab_title, "")
 
-        sections.append(
-            DocSection(
-                title=doc_title,
-                source=source_url,
-                time=time_str,
-                section=i,
-                section_title=tab_title,
-                content=content,
+            sections.append(
+                DocSection(
+                    title=doc_title,
+                    source=source_url,
+                    time=time_str,
+                    section=i,
+                    section_title=tab_title,
+                    content=content,
+                )
             )
-        )
+            op.advance()
 
     return sections
 
@@ -191,63 +198,65 @@ def fetch_comments(document_id: str) -> list[Comment]:
     comments = []
     page_token = None
 
-    while True:
-        result = (
-            service.comments()
-            .list(
-                fileId=document_id,
-                fields="comments(id,author,createdTime,quotedFileContent,content,resolved,replies(id,author,createdTime,content)),nextPageToken",
-                pageToken=page_token,
+    with operation("Fetching comments") as op:
+        while True:
+            result = (
+                service.comments()
+                .list(
+                    fileId=document_id,
+                    fields="comments(id,author,createdTime,quotedFileContent,content,resolved,replies(id,author,createdTime,content)),nextPageToken",
+                    pageToken=page_token,
+                )
+                .execute()
             )
-            .execute()
-        )
 
-        for c in result.get("comments", []):
-            # Parse date
-            created = c.get("createdTime", "")
-            date = created[:10] if created else ""
+            for c in result.get("comments", []):
+                logger.info(f"Processing comment: {c.get('id', 'unknown')}")
+                # Parse date
+                created = c.get("createdTime", "")
+                date = created[:10] if created else ""
 
-            # Author email
-            author = c.get("author", {}).get("emailAddress", "")
-            if not author:
-                author = c.get("author", {}).get("displayName", "Unknown")
+                # Author email
+                author = c.get("author", {}).get("emailAddress", "")
+                if not author:
+                    author = c.get("author", {}).get("displayName", "Unknown")
 
-            # Quoted text
-            quoted = c.get("quotedFileContent", {}).get("value", "")
+                # Quoted text
+                quoted = c.get("quotedFileContent", {}).get("value", "")
 
-            # Replies
-            replies = []
-            for r in c.get("replies", []):
-                r_created = r.get("createdTime", "")
-                r_date = r_created[:10] if r_created else ""
-                r_author = r.get("author", {}).get("emailAddress", "")
-                if not r_author:
-                    r_author = r.get("author", {}).get("displayName", "Unknown")
+                # Replies
+                replies = []
+                for r in c.get("replies", []):
+                    r_created = r.get("createdTime", "")
+                    r_date = r_created[:10] if r_created else ""
+                    r_author = r.get("author", {}).get("emailAddress", "")
+                    if not r_author:
+                        r_author = r.get("author", {}).get("displayName", "Unknown")
 
-                replies.append(
-                    CommentReply(
-                        reply_id=r.get("id", ""),
-                        author=r_author,
-                        date=r_date,
-                        content=r.get("content", ""),
+                    replies.append(
+                        CommentReply(
+                            reply_id=r.get("id", ""),
+                            author=r_author,
+                            date=r_date,
+                            content=r.get("content", ""),
+                        )
+                    )
+
+                comments.append(
+                    Comment(
+                        comment_id=c.get("id", ""),
+                        author=author,
+                        date=date,
+                        quoted_text=quoted,
+                        content=c.get("content", ""),
+                        resolved=c.get("resolved", False),
+                        replies=replies,
                     )
                 )
 
-            comments.append(
-                Comment(
-                    comment_id=c.get("id", ""),
-                    author=author,
-                    date=date,
-                    quoted_text=quoted,
-                    content=c.get("content", ""),
-                    resolved=c.get("resolved", False),
-                    replies=replies,
-                )
-            )
-
-        page_token = result.get("nextPageToken")
-        if not page_token:
-            break
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
 
     return comments
 
@@ -293,9 +302,12 @@ def format_comments_section(
 ) -> DocSection:
     """Format comments as a multipart section."""
     content_lines = []
-    for comment in comments:
-        content_lines.append(format_comment(comment))
-        content_lines.append("")
+    with operation("Formatting comments", total=len(comments)) as op:
+        for comment in comments:
+            logger.info(f"Formatting comment: {comment.comment_id}")
+            content_lines.append(format_comment(comment))
+            content_lines.append("")
+            op.advance()
 
     return DocSection(
         title=title,
@@ -563,10 +575,10 @@ def tab_import(url: str, file: Path, output: Optional[Path]):
 
         tracking_content = format_section(section)
         tracking_path.write_text(tracking_content, encoding="utf-8")
-        click.echo(f"Created: {tracking_path}")
+        success(f"Created: {tracking_path}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -652,10 +664,10 @@ def tab_clone(url: str, tab_name: str, output: Optional[Path]):
             sys.exit(1)
 
         file_path.write_text(content, encoding="utf-8")
-        click.echo(f"Created: {file_path}")
+        success(f"Created: {file_path}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -686,10 +698,10 @@ def tab_pull(file: Path):
         new_content = format_section(new_section)
 
         file.write_text(new_content, encoding="utf-8")
-        click.echo(f"Updated: {file}")
+        success(f"Updated: {file}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -798,10 +810,10 @@ def tab_push(file: Path, yes: bool):
         click.echo(f"Pushing to tab '{tab_name}'...")
         content_to_push = native_md.inline_images_from_store(local_section.content)
         update_tab_content(document_id, tab_name, content_to_push)
-        click.echo("Pushed successfully.")
+        success("Pushed successfully.")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -833,8 +845,11 @@ def _add_comments_to_sections(
     )
 
     # Add remaining content sections (if multi-tab)
-    for section in sections[1:]:
-        result.append(section)
+    with operation("Adding sections", total=len(sections) - 1) as op:
+        for section in sections[1:]:
+            logger.info(f"Adding section: {section.section_title}")
+            result.append(section)
+            op.advance()
 
     return result
 
@@ -880,12 +895,12 @@ def clone(url: str, output: Optional[Path], with_comments: bool):
             sys.exit(1)
 
         file_path.write_text(content, encoding="utf-8")
-        click.echo(f"Created: {file_path}")
+        success(f"Created: {file_path}")
         click.echo(f"Title: {sections[0].title}")
         click.echo(f"Sections: {len(sections)}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -923,11 +938,11 @@ def pull(file: Path, with_comments: bool):
         new_content = format_multipart(new_sections)
 
         file.write_text(new_content, encoding="utf-8")
-        click.echo(f"Updated: {file}")
+        success(f"Updated: {file}")
         click.echo(f"Sections: {len(new_sections)}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -990,35 +1005,41 @@ def checkout(url: str, output: Optional[Path]):
         created = 0
         skipped = 0
 
-        for section in sections:
-            tab_name = section.section_title
+        with operation("Writing tab files", total=len(sections)) as op:
+            for section in sections:
+                tab_name = section.section_title
+                logger.info(f"Processing tab: {tab_name}")
 
-            # Skip comment sections
-            if section.section_type == "comments":
-                continue
+                # Skip comment sections
+                if section.section_type == "comments":
+                    op.advance()
+                    continue
 
-            # Generate filename
-            safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
-            safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-            file_path = folder / f"{safe_tab_name}.tab.gax"
+                # Generate filename
+                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
+                file_path = folder / f"{safe_tab_name}.tab.gax"
 
-            # Skip if exists
-            if file_path.exists():
-                skipped += 1
-                continue
+                # Skip if exists
+                if file_path.exists():
+                    skipped += 1
+                    op.advance()
+                    continue
 
-            try:
-                # Write file with full YAML header
-                content = format_section(section)
-                file_path.write_text(content, encoding="utf-8")
+                try:
+                    # Write file with full YAML header
+                    content = format_section(section)
+                    file_path.write_text(content, encoding="utf-8")
 
-                created += 1
-                click.echo(f"  {file_path.name}")
+                    created += 1
+                    click.echo(f"  {file_path.name}")
 
-            except Exception as e:
-                click.echo(f"  Error with tab '{tab_name}': {e}", err=True)
+                except Exception as e:
+                    click.echo(f"  Error with tab '{tab_name}': {e}", err=True)
 
-        click.echo(f"Checked out: {created}, Skipped: {skipped} (already present)")
+                op.advance()
+
+        success(f"Checked out: {created}, Skipped: {skipped} (already present)")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

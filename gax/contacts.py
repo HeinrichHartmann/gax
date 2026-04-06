@@ -6,6 +6,7 @@ Formats:
 """
 
 import json
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,9 @@ import yaml
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
+from .ui import operation, success, error
+
+logger = logging.getLogger(__name__)
 
 ALL_PERSON_FIELDS = (
     "names,emailAddresses,phoneNumbers,organizations,"
@@ -134,7 +138,12 @@ def normalize_contact(api_contact: dict, groups: dict[str, str]) -> dict:
 
 def contacts_to_jsonl(contacts: list[dict], groups: dict[str, str]) -> str:
     """Format contacts as JSONL body (without header)."""
-    normalized = [normalize_contact(c, groups) for c in contacts]
+    normalized = []
+    with operation("Normalizing contacts", total=len(contacts)) as op:
+        for c in contacts:
+            logger.info(f"Processing: {c.get('names', [{}])[0].get('displayName', '(unnamed)')}")
+            normalized.append(normalize_contact(c, groups))
+            op.advance()
     # Sort by name for consistent output
     normalized.sort(key=lambda c: c.get("name", "").lower())
     return "\n".join(json.dumps(c, ensure_ascii=False) for c in normalized)
@@ -142,41 +151,48 @@ def contacts_to_jsonl(contacts: list[dict], groups: dict[str, str]) -> str:
 
 def contacts_to_markdown(contacts: list[dict], groups: dict[str, str]) -> str:
     """Format contacts as markdown body (without header)."""
-    normalized = [normalize_contact(c, groups) for c in contacts]
+    normalized = []
+    with operation("Normalizing contacts", total=len(contacts)) as op:
+        for c in contacts:
+            logger.info(f"Processing: {c.get('names', [{}])[0].get('displayName', '(unnamed)')}")
+            normalized.append(normalize_contact(c, groups))
+            op.advance()
     # Sort by name
     normalized.sort(key=lambda c: c.get("name", "").lower())
 
     entries = []
-    for c in normalized:
-        lines = [f"- {c['name'] or '(unnamed)'}"]
-        if c["email"]:
-            lines.append(f"  - email: {', '.join(c['email'])}")
-        if c["phone"]:
-            lines.append(f"  - phone: {', '.join(c['phone'])}")
-        if c["organization"] or c["title"]:
-            org = c["organization"] or ""
-            if c["title"]:
-                org = f"{org} ({c['title']})" if org else c["title"]
-            lines.append(f"  - organization: {org}")
-        if c["address"]:
-            # Indent multiline addresses
-            addr = c["address"].replace("\n", "\n    ")
-            lines.append(f"  - address: {addr}")
-        if c["birthday"]:
-            lines.append(f"  - birthday: {c['birthday']}")
-        if c["website"]:
-            lines.append(f"  - website: {c['website']}")
-        if c["notes"]:
-            # Truncate long notes, indent multiline
-            notes = c["notes"]
-            if len(notes) > 100:
-                notes = notes[:100] + "..."
-            notes = notes.replace("\n", "\n    ")
-            lines.append(f"  - notes: {notes}")
-        if c["labels"]:
-            lines.append(f"  - labels: {', '.join(c['labels'])}")
-        lines.append(f"  - id: {c['resourceName']}")
-        entries.append("\n".join(lines))
+    with operation("Formatting contacts", total=len(normalized)) as op:
+        for c in normalized:
+            lines = [f"- {c['name'] or '(unnamed)'}"]
+            if c["email"]:
+                lines.append(f"  - email: {', '.join(c['email'])}")
+            if c["phone"]:
+                lines.append(f"  - phone: {', '.join(c['phone'])}")
+            if c["organization"] or c["title"]:
+                org = c["organization"] or ""
+                if c["title"]:
+                    org = f"{org} ({c['title']})" if org else c["title"]
+                lines.append(f"  - organization: {org}")
+            if c["address"]:
+                # Indent multiline addresses
+                addr = c["address"].replace("\n", "\n    ")
+                lines.append(f"  - address: {addr}")
+            if c["birthday"]:
+                lines.append(f"  - birthday: {c['birthday']}")
+            if c["website"]:
+                lines.append(f"  - website: {c['website']}")
+            if c["notes"]:
+                # Truncate long notes, indent multiline
+                notes = c["notes"]
+                if len(notes) > 100:
+                    notes = notes[:100] + "..."
+                notes = notes.replace("\n", "\n    ")
+                lines.append(f"  - notes: {notes}")
+            if c["labels"]:
+                lines.append(f"  - labels: {', '.join(c['labels'])}")
+            lines.append(f"  - id: {c['resourceName']}")
+            entries.append("\n".join(lines))
+            op.advance()
 
     return "\n".join(entries)
 
@@ -290,11 +306,11 @@ def clone(fmt: str, output: Path | None):
 
         file_path.write_text(content, encoding="utf-8")
 
-        click.echo(f"Created: {file_path}")
+        success(f"Created: {file_path}")
         click.echo(f"Contacts: {len(all_contacts)}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -322,11 +338,11 @@ def pull(file: Path):
 
         file.write_text(content, encoding="utf-8")
 
-        click.echo(f"Updated: {file}")
+        success(f"Updated: {file}")
         click.echo(f"Contacts: {len(all_contacts)}")
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -664,72 +680,78 @@ def apply(plan_file: Path):
         deleted = 0
         errors = []
 
-        for change in change_plan["changes"]:
-            action = change["action"]
-            try:
-                if action == "create":
-                    contact = change["contact"]
-                    api_contact = local_to_api_contact(contact, groups_by_name)
-                    service.people().createContact(body=api_contact).execute()
-                    created += 1
-                    click.echo(f"  + Created: {contact.get('name', '(unnamed)')}")
+        with operation("Applying changes", total=len(change_plan["changes"])) as op:
+            for change in change_plan["changes"]:
+                action = change["action"]
+                try:
+                    if action == "create":
+                        contact = change["contact"]
+                        logger.info(f"Creating: {contact.get('name', '(unnamed)')}")
+                        api_contact = local_to_api_contact(contact, groups_by_name)
+                        service.people().createContact(body=api_contact).execute()
+                        created += 1
+                        click.echo(f"  + Created: {contact.get('name', '(unnamed)')}")
 
-                elif action == "update":
-                    resource_name = change["resourceName"]
-                    contact = change["contact"]
-                    api_contact = local_to_api_contact(contact, groups_by_name)
+                    elif action == "update":
+                        resource_name = change["resourceName"]
+                        contact = change["contact"]
+                        logger.info(f"Updating: {contact.get('name', '(unnamed)')}")
+                        api_contact = local_to_api_contact(contact, groups_by_name)
 
-                    # Get current etag for update
-                    current = service.people().get(
-                        resourceName=resource_name,
-                        personFields=ALL_PERSON_FIELDS,
-                    ).execute()
-                    etag = current.get("etag", "")
+                        # Get current etag for update
+                        current = service.people().get(
+                            resourceName=resource_name,
+                            personFields=ALL_PERSON_FIELDS,
+                        ).execute()
+                        etag = current.get("etag", "")
 
-                    # Build update mask from diff
-                    diff = change.get("diff", {})
-                    update_fields = []
-                    field_mapping = {
-                        "name": "names",
-                        "givenName": "names",
-                        "familyName": "names",
-                        "email": "emailAddresses",
-                        "phone": "phoneNumbers",
-                        "organization": "organizations",
-                        "title": "organizations",
-                        "department": "organizations",
-                        "address": "addresses",
-                        "birthday": "birthdays",
-                        "notes": "biographies",
-                        "nickname": "nicknames",
-                        "website": "urls",
-                        "labels": "memberships",
-                    }
-                    for field in diff:
-                        api_field = field_mapping.get(field)
-                        if api_field and api_field not in update_fields:
-                            update_fields.append(api_field)
+                        # Build update mask from diff
+                        diff = change.get("diff", {})
+                        update_fields = []
+                        field_mapping = {
+                            "name": "names",
+                            "givenName": "names",
+                            "familyName": "names",
+                            "email": "emailAddresses",
+                            "phone": "phoneNumbers",
+                            "organization": "organizations",
+                            "title": "organizations",
+                            "department": "organizations",
+                            "address": "addresses",
+                            "birthday": "birthdays",
+                            "notes": "biographies",
+                            "nickname": "nicknames",
+                            "website": "urls",
+                            "labels": "memberships",
+                        }
+                        for field in diff:
+                            api_field = field_mapping.get(field)
+                            if api_field and api_field not in update_fields:
+                                update_fields.append(api_field)
 
-                    api_contact["etag"] = etag
-                    service.people().updateContact(
-                        resourceName=resource_name,
-                        body=api_contact,
-                        updatePersonFields=",".join(update_fields),
-                    ).execute()
-                    updated += 1
-                    click.echo(f"  ~ Updated: {contact.get('name', '(unnamed)')}")
+                        api_contact["etag"] = etag
+                        service.people().updateContact(
+                            resourceName=resource_name,
+                            body=api_contact,
+                            updatePersonFields=",".join(update_fields),
+                        ).execute()
+                        updated += 1
+                        click.echo(f"  ~ Updated: {contact.get('name', '(unnamed)')}")
 
-                elif action == "delete":
-                    resource_name = change["resourceName"]
-                    name = change.get("name", "(unnamed)")
-                    service.people().deleteContact(
-                        resourceName=resource_name,
-                    ).execute()
-                    deleted += 1
-                    click.echo(f"  - Deleted: {name}")
+                    elif action == "delete":
+                        resource_name = change["resourceName"]
+                        name = change.get("name", "(unnamed)")
+                        logger.info(f"Deleting: {name}")
+                        service.people().deleteContact(
+                            resourceName=resource_name,
+                        ).execute()
+                        deleted += 1
+                        click.echo(f"  - Deleted: {name}")
 
-            except Exception as e:
-                errors.append(f"{action} {change.get('name', change.get('resourceName', '?'))}: {e}")
+                except Exception as e:
+                    errors.append(f"{action} {change.get('name', change.get('resourceName', '?'))}: {e}")
+
+                op.advance()
 
         click.echo("")
         click.echo(f"Applied: {created} created, {updated} updated, {deleted} deleted")
@@ -740,5 +762,5 @@ def apply(plan_file: Path):
             sys.exit(1)
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        error(f"Error: {e}")
         sys.exit(1)
