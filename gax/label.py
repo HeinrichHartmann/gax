@@ -339,7 +339,8 @@ def label_plan(file: str, output: str, allow_delete: bool):
 
 @label.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
-def label_apply(plan_file: str):
+@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+def label_apply(plan_file: str, yes: bool):
     """Apply label changes from plan file.
 
     \b
@@ -382,7 +383,7 @@ def label_apply(plan_file: str):
         if to_delete:
             click.echo(f"  Delete: {len(to_delete)}")
 
-        if not click.confirm("Apply these changes?"):
+        if not yes and not click.confirm("Apply these changes?"):
             click.echo("Aborted.")
             return
 

@@ -57,13 +57,33 @@ class GSheetClient:
         tab: str,
         df: pd.DataFrame,
         with_formulas: bool = False,
+        create_if_missing: bool = False,
     ) -> int:
         """Write DataFrame to a Google Sheet tab. Returns number of rows written.
 
         Clears the sheet first to ensure deleted rows are removed.
+
+        Args:
+            spreadsheet_id: The spreadsheet ID
+            tab: Tab name
+            df: DataFrame to write
+            with_formulas: Whether to interpret formulas
+            create_if_missing: Create the tab if it doesn't exist
+
+        Returns:
+            Number of rows written
         """
         sh = self.gc.open_by_key(spreadsheet_id)
-        ws = sh.worksheet(tab)
+
+        # Try to get worksheet, create if missing and requested
+        try:
+            ws = sh.worksheet(tab)
+        except gspread.exceptions.WorksheetNotFound:
+            if create_if_missing:
+                # Create new worksheet with 1000 rows, 26 columns
+                ws = sh.add_worksheet(title=tab, rows=1000, cols=26)
+            else:
+                raise
 
         # Clear the entire sheet first to remove any stale data
         ws.clear()
@@ -78,3 +98,14 @@ class GSheetClient:
         ws.update(range_name="A1", values=values, value_input_option=value_input_option)
 
         return len(df)
+
+    def delete_worksheet(self, spreadsheet_id: str, tab: str) -> None:
+        """Delete a worksheet from a spreadsheet.
+
+        Args:
+            spreadsheet_id: The spreadsheet ID
+            tab: Tab name to delete
+        """
+        sh = self.gc.open_by_key(spreadsheet_id)
+        ws = sh.worksheet(tab)
+        sh.del_worksheet(ws)

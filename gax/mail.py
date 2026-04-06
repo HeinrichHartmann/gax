@@ -1477,7 +1477,8 @@ def mailbox_plan(file: str, output: str):
 
 @mailbox.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
-def relabel_apply(plan_file: str):
+@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+def relabel_apply(plan_file: str, yes: bool):
     """Apply label changes from plan.
 
     Reads the plan file and applies sys/cat/label changes.
@@ -1546,7 +1547,7 @@ def relabel_apply(plan_file: str):
 
         click.echo()
 
-        if not click.confirm("Apply these changes?"):
+        if not yes and not click.confirm("Apply these changes?"):
             click.echo("Aborted.")
             return
 

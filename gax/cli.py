@@ -28,7 +28,8 @@ from .gdrive import file as gdrive_file
 @click.version_option()
 def main():
     """gax - Google Access CLI"""
-    pass
+    from . import ui
+    ui.setup_logging()
 
 
 def _detect_file_type(file_path: Path) -> str | None:
@@ -1010,6 +1011,129 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
                 click.echo(f"  Error with tab '{tab_name}': {e}", err=True)
 
         click.echo(f"Checked out: {created}, Skipped: {skipped} (already present)")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@sheet.command("push")
+@click.argument("folder", type=click.Path(exists=True, path_type=Path))
+@click.option("--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+def sheet_push(folder: Path, with_formulas: bool, yes: bool):
+    """Push all tabs in a checkout folder to Google Sheets.
+
+    Shows a diff preview of changes and prompts for confirmation before pushing.
+
+    \b
+    Examples:
+        gax sheet push Budget.sheet.gax.d
+        gax sheet push Budget.sheet.gax.d -y
+        gax sheet push Budget.sheet.gax.d --with-formulas
+    """
+    from .gsheet.folder_push import push_folder
+
+    try:
+        success, message = push_folder(folder, with_formulas=with_formulas, auto_approve=yes)
+        if success:
+            click.echo(message)
+        else:
+            click.echo(f"Error: {message}", err=True)
+            sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@sheet.command("plan")
+@click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
+def sheet_plan(folder):
+    """Show what changes would be pushed to Google Sheets.
+
+    Similar to 'terraform plan' - previews changes without applying them.
+    If no folder is specified, looks for a .sheet.gax.d folder in the current directory.
+
+    \b
+    Examples:
+        gax sheet plan
+        gax sheet plan Budget.sheet.gax.d
+    """
+    from .gsheet.folder_push import create_push_plan
+
+    try:
+        # If no folder specified, find .sheet.gax.d in current directory
+        if folder is None:
+            candidates = list(Path.cwd().glob("*.sheet.gax.d"))
+            if len(candidates) == 0:
+                click.echo("Error: No .sheet.gax.d folder found in current directory", err=True)
+                sys.exit(1)
+            elif len(candidates) > 1:
+                click.echo("Error: Multiple .sheet.gax.d folders found. Please specify one:", err=True)
+                for c in candidates:
+                    click.echo(f"  {c.name}")
+                sys.exit(1)
+            folder = candidates[0]
+
+        # Create and display plan
+        plan = create_push_plan(folder)
+        click.echo("\n" + plan.format_summary())
+
+        if plan.has_changes:
+            click.echo("\nRun 'gax sheet apply' to push these changes, or 'gax sheet push <folder>' with confirmation.")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@sheet.command("apply")
+@click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
+@click.option("--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))")
+def sheet_apply(folder, with_formulas: bool):
+    """Apply planned changes by pushing to Google Sheets.
+
+    Similar to 'terraform apply' - shows plan and applies changes with confirmation.
+    If no folder is specified, looks for a .sheet.gax.d folder in the current directory.
+
+    \b
+    Examples:
+        gax sheet apply
+        gax sheet apply Budget.sheet.gax.d
+        gax sheet apply Budget.sheet.gax.d --with-formulas
+    """
+    from .gsheet.folder_push import create_push_plan, apply_push_plan
+
+    try:
+        # If no folder specified, find .sheet.gax.d in current directory
+        if folder is None:
+            candidates = list(Path.cwd().glob("*.sheet.gax.d"))
+            if len(candidates) == 0:
+                click.echo("Error: No .sheet.gax.d folder found in current directory", err=True)
+                sys.exit(1)
+            elif len(candidates) > 1:
+                click.echo("Error: Multiple .sheet.gax.d folders found. Please specify one:", err=True)
+                for c in candidates:
+                    click.echo(f"  {c.name}")
+                sys.exit(1)
+            folder = candidates[0]
+
+        # Create and display plan
+        plan = create_push_plan(folder)
+        click.echo("\n" + plan.format_summary())
+
+        if not plan.has_changes:
+            click.echo("Nothing to apply.")
+            return
+
+        # Confirm
+        if not click.confirm("\nApply these changes?"):
+            click.echo("Cancelled.")
+            return
+
+        # Apply
+        total_rows = apply_push_plan(plan, with_formulas=with_formulas)
+        click.echo(f"\nPushed {len(plan.changes)} tab(s), {total_rows} rows total")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
