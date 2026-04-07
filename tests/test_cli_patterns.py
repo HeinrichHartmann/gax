@@ -72,6 +72,7 @@ WRITABLE_RESOURCES = [
     'contacts',
     'mail-label',
     'mail-filter',
+    'form',
 ]
 
 # Resources that can be split (have checkout or fetch)
@@ -172,13 +173,13 @@ class TestWritablePattern:
         assert len(args) > 0, f"'{resource} apply' missing plan_file argument"
 
     @pytest.mark.parametrize("resource", WRITABLE_RESOURCES)
-    def test_apply_does_not_have_yes_flag(self, resource):
-        """Apply must NOT have -y/--yes flag (interactive confirmation required)."""
+    def test_apply_has_yes_flag(self, resource):
+        """Apply must have -y/--yes flag to skip confirmation for automation."""
         cmd = get_command([resource])
         apply_cmd = cmd.commands['apply']
-        # Check that there's no 'yes' parameter
-        yes_param = next((p for p in apply_cmd.params if p.name == 'yes'), None)
-        assert yes_param is None, f"'{resource} apply' should NOT have -y/--yes flag"
+        # Check that there's a 'yes' parameter with correct flags
+        assert has_option(apply_cmd, 'yes', '-y', '--yes', is_flag=True), \
+            f"'{resource} apply' missing -y/--yes flag"
 
 
 # =============================================================================
@@ -273,18 +274,30 @@ class TestCrossCuttingConsistency:
         assert not format_violations, \
             "Format option flag inconsistencies:\n" + "\n".join(format_violations)
 
-    def test_apply_commands_have_no_yes_flag(self):
-        """Apply commands must NOT have -y/--yes flag (confirmation always required)."""
+    def test_apply_commands_have_yes_flag(self):
+        """Apply commands must have -y/--yes flag to skip confirmation for automation."""
         apply_violations = []
 
         def check_command(cmd, path=""):
             # Check if this is an apply command
             if cmd.name == 'apply' and not isinstance(cmd, click.Group):
-                # Check for yes parameter
+                # Check for yes parameter with correct flags
                 yes_param = next((p for p in cmd.params if p.name == 'yes'), None)
-                if yes_param is not None:
+                if yes_param is None:
                     apply_violations.append(
-                        f"{path}: apply command should NOT have -y/--yes flag"
+                        f"{path}: apply command missing -y/--yes flag"
+                    )
+                elif not isinstance(yes_param, click.Option):
+                    apply_violations.append(
+                        f"{path}: 'yes' should be an option, not {type(yes_param)}"
+                    )
+                elif set(yes_param.opts) != {'-y', '--yes'}:
+                    apply_violations.append(
+                        f"{path}: yes flag should be -y/--yes, got {yes_param.opts}"
+                    )
+                elif not yes_param.is_flag:
+                    apply_violations.append(
+                        f"{path}: yes option should be a boolean flag"
                     )
 
             if isinstance(cmd, click.Group):
@@ -294,4 +307,4 @@ class TestCrossCuttingConsistency:
         check_command(cli)
 
         assert not apply_violations, \
-            "Apply commands with -y/--yes flag:\n" + "\n".join(apply_violations)
+            "Apply commands missing or incorrect -y/--yes flag:\n" + "\n".join(apply_violations)

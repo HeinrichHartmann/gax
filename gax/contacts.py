@@ -643,7 +643,8 @@ def plan(file: Path, output: Path | None):
 
 @contacts.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True, path_type=Path))
-def apply(plan_file: Path):
+@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+def apply(plan_file: Path, yes: bool):
     """Apply a contacts plan to Google.
 
     Executes the creates, updates, and deletes specified in the plan file.
@@ -664,9 +665,9 @@ def apply(plan_file: Path):
             click.echo("\nNo changes to apply.")
             return
 
-        # Confirm (always required)
+        # Confirm (unless --yes flag)
         click.echo("")
-        if not click.confirm("Apply these changes?"):
+        if not yes and not click.confirm("Apply these changes?"):
             click.echo("Aborted.")
             return
 

@@ -1490,7 +1490,8 @@ def sheet_plan(folder):
 @sheet.command("apply")
 @click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option("--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))")
-def sheet_apply(folder, with_formulas: bool):
+@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+def sheet_apply(folder, with_formulas: bool, yes: bool):
     """Apply planned changes by pushing to Google Sheets.
 
     Similar to 'terraform apply' - shows plan and applies changes with confirmation.
@@ -1527,7 +1528,7 @@ def sheet_apply(folder, with_formulas: bool):
             return
 
         # Confirm
-        if not click.confirm("\nApply these changes?"):
+        if not yes and not click.confirm("\nApply these changes?"):
             click.echo("Cancelled.")
             return
 
