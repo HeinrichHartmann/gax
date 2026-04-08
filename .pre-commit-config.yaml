@@ -9,7 +9,7 @@ repos:
 
       - id: test
         name: pytest
-        entry: uv run python -m pytest tests/ -m "not e2e"
+        entry: make test
         language: system
         pass_filenames: false
 
