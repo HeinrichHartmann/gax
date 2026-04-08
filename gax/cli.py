@@ -1302,10 +1302,18 @@ def sheet_clone(url: str, output: Path | None, fmt: str):
 @sheet.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def sheet_pull(file: Path):
-    """Pull latest data for all tabs in a multipart file."""
+    """Pull latest data for all tabs in a multipart file or checkout folder."""
     try:
-        rows = pull_all(file)
-        click.echo(f"Pulled {rows} rows to {file}")
+        if file.is_dir():
+            success, message = _pull_folder(file)
+            if success:
+                click.echo(message)
+            else:
+                click.echo(f"Error: {message}", err=True)
+                sys.exit(1)
+        else:
+            rows = pull_all(file)
+            click.echo(f"Pulled {rows} rows to {file}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

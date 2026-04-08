@@ -33,6 +33,7 @@ from rich.progress import (
 from rich.prompt import Confirm
 
 console = Console()
+err_console = Console(stderr=True)
 
 # Track active progress context
 _active_task: Optional[tuple] = None
@@ -151,7 +152,7 @@ def success(msg: str) -> None:
 
 def error(msg: str) -> None:
     """Error message (red) to stderr."""
-    console.print(f"[red]{msg}[/red]", stderr=True)
+    err_console.print(f"[red]{msg}[/red]")
 
 
 def warning(msg: str) -> None:
