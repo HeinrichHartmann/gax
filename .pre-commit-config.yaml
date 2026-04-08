@@ -7,6 +7,12 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: test
+        name: pytest
+        entry: uv run python -m pytest tests/ -m "not e2e"
+        language: system
+        pass_filenames: false
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
