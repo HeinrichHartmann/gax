@@ -13,7 +13,7 @@ TOKEN_FILE = CONFIG_DIR / "token.json"
 # Scopes needed for Google Sheets, Docs, Gmail, Calendar, Forms, Contacts, and Drive files
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive.file",  # read/write files created by app
+    "https://www.googleapis.com/auth/drive.readonly",  # read any Drive file
     "https://www.googleapis.com/auth/documents",  # read/write for import
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
