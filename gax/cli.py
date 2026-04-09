@@ -675,6 +675,7 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             return True, f"{count} filters"
         if file_type == "gax/doc":
             from .gdoc import pull_doc, extract_doc_id
+            from .gdoc import format_multipart as doc_format_multipart
 
             content = file_path.read_text(encoding="utf-8")
             sections = parse_multipart(content)
@@ -685,7 +686,7 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
                 return False, "No source URL found"
             document_id = extract_doc_id(source_url)
             new_sections = pull_doc(document_id, source_url)
-            new_content = format_multipart(new_sections)
+            new_content = doc_format_multipart(new_sections)
             file_path.write_text(new_content, encoding="utf-8")
             return True, f"{len(new_sections)} tabs"
 
@@ -853,83 +854,82 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
         click.echo("No .gax files or .gax.d folders found.", err=True)
         sys.exit(1)
 
-    success_count = 0
-    for path in all_paths:
-        if not path.exists():
-            click.echo(f"Error: {path} not found", err=True)
-            continue
+    import logging
+    from .ui import operation, success as ui_success, error as ui_error
 
-        # Check if it's a folder
-        if path.is_dir():
-            if not path.name.endswith(".gax.d"):
-                click.echo(f"Skipping directory: {path} (not a .gax.d folder)", err=True)
+    logger = logging.getLogger(__name__)
+
+    results = []  # (path, ok, message)
+
+    with operation("Pulling", total=len(all_paths)) as op:
+        for path in all_paths:
+            if not path.exists():
+                results.append((path, False, "not found"))
+                op.advance()
                 continue
 
-            # Pull folder
-            success, message = _pull_folder(path, verbose)
+            # Check if it's a folder
+            if path.is_dir():
+                if not path.name.endswith(".gax.d"):
+                    results.append((path, False, "not a .gax.d folder"))
+                    op.advance()
+                    continue
 
-            if success:
-                if message != "cancelled":
-                    click.echo(f"Pulled {path}: {message}")
-                success_count += 1
+                logger.info(f"Pulling {path}/")
+                ok, message = _pull_folder(path, verbose)
+                results.append((path, ok, message))
             else:
-                if message != "cancelled":
-                    click.echo(f"Error: {path}: {message}", err=True)
-        else:
-            # Check if this is a file with a .gax tracking file (Drive file)
-            if not path.name.endswith('.gax'):
-                tracking_path = path.with_suffix(path.suffix + '.gax')
-                if tracking_path.exists():
-                    # This is a tracked Drive file
-                    from .gdrive import download_file, read_tracking_file, create_tracking_file
+                # Check if this is a file with a .gax tracking file (Drive file)
+                if not path.name.endswith('.gax'):
+                    tracking_path = path.with_suffix(path.suffix + '.gax')
+                    if tracking_path.exists():
+                        from .gdrive import download_file, read_tracking_file, create_tracking_file
 
-                    try:
-                        tracking_data = read_tracking_file(tracking_path)
-                        file_id = tracking_data.get('file_id')
+                        try:
+                            tracking_data = read_tracking_file(tracking_path)
+                            file_id = tracking_data.get('file_id')
 
-                        if file_id:
-                            if verbose:
-                                click.echo(f"Pulling Drive file {path}...", nl=False)
-
-                            metadata = download_file(file_id, path)
-                            create_tracking_file(path, metadata)
-
-                            if verbose:
-                                click.echo(" updated")
-                            else:
-                                click.echo(f"Pulling Drive file {path}... updated")
-
-                            success_count += 1
+                            if file_id:
+                                logger.info(f"Pulling Drive file {path}")
+                                metadata = download_file(file_id, path)
+                                create_tracking_file(path, metadata)
+                                results.append((path, True, "updated"))
+                                op.advance()
+                                continue
+                        except Exception as e:
+                            results.append((path, False, str(e)))
+                            op.advance()
                             continue
-                    except Exception as e:
-                        click.echo(f"Error pulling Drive file {path}: {e}", err=True)
-                        continue
 
-            # Pull regular .gax file
-            file_type = _detect_file_type(path)
-            type_str = f"({file_type})" if file_type else "(unknown)"
+                # Pull regular .gax file
+                file_type = _detect_file_type(path)
+                type_str = f"({file_type})" if file_type else "(unknown)"
+                logger.info(f"Pulling {path} {type_str}")
 
-            if verbose:
-                click.echo(f"Pulling {path} {type_str}...", nl=False)
+                ok, message = _pull_file(path, verbose)
+                results.append((path, ok, message))
 
-            success, message = _pull_file(path, verbose)
+            op.advance()
 
-            if verbose:
-                if success:
-                    click.echo(f" {message}")
-                else:
-                    click.echo(f" ERROR: {message}")
-            else:
-                if success:
-                    click.echo(f"Pulling {path} {type_str}... {message}")
-                else:
-                    click.echo(f"Error: {path}: {message}", err=True)
-
-            if success:
-                success_count += 1
+    # Print results after spinner is done
+    success_count = 0
+    fail_count = 0
+    for path, ok, message in results:
+        if ok:
+            if message != "cancelled":
+                ui_success(f"{path}: {message}")
+            success_count += 1
+        else:
+            if message != "cancelled":
+                ui_error(f"{path}: {message}")
+            fail_count += 1
 
     if len(all_paths) > 1:
-        click.echo(f"Done: {success_count}/{len(all_paths)} updated")
+        summary = f"Done: {success_count}/{len(all_paths)} updated"
+        if fail_count:
+            ui_error(summary)
+        else:
+            ui_success(summary)
 
 
 @main.command("push")
@@ -1079,6 +1079,49 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
     else:
         click.echo(f"Unrecognized URL: {url}", err=True)
         click.echo("Supported: Google Docs/Sheets/Forms, Gmail, Calendar", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.argument("url")
+@click.option("-o", "--output", type=click.Path(path_type=Path), help="Output folder")
+@click.option("-f", "--format", "fmt", default="md", help="Output format (for sheets)")
+@click.pass_context
+def checkout(ctx, url: str, output: Path | None, fmt: str):
+    """Checkout a Google resource from URL into a folder of individual files.
+
+    Supports Google Docs, Sheets, and Calendar.
+
+    \b
+    Examples:
+        gax checkout <docs-url>
+        gax checkout <sheets-url> -f csv
+        gax checkout <calendar-url> -o Week/
+    """
+    # Google Docs
+    if re.search(r"docs\.google\.com/document/d/", url):
+        kwargs = {"url": url}
+        if output:
+            kwargs["output"] = output
+        ctx.invoke(doc.commands["checkout"], **kwargs)
+
+    # Google Sheets
+    elif re.search(r"docs\.google\.com/spreadsheets/d/", url):
+        kwargs = {"url": url, "fmt": fmt}
+        if output:
+            kwargs["output"] = output
+        ctx.invoke(sheet_checkout, **kwargs)
+
+    # Calendar
+    elif re.search(r"calendar\.google\.com/calendar/", url):
+        kwargs = {}
+        if output:
+            kwargs["output"] = output
+        ctx.invoke(cal_cli.commands["checkout"], **kwargs)
+
+    else:
+        click.echo(f"Unrecognized URL: {url}", err=True)
+        click.echo("Supported: Google Docs, Sheets, Calendar", err=True)
         sys.exit(1)
 
 
@@ -1303,17 +1346,18 @@ def sheet_clone(url: str, output: Path | None, fmt: str):
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def sheet_pull(file: Path):
     """Pull latest data for all tabs in a multipart file or checkout folder."""
+    from .ui import success as ui_success
     try:
         if file.is_dir():
-            success, message = _pull_folder(file)
-            if success:
-                click.echo(message)
+            ok, message = _pull_folder(file)
+            if ok:
+                ui_success(message)
             else:
                 click.echo(f"Error: {message}", err=True)
                 sys.exit(1)
         else:
             rows = pull_all(file)
-            click.echo(f"Pulled {rows} rows to {file}")
+            ui_success(f"Pulled {rows} rows to {file}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -1374,51 +1418,60 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
         with open(metadata_path, 'w') as f:
             yaml.dump(metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
+        import logging
+        from .ui import operation, success as ui_success
+
+        _logger = logging.getLogger(__name__)
+
         click.echo(f"Checking out {len(tabs)} tabs to {folder}/")
 
         created = 0
         skipped = 0
 
-        for tab_info in tabs:
-            tab_name = tab_info['title']
+        with operation("Checking out tabs", total=len(tabs)) as op:
+            for tab_info in tabs:
+                tab_name = tab_info['title']
 
-            # Generate filename
-            safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
-            safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-            file_path = folder / f"{safe_tab_name}.tab.sheet.gax"
+                # Generate filename
+                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
+                file_path = folder / f"{safe_tab_name}.tab.sheet.gax"
 
-            # Skip if exists
-            if file_path.exists():
-                skipped += 1
-                continue
+                # Skip if exists
+                if file_path.exists():
+                    skipped += 1
+                    op.advance()
+                    continue
 
-            try:
-                # Read tab data
-                df = client.read(spreadsheet_id, tab_name)
+                try:
+                    _logger.info(f"Fetching tab: {tab_name}")
+                    # Read tab data
+                    df = client.read(spreadsheet_id, tab_name)
 
-                # Format data
-                formatter = get_format(fmt)
-                data = formatter.write(df)
+                    # Format data
+                    formatter = get_format(fmt)
+                    data = formatter.write(df)
 
-                # Create config
-                config = SheetConfig(
-                    spreadsheet_id=spreadsheet_id,
-                    tab=tab_name,
-                    format=fmt,
-                    url=url,
-                )
+                    # Create config
+                    config = SheetConfig(
+                        spreadsheet_id=spreadsheet_id,
+                        tab=tab_name,
+                        format=fmt,
+                        url=url,
+                    )
 
-                # Write file
-                content = format_content(config, data)
-                file_path.write_text(content, encoding="utf-8")
+                    # Write file
+                    content = format_content(config, data)
+                    file_path.write_text(content, encoding="utf-8")
 
-                created += 1
-                click.echo(f"  {file_path.name} ({len(df)} rows)")
+                    created += 1
 
-            except Exception as e:
-                click.echo(f"  Error with tab '{tab_name}': {e}", err=True)
+                except Exception as e:
+                    click.echo(f"  Error with tab '{tab_name}': {e}", err=True)
 
-        click.echo(f"Checked out: {created}, Skipped: {skipped} (already present)")
+                op.advance()
+
+        ui_success(f"Checked out: {created}, Skipped: {skipped} (already present)")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

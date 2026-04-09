@@ -79,26 +79,33 @@ def pull_all(
     spreadsheet_id = match.group(1)
 
     # Pull each tab
+    import logging
+    from ..ui import operation
+
+    logger = logging.getLogger(__name__)
     total_rows = 0
     updated_sections = []
 
-    for section in sections:
-        tab_name = section.headers.get("tab")
-        fmt = section.headers.get("format", "csv")
+    with operation("Pulling tabs", total=len(sections)) as op:
+        for section in sections:
+            tab_name = section.headers.get("tab")
+            fmt = section.headers.get("format", "csv")
 
-        if not tab_name:
-            raise ValueError(f"Section missing 'tab' header in {file_path}")
+            if not tab_name:
+                raise ValueError(f"Section missing 'tab' header in {file_path}")
 
-        df = client.read(spreadsheet_id, tab_name)
-        formatter = get_format(fmt)
-        data = formatter.write(df)
+            logger.info(f"Pulling tab: {tab_name}")
+            df = client.read(spreadsheet_id, tab_name)
+            formatter = get_format(fmt)
+            data = formatter.write(df)
 
-        updated_section = Section(
-            headers=section.headers,
-            content=data,
-        )
-        updated_sections.append(updated_section)
-        total_rows += len(df)
+            updated_section = Section(
+                headers=section.headers,
+                content=data,
+            )
+            updated_sections.append(updated_section)
+            total_rows += len(df)
+            op.advance()
 
     # Write back to file
     output = format_multipart(updated_sections)
