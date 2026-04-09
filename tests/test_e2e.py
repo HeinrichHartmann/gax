@@ -555,7 +555,7 @@ class TestCalendarE2E:
         result = _run_gax("cal", "list", "--days", "7", "--format", "tsv")
         assert result.returncode == 0, f"Failed: {result.stderr}"
         # TSV should have header row
-        assert "calendar\tdate\tstart\tend\ttitle" in result.stdout
+        assert "calendar\tdate\tstart\tend\trsvp\ttitle" in result.stdout
 
     def test_event_create_push_delete_cycle(self, check_calendar_auth, temp_dir):
         """Test: create new event -> push -> pull -> delete."""
