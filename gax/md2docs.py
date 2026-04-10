@@ -344,9 +344,13 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
     # 2. Apply table operations last (delete placeholder + insert empty table).
     #    Process in reverse order so earlier tables' positions remain stable.
     for start, end, action, params in reversed(table_actions):
-        # Cap endIndex to avoid hitting the segment-ending newline boundary.
-        if end >= total_utf16:
-            end = total_utf16 - 1
+        # Cap endIndex to avoid deleting the segment-ending newline.
+        # After inserting plain_text at index 1, the body spans indices
+        # 1..total_utf16+1, with the trailing \n at total_utf16+1.
+        # deleteContentRange endIndex is exclusive, so total_utf16+1 is the
+        # max safe value (deletes up to but not including the trailing \n).
+        if end > total_utf16 + 1:
+            end = total_utf16 + 1
         range_spec = {'startIndex': start, 'endIndex': end}
         if tab_id:
             range_spec['tabId'] = tab_id

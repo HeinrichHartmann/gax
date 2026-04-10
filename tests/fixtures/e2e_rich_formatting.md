@@ -1,8 +1,11 @@
 # Project Evaluation Report
 
 *Template for structured assessments*
+
 **Team:** Acme Engineering
+
 **Author:** \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
+
 **Status:** Draft
 
 ## Cost Analysis
@@ -73,8 +76,8 @@ The critical point: **you pay from start to termination**, regardless of whether
 
 ### Onboarding Metrics
 
-* **Time to Hello World:** \_\_\_\_\_\_\_\_ (mins/hours)
-* **Time to Production:** \_\_\_\_\_\_\_\_ (days/weeks)
+- **Time to Hello World:** \_\_\_\_\_\_\_\_ (mins/hours)
+- **Time to Production:** \_\_\_\_\_\_\_\_ (days/weeks)
 
 | # | Requirement | Score | Comment |
 | :---- | :---- | :---- | :---- |

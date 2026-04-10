@@ -159,12 +159,10 @@ def export_doc_markdown(
     # Normalize: Remove Drive API trailing soft-breaks (two spaces at line end)
     markdown = re.sub(r'  $', '', markdown, flags=re.MULTILINE)
 
-    # Normalize: Unescape Drive API over-escaped dashes (e.g. "5 \- Seamless")
-    markdown = re.sub(r'\\-', '-', markdown)
-
-    # Normalize: Unescape Drive API over-escaped ">" (used for code block workaround,
-    # see md2docs.py CodeBlock handling)
-    markdown = re.sub(r'\\>', '>', markdown)
+    # Normalize: Unescape Drive API over-escaped characters.
+    # Google's markdown export backslash-escapes -, >, #, ~, ` even in
+    # contexts where they're not special (e.g. "# nodes", "~equal", `=`).
+    markdown = re.sub(r'\\([->#~`])', r'\1', markdown)
 
     return markdown
 
