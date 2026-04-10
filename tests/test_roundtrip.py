@@ -49,9 +49,31 @@ def services():
     }
 
 
+def _clear_doc_tabs(doc_id, docs_service):
+    """Delete all tabs except the first one."""
+    doc = docs_service.documents().get(
+        documentId=doc_id, includeTabsContent=True
+    ).execute()
+    tabs = doc.get("tabs", [])
+    for tab in tabs[1:]:
+        tab_id = tab.get("tabProperties", {}).get("tabId", "")
+        if tab_id:
+            try:
+                docs_service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={"requests": [{"deleteTab": {"tabId": tab_id}}]},
+                ).execute()
+            except Exception:
+                pass
+
+
 @pytest.fixture(scope="module")
-def doc_id():
-    return _get_test_doc_id()
+def doc_id(services):
+    """Get test doc ID; clean up all tabs before and after test module."""
+    did = _get_test_doc_id()
+    _clear_doc_tabs(did, services["docs"])
+    yield did
+    _clear_doc_tabs(did, services["docs"])
 
 
 # =============================================================================

@@ -185,7 +185,35 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
     text_parts = []
     format_actions = []  # (start, end, action_type, params)
 
+    prev_node = None
     for node in nodes:
+        # Insert blank line (empty paragraph) between nodes that need spacing.
+        # Google Docs exports blank lines between paragraphs only if there is
+        # an actual empty paragraph in the document.
+        if prev_node is not None:
+            needs_spacing = False
+            # Blank line between consecutive paragraphs
+            if isinstance(prev_node, Paragraph) and isinstance(node, Paragraph):
+                needs_spacing = True
+            # Blank line before/after headings (unless preceded by nothing)
+            if isinstance(node, Heading) and not isinstance(prev_node, Heading):
+                needs_spacing = True
+            if isinstance(prev_node, Heading):
+                needs_spacing = True
+            # Blank line before/after lists (transition from non-list to list or vice versa)
+            if isinstance(node, ListItem) and not isinstance(prev_node, ListItem):
+                needs_spacing = True
+            if isinstance(prev_node, ListItem) and not isinstance(node, ListItem):
+                needs_spacing = True
+            # Blank line before/after code blocks
+            if isinstance(node, CodeBlock) or isinstance(prev_node, CodeBlock):
+                needs_spacing = True
+            # Blank line before/after tables
+            if isinstance(node, Table) or isinstance(prev_node, Table):
+                needs_spacing = True
+            if needs_spacing:
+                text_parts.append('\n')
+
         start = sum(_utf16_len(p) for p in text_parts) + 1  # 1-based index
 
         if isinstance(node, Heading):
@@ -199,12 +227,11 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
 
         elif isinstance(node, ListItem):
             if node.ordered:
-                # Insert as plain paragraph with "1. " prefix.
-                # Using createParagraphBullets(NUMBERED_DECIMAL_NESTED) causes
-                # the numbered list style to spread to all surrounding paragraphs.
-                text_parts.append('1. ')
+                list_start = sum(_utf16_len(p) for p in text_parts) + 1
                 _append_inline(text_parts, format_actions, node.children)
                 text_parts.append('\n')
+                list_end = sum(_utf16_len(p) for p in text_parts) + 1
+                format_actions.append((list_start, list_end - 1, 'ordered_list', None))
             else:
                 list_start = sum(_utf16_len(p) for p in text_parts) + 1
                 _append_inline(text_parts, format_actions, node.children)
