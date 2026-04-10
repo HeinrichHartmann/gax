@@ -451,8 +451,10 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
     """Populate empty table cells by reading back actual document indices.
 
     After insertTable creates empty tables, this reads the document structure
-    to get real cell indices and inserts cell content.
+    to get real cell indices, inserts cell content, and applies inline formatting.
     """
+    from .md2docs import parse_inline, _utf16_len
+
     doc = (
         service.documents()
         .get(documentId=document_id, includeTabsContent=True)
@@ -477,7 +479,11 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
             )
             return
 
-        requests = []
+        # Pass 1: Insert plain text into cells (strip markdown syntax)
+        insert_requests = []
+        # Track cells that need formatting: (insert_idx, cell_text)
+        cells_to_format = []
+
         for doc_table, md_rows in zip(doc_tables, tables_data):
             table = doc_table["table"]
             for r, doc_row in enumerate(table.get("tableRows", [])):
@@ -488,7 +494,6 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
                     cell_text = md_row[c] if c < len(md_row) else ""
                     if not cell_text:
                         continue
-                    # Get start index of the cell's first paragraph
                     cell_content = doc_cell.get("content", [])
                     if not cell_content:
                         continue
@@ -496,18 +501,110 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
                     insert_idx = para.get("startIndex")
                     if insert_idx is None:
                         continue
-                    loc = {"index": insert_idx, "tabId": tab_id}
-                    requests.append(
-                        {"insertText": {"text": cell_text, "location": loc}}
-                    )
 
-        if requests:
+                    # Parse inline formatting to get plain text
+                    spans = parse_inline(cell_text)
+                    plain = "".join(s.text for s in spans)
+
+                    loc = {"index": insert_idx, "tabId": tab_id}
+                    insert_requests.append(
+                        {"insertText": {"text": plain, "location": loc}}
+                    )
+                    cells_to_format.append((insert_idx, cell_text, spans))
+
+        if insert_requests:
             # Reverse so last cell is populated first (stable indices)
-            requests.reverse()
+            insert_requests.reverse()
             service.documents().batchUpdate(
                 documentId=document_id,
-                body={"requests": requests},
+                body={"requests": insert_requests},
             ).execute()
+
+        # Pass 2: Apply bold/italic formatting to cell content
+        # Re-read the document to get updated indices
+        if not cells_to_format:
+            break
+
+        has_formatting = any(
+            any(s.bold or s.italic for s in spans)
+            for _, _, spans in cells_to_format
+        )
+        if not has_formatting:
+            break
+
+        doc = (
+            service.documents()
+            .get(documentId=document_id, includeTabsContent=True)
+            .execute()
+        )
+
+        # Re-find tables and build formatting requests
+        for tab2 in doc.get("tabs", []):
+            props2 = tab2.get("tabProperties", {})
+            if props2.get("tabId") != tab_id:
+                continue
+
+            body2 = tab2.get("documentTab", {}).get("body", {})
+            content2 = body2.get("content", [])
+            doc_tables2 = [elem for elem in content2 if "table" in elem]
+
+            fmt_requests = []
+            table_idx = 0
+            for doc_table, md_rows in zip(doc_tables2, tables_data):
+                table = doc_table["table"]
+                for r, doc_row in enumerate(table.get("tableRows", [])):
+                    if r >= len(md_rows):
+                        break
+                    md_row = md_rows[r]
+                    for c, doc_cell in enumerate(doc_row.get("tableCells", [])):
+                        cell_text = md_row[c] if c < len(md_row) else ""
+                        if not cell_text:
+                            continue
+                        cell_content = doc_cell.get("content", [])
+                        if not cell_content:
+                            continue
+                        para = cell_content[0]
+                        cell_start = para.get("startIndex")
+                        if cell_start is None:
+                            continue
+
+                        spans = parse_inline(cell_text)
+                        offset = cell_start
+                        for span in spans:
+                            span_end = offset + _utf16_len(span.text)
+                            if span.bold:
+                                fmt_requests.append({
+                                    "updateTextStyle": {
+                                        "range": {
+                                            "startIndex": offset,
+                                            "endIndex": span_end,
+                                            "tabId": tab_id,
+                                        },
+                                        "textStyle": {"bold": True},
+                                        "fields": "bold",
+                                    }
+                                })
+                            if span.italic:
+                                fmt_requests.append({
+                                    "updateTextStyle": {
+                                        "range": {
+                                            "startIndex": offset,
+                                            "endIndex": span_end,
+                                            "tabId": tab_id,
+                                        },
+                                        "textStyle": {"italic": True},
+                                        "fields": "italic",
+                                    }
+                                })
+                            offset = span_end
+
+            if fmt_requests:
+                service.documents().batchUpdate(
+                    documentId=document_id,
+                    body={"requests": fmt_requests},
+                ).execute()
+
+            break
 
         break
 

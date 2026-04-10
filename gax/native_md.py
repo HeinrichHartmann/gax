@@ -151,6 +151,9 @@ def export_doc_markdown(
     if extract_images:
         markdown = extract_images_to_store(markdown)
 
+    # Normalize: Drive API exports bullet lists as "* item", standardize to "- item"
+    markdown = re.sub(r'^\* ', '- ', markdown, flags=re.MULTILINE)
+
     return markdown
 
 

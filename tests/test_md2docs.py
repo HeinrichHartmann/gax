@@ -1,6 +1,6 @@
 """Tests for markdown to Google Docs conversion."""
 
-from gax.md2docs import parse_markdown, parse_inline, extract_tables, Heading, Paragraph, Table
+from gax.md2docs import parse_markdown, parse_inline, extract_tables, Heading, Paragraph, Table, ListItem, CodeBlock
 
 
 class TestParseInline:
@@ -90,6 +90,44 @@ Some **bold** text.
         assert isinstance(nodes[0], Heading)
         assert isinstance(nodes[1], Paragraph)
         assert isinstance(nodes[2], Table)
+
+
+    def test_unordered_list(self):
+        md = "- First item\n- Second item\n- Third item"
+        nodes = parse_markdown(md)
+        assert len(nodes) == 3
+        assert all(isinstance(n, ListItem) for n in nodes)
+        assert not nodes[0].ordered
+        assert nodes[0].children[0].text == "First item"
+
+    def test_ordered_list(self):
+        md = "1. First\n2. Second\n3. Third"
+        nodes = parse_markdown(md)
+        assert len(nodes) == 3
+        assert all(isinstance(n, ListItem) for n in nodes)
+        assert nodes[0].ordered
+        assert nodes[0].children[0].text == "First"
+
+    def test_list_with_inline_formatting(self):
+        md = "- **Bold item** with text\n- *Italic item*"
+        nodes = parse_markdown(md)
+        assert len(nodes) == 2
+        assert nodes[0].children[0].text == "Bold item"
+        assert nodes[0].children[0].bold
+
+    def test_code_block(self):
+        md = "```\nsome code\nmore code\n```"
+        nodes = parse_markdown(md)
+        assert len(nodes) == 1
+        assert isinstance(nodes[0], CodeBlock)
+        assert nodes[0].text == "some code\nmore code"
+
+    def test_code_block_with_language(self):
+        md = "```python\nprint('hello')\n```"
+        nodes = parse_markdown(md)
+        assert len(nodes) == 1
+        assert isinstance(nodes[0], CodeBlock)
+        assert nodes[0].text == "print('hello')"
 
 
 class TestExtractTables:

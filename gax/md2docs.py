@@ -1,14 +1,26 @@
 """Convert Markdown to Google Docs API requests.
 
-Simple AST-based approach supporting:
+AST-based approach supporting:
 - Headings (# to ######)
 - Bold (**text**) and Italic (*text*)
-- Tables (| col | col |)
-- Paragraphs
+- Ordered lists (1. item)
+- Unordered lists (- item, * item)
+- Code blocks (``` ... ```)
+- Tables (| col | col |) with inline formatting in cells
+- Paragraphs with inline formatting
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+def _utf16_len(s: str) -> int:
+    """Length of s in UTF-16 code units (used by Google Docs API for indices).
+
+    Characters outside the BMP (code points > U+FFFF, e.g. most emoji)
+    occupy 2 UTF-16 code units but count as 1 in Python's len().
+    """
+    return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
 
 
 @dataclass
@@ -33,6 +45,17 @@ class Heading(Node):
 @dataclass
 class Paragraph(Node):
     children: list[Text]
+
+
+@dataclass
+class ListItem(Node):
+    children: list[Text]
+    ordered: bool = False
+
+
+@dataclass
+class CodeBlock(Node):
+    text: str
 
 
 @dataclass
@@ -80,6 +103,18 @@ def parse_markdown(md: str) -> list[Node]:
             i += 1
             continue
 
+        # Code block
+        if line.strip().startswith('```'):
+            i += 1
+            code_lines = []
+            while i < len(lines) and not lines[i].strip().startswith('```'):
+                code_lines.append(lines[i])
+                i += 1
+            if i < len(lines):
+                i += 1  # skip closing ```
+            nodes.append(CodeBlock(text='\n'.join(code_lines)))
+            continue
+
         # Heading
         m = re.match(r'^(#{1,6})\s+(.+)$', line)
         if m:
@@ -104,6 +139,20 @@ def parse_markdown(md: str) -> list[Node]:
                 nodes.append(Table(rows=rows))
             continue
 
+        # Unordered list item (- or *)
+        m = re.match(r'^[-*]\s+(.+)$', line)
+        if m:
+            nodes.append(ListItem(children=parse_inline(m.group(1)), ordered=False))
+            i += 1
+            continue
+
+        # Ordered list item (1. 2. etc)
+        m = re.match(r'^\d+\.\s+(.+)$', line)
+        if m:
+            nodes.append(ListItem(children=parse_inline(m.group(1)), ordered=True))
+            i += 1
+            continue
+
         # Regular paragraph
         nodes.append(Paragraph(children=parse_inline(line)))
         i += 1
@@ -111,44 +160,60 @@ def parse_markdown(md: str) -> list[Node]:
     return nodes
 
 
+def _append_inline(text_parts: list[str], format_actions: list, children: list[Text]):
+    """Append inline-formatted text spans, tracking positions for bold/italic."""
+    for child in children:
+        child_start = sum(_utf16_len(p) for p in text_parts) + 1
+        text_parts.append(child.text)
+        child_end = child_start + _utf16_len(child.text)
+        if child.bold:
+            format_actions.append((child_start, child_end, 'bold', None))
+        if child.italic:
+            format_actions.append((child_start, child_end, 'italic', None))
+
+
 def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str, list[dict]]:
     """Generate Docs API requests from AST.
 
     Returns: (plain_text, list_of_formatting_requests)
     """
-    # First pass: build plain text and track positions
     text_parts = []
     format_actions = []  # (start, end, action_type, params)
 
     for node in nodes:
-        start = sum(len(p) for p in text_parts) + 1  # 1-based index
+        start = sum(_utf16_len(p) for p in text_parts) + 1  # 1-based index
 
         if isinstance(node, Heading):
             text_parts.append(node.text + '\n')
-            end = start + len(node.text)
+            end = start + _utf16_len(node.text)
             format_actions.append((start, end, 'heading', node.level))
 
         elif isinstance(node, Paragraph):
-            for child in node.children:
-                child_start = sum(len(p) for p in text_parts) + 1
-                text_parts.append(child.text)
-                child_end = child_start + len(child.text)
-                if child.bold:
-                    format_actions.append((child_start, child_end, 'bold', None))
-                if child.italic:
-                    format_actions.append((child_start, child_end, 'italic', None))
+            _append_inline(text_parts, format_actions, node.children)
             text_parts.append('\n')
 
+        elif isinstance(node, ListItem):
+            list_start = sum(_utf16_len(p) for p in text_parts) + 1
+            _append_inline(text_parts, format_actions, node.children)
+            text_parts.append('\n')
+            list_end = sum(_utf16_len(p) for p in text_parts) + 1
+            bullet_type = 'ordered_list' if node.ordered else 'unordered_list'
+            format_actions.append((list_start, list_end - 1, bullet_type, None))
+
+        elif isinstance(node, CodeBlock):
+            # Push as a plain paragraph — Drive API doesn't export Courier New
+            # text as code block syntax on pull, so just preserve the content.
+            text_parts.append(node.text + '\n')
+
         elif isinstance(node, Table):
-            # Tables: insert as tab-separated text, then create table
-            table_start = sum(len(p) for p in text_parts) + 1
+            table_start = sum(_utf16_len(p) for p in text_parts) + 1
             num_rows = len(node.rows)
             num_cols = max(len(row) for row in node.rows) if node.rows else 0
 
-            # Build table text (will be replaced by actual table)
+            # Build placeholder text (will be replaced by actual table)
             table_text = '\n'.join('\t'.join(row) for row in node.rows) + '\n'
             text_parts.append(table_text)
-            table_end = sum(len(p) for p in text_parts) + 1
+            table_end = sum(_utf16_len(p) for p in text_parts) + 1
 
             format_actions.append((table_start, table_end - 1, 'table', (num_rows, num_cols, node.rows)))
 
@@ -195,6 +260,34 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
                     'fields': 'italic'
                 }
             })
+        elif action == 'unordered_list':
+            requests.append({
+                'createParagraphBullets': {
+                    'range': range_spec,
+                    'bulletPreset': 'BULLET_DISC_CIRCLE_SQUARE',
+                }
+            })
+        elif action == 'ordered_list':
+            requests.append({
+                'createParagraphBullets': {
+                    'range': range_spec,
+                    'bulletPreset': 'NUMBERED_DECIMAL_NESTED',
+                }
+            })
+        elif action == 'code_block':
+            # Monospace font for code blocks
+            requests.append({
+                'updateTextStyle': {
+                    'range': range_spec,
+                    'textStyle': {
+                        'weightedFontFamily': {
+                            'fontFamily': 'Courier New',
+                            'weight': 400,
+                        },
+                    },
+                    'fields': 'weightedFontFamily'
+                }
+            })
         elif action == 'table':
             num_rows, num_cols, rows = params
             # Delete the placeholder text and insert table
@@ -209,8 +302,6 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
                     'location': table_loc
                 }
             })
-            # Note: Populating table cells requires additional logic
-            # For now, tables are inserted empty (content in placeholder)
 
     return plain_text, requests
 
