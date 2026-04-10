@@ -549,7 +549,6 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
             doc_tables2 = [elem for elem in content2 if "table" in elem]
 
             fmt_requests = []
-            table_idx = 0
             for doc_table, md_rows in zip(doc_tables2, tables_data):
                 table = doc_table["table"]
                 for r, doc_row in enumerate(table.get("tableRows", [])):

@@ -11,7 +11,7 @@ AST-based approach supporting:
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 def _utf16_len(s: str) -> int:
