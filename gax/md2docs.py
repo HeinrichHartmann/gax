@@ -198,16 +198,23 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
             text_parts.append('\n')
 
         elif isinstance(node, ListItem):
-            list_start = sum(_utf16_len(p) for p in text_parts) + 1
-            _append_inline(text_parts, format_actions, node.children)
-            text_parts.append('\n')
-            list_end = sum(_utf16_len(p) for p in text_parts) + 1
-            bullet_type = 'ordered_list' if node.ordered else 'unordered_list'
-            format_actions.append((list_start, list_end - 1, bullet_type, None))
+            if node.ordered:
+                # Insert as plain paragraph with "1. " prefix.
+                # Using createParagraphBullets(NUMBERED_DECIMAL_NESTED) causes
+                # the numbered list style to spread to all surrounding paragraphs.
+                text_parts.append('1. ')
+                _append_inline(text_parts, format_actions, node.children)
+                text_parts.append('\n')
+            else:
+                list_start = sum(_utf16_len(p) for p in text_parts) + 1
+                _append_inline(text_parts, format_actions, node.children)
+                text_parts.append('\n')
+                list_end = sum(_utf16_len(p) for p in text_parts) + 1
+                format_actions.append((list_start, list_end - 1, 'unordered_list', None))
 
         elif isinstance(node, CodeBlock):
-            # Push as a plain paragraph — Drive API doesn't export Courier New
-            # text as code block syntax on pull, so just preserve the content.
+            # Push as a plain paragraph — the \ue907 marker approach corrupts
+            # surrounding paragraphs (Google Docs treats it as a list marker).
             text_parts.append(node.text + '\n')
 
         elif isinstance(node, Table):
@@ -223,6 +230,7 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
             format_actions.append((table_start, table_end - 1, 'table', (num_rows, num_cols, node.rows)))
 
     plain_text = ''.join(text_parts)
+    total_utf16 = sum(_utf16_len(p) for p in text_parts)
 
     # Second pass: generate API requests
     requests = []
@@ -233,80 +241,88 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
         insert_loc['tabId'] = tab_id
     requests.append({'insertText': {'text': plain_text, 'location': insert_loc}})
 
-    # Apply formatting (in reverse order for stable indices)
-    for start, end, action, params in reversed(format_actions):
+    # Split into two groups: non-table styles (applied first) and table operations
+    # (applied last). Table ops (deleteContentRange + insertTable) shift positions
+    # of content that follows them; applying non-table styles first ensures they
+    # land on the correct paragraphs before positions shift.
+    table_actions = [(s, e, a, p) for s, e, a, p in format_actions if a == 'table']
+    other_actions = [(s, e, a, p) for s, e, a, p in format_actions if a != 'table']
+
+    def _build_style_requests(actions):
+        result = []
+        for start, end, action, params in reversed(actions):
+            range_spec = {'startIndex': start, 'endIndex': end}
+            if tab_id:
+                range_spec['tabId'] = tab_id
+
+            if action == 'heading':
+                style_map = {1: 'HEADING_1', 2: 'HEADING_2', 3: 'HEADING_3',
+                            4: 'HEADING_4', 5: 'HEADING_5', 6: 'HEADING_6'}
+                result.append({
+                    'updateParagraphStyle': {
+                        'range': range_spec,
+                        'paragraphStyle': {'namedStyleType': style_map.get(params, 'HEADING_1')},
+                        'fields': 'namedStyleType'
+                    }
+                })
+            elif action == 'bold':
+                result.append({
+                    'updateTextStyle': {
+                        'range': range_spec,
+                        'textStyle': {'bold': True},
+                        'fields': 'bold'
+                    }
+                })
+            elif action == 'italic':
+                result.append({
+                    'updateTextStyle': {
+                        'range': range_spec,
+                        'textStyle': {'italic': True},
+                        'fields': 'italic'
+                    }
+                })
+            elif action == 'unordered_list':
+                result.append({
+                    'createParagraphBullets': {
+                        'range': range_spec,
+                        'bulletPreset': 'BULLET_DISC_CIRCLE_SQUARE',
+                    }
+                })
+            elif action == 'ordered_list':
+                result.append({
+                    'createParagraphBullets': {
+                        'range': range_spec,
+                        'bulletPreset': 'NUMBERED_DECIMAL_NESTED',
+                    }
+                })
+        return result
+
+    # 1. Apply non-table styles (heading, bold, italic, code_block) at stable positions
+    requests.extend(_build_style_requests(other_actions))
+
+    # 2. Apply table operations last (delete placeholder + insert empty table).
+    #    Process in reverse order so earlier tables' positions remain stable.
+    for start, end, action, params in reversed(table_actions):
+        # Cap endIndex to avoid hitting the segment-ending newline boundary.
+        if end >= total_utf16:
+            end = total_utf16 - 1
         range_spec = {'startIndex': start, 'endIndex': end}
         if tab_id:
             range_spec['tabId'] = tab_id
 
-        if action == 'heading':
-            style_map = {1: 'HEADING_1', 2: 'HEADING_2', 3: 'HEADING_3',
-                        4: 'HEADING_4', 5: 'HEADING_5', 6: 'HEADING_6'}
-            requests.append({
-                'updateParagraphStyle': {
-                    'range': range_spec,
-                    'paragraphStyle': {'namedStyleType': style_map.get(params, 'HEADING_1')},
-                    'fields': 'namedStyleType'
-                }
-            })
-        elif action == 'bold':
-            requests.append({
-                'updateTextStyle': {
-                    'range': range_spec,
-                    'textStyle': {'bold': True},
-                    'fields': 'bold'
-                }
-            })
-        elif action == 'italic':
-            requests.append({
-                'updateTextStyle': {
-                    'range': range_spec,
-                    'textStyle': {'italic': True},
-                    'fields': 'italic'
-                }
-            })
-        elif action == 'unordered_list':
-            requests.append({
-                'createParagraphBullets': {
-                    'range': range_spec,
-                    'bulletPreset': 'BULLET_DISC_CIRCLE_SQUARE',
-                }
-            })
-        elif action == 'ordered_list':
-            requests.append({
-                'createParagraphBullets': {
-                    'range': range_spec,
-                    'bulletPreset': 'NUMBERED_DECIMAL_NESTED',
-                }
-            })
-        elif action == 'code_block':
-            # Monospace font for code blocks
-            requests.append({
-                'updateTextStyle': {
-                    'range': range_spec,
-                    'textStyle': {
-                        'weightedFontFamily': {
-                            'fontFamily': 'Courier New',
-                            'weight': 400,
-                        },
-                    },
-                    'fields': 'weightedFontFamily'
-                }
-            })
-        elif action == 'table':
-            num_rows, num_cols, rows = params
-            # Delete the placeholder text and insert table
-            requests.append({'deleteContentRange': {'range': range_spec}})
-            table_loc = {'index': start}
-            if tab_id:
-                table_loc['tabId'] = tab_id
-            requests.append({
-                'insertTable': {
-                    'rows': num_rows,
-                    'columns': num_cols,
-                    'location': table_loc
-                }
-            })
+        num_rows, num_cols, rows = params
+        # Delete the placeholder text and insert empty table
+        requests.append({'deleteContentRange': {'range': range_spec}})
+        table_loc = {'index': start}
+        if tab_id:
+            table_loc['tabId'] = tab_id
+        requests.append({
+            'insertTable': {
+                'rows': num_rows,
+                'columns': num_cols,
+                'location': table_loc
+            }
+        })
 
     return plain_text, requests
 

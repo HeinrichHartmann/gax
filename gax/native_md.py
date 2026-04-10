@@ -154,6 +154,12 @@ def export_doc_markdown(
     # Normalize: Drive API exports bullet lists as "* item", standardize to "- item"
     markdown = re.sub(r'^\* ', '- ', markdown, flags=re.MULTILINE)
 
+    # Normalize: Remove Drive API trailing soft-breaks (two spaces at line end)
+    markdown = re.sub(r'  $', '', markdown, flags=re.MULTILINE)
+
+    # Normalize: Unescape Drive API over-escaped dashes (e.g. "5 \- Seamless")
+    markdown = re.sub(r'\\-', '-', markdown)
+
     return markdown
 
 
