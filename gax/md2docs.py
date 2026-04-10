@@ -256,6 +256,8 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
 
             format_actions.append((table_start, table_end - 1, 'table', (num_rows, num_cols, node.rows)))
 
+        prev_node = node
+
     plain_text = ''.join(text_parts)
     total_utf16 = sum(_utf16_len(p) for p in text_parts)
 
