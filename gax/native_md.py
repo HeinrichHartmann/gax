@@ -126,6 +126,7 @@ def export_doc_markdown(
     *,
     drive_service=None,
     extract_images: bool = True,
+    num_retries: int = 0,
 ) -> str:
     """Export a Google Doc to Markdown using native Drive API.
 
@@ -133,6 +134,7 @@ def export_doc_markdown(
         document_id: Google Docs document ID
         drive_service: Optional Drive API service for testing
         extract_images: If True, extract base64 images to blob store
+        num_retries: Retries with exponential backoff on 429/5xx
 
     Returns:
         Markdown content as string
@@ -144,7 +146,7 @@ def export_doc_markdown(
     result = drive_service.files().export(
         fileId=document_id,
         mimeType="text/markdown"
-    ).execute()
+    ).execute(num_retries=num_retries)
 
     markdown = result.decode("utf-8")
 
@@ -159,6 +161,10 @@ def export_doc_markdown(
 
     # Normalize: Unescape Drive API over-escaped dashes (e.g. "5 \- Seamless")
     markdown = re.sub(r'\\-', '-', markdown)
+
+    # Normalize: Unescape Drive API over-escaped ">" (used for code block workaround,
+    # see md2docs.py CodeBlock handling)
+    markdown = re.sub(r'\\>', '>', markdown)
 
     return markdown
 
@@ -264,12 +270,13 @@ def split_doc_by_tabs(
     return result
 
 
-def get_doc_tabs(document_id: str, *, docs_service=None) -> list[dict]:
+def get_doc_tabs(document_id: str, *, docs_service=None, num_retries: int = 0) -> list[dict]:
     """Get list of tabs in a document.
 
     Args:
         document_id: Google Docs document ID
         docs_service: Optional Docs API service for testing
+        num_retries: Retries with exponential backoff on 429/5xx
 
     Returns:
         List of {id, title, index} dicts
@@ -281,7 +288,7 @@ def get_doc_tabs(document_id: str, *, docs_service=None) -> list[dict]:
     doc = docs_service.documents().get(
         documentId=document_id,
         includeTabsContent=True
-    ).execute()
+    ).execute(num_retries=num_retries)
 
     tabs = []
     for i, tab in enumerate(doc.get("tabs", [])):
@@ -300,7 +307,8 @@ def export_tab_markdown(
     tab_title: str,
     *,
     drive_service=None,
-    docs_service=None
+    docs_service=None,
+    num_retries: int = 0,
 ) -> str:
     """Export a single tab to Markdown.
 
@@ -311,19 +319,22 @@ def export_tab_markdown(
         tab_title: Title of the tab to export
         drive_service: Optional Drive API service
         docs_service: Optional Docs API service
+        num_retries: Retries with exponential backoff on 429/5xx
 
     Returns:
         Markdown content for the specified tab
     """
     # Get tab titles
-    tabs = get_doc_tabs(document_id, docs_service=docs_service)
+    tabs = get_doc_tabs(document_id, docs_service=docs_service,
+                        num_retries=num_retries)
     tab_titles = [t["title"] for t in tabs]
 
     if tab_title not in tab_titles:
         raise ValueError(f"Tab not found: {tab_title}")
 
     # Export full doc
-    full_md = export_doc_markdown(document_id, drive_service=drive_service)
+    full_md = export_doc_markdown(document_id, drive_service=drive_service,
+                                  num_retries=num_retries)
 
     # Split by tabs
     tab_contents = split_doc_by_tabs(full_md, tab_titles)

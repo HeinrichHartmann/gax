@@ -31,4 +31,7 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "e2e: end-to-end integration tests (require auth, use real Google APIs)",
+    "tier1: text basics — paragraphs, headings, inline formatting (~26 API writes)",
+    "tier2: lists and code blocks (~22 API writes)",
+    "tier3: tables and complex mixed documents (~50 API writes)",
 ]

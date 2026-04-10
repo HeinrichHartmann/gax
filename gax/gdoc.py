@@ -396,7 +396,8 @@ def tab_list(url: str):
 
 
 def create_tab_with_content(
-    document_id: str, tab_name: str, markdown: str, *, service=None
+    document_id: str, tab_name: str, markdown: str, *, service=None,
+    num_retries: int = 0,
 ) -> str:
     """Create a new tab and populate it with markdown content.
 
@@ -405,6 +406,7 @@ def create_tab_with_content(
         tab_name: Name for the new tab
         markdown: Markdown content to insert
         service: Optional Docs API service for testing
+        num_retries: Retries with exponential backoff on 429/5xx
 
     Returns:
         The new tab's ID
@@ -430,7 +432,7 @@ def create_tab_with_content(
                 ]
             },
         )
-        .execute()
+        .execute(num_retries=num_retries)
     )
 
     # Get the new tab ID from response
@@ -442,12 +444,15 @@ def create_tab_with_content(
         service.documents().batchUpdate(
             documentId=document_id,
             body={"requests": content_requests},
-        ).execute()
+        ).execute(num_retries=num_retries)
 
     return tab_id
 
 
-def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) -> None:
+def _populate_tables(
+    service, document_id: str, tab_id: str, tables_data: list,
+    num_retries: int = 0,
+) -> None:
     """Populate empty table cells by reading back actual document indices.
 
     After insertTable creates empty tables, this reads the document structure
@@ -458,7 +463,7 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
     doc = (
         service.documents()
         .get(documentId=document_id, includeTabsContent=True)
-        .execute()
+        .execute(num_retries=num_retries)
     )
 
     # Find the tab's body content
@@ -518,7 +523,7 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
             service.documents().batchUpdate(
                 documentId=document_id,
                 body={"requests": insert_requests},
-            ).execute()
+            ).execute(num_retries=num_retries)
 
         # Pass 2: Apply bold/italic formatting to cell content
         # Re-read the document to get updated indices
@@ -535,7 +540,7 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
         doc = (
             service.documents()
             .get(documentId=document_id, includeTabsContent=True)
-            .execute()
+            .execute(num_retries=num_retries)
         )
 
         # Re-find tables and build formatting requests
@@ -601,7 +606,7 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
                 service.documents().batchUpdate(
                     documentId=document_id,
                     body={"requests": fmt_requests},
-                ).execute()
+                ).execute(num_retries=num_retries)
 
             break
 

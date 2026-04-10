@@ -192,9 +192,14 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
         # an actual empty paragraph in the document.
         if prev_node is not None:
             needs_spacing = False
-            # Blank line between consecutive paragraphs
+            # Blank line between consecutive paragraphs (but not between
+            # consecutive "> " lines — those are code block workaround output
+            # and must stay together without spacing to remain stable)
             if isinstance(prev_node, Paragraph) and isinstance(node, Paragraph):
-                needs_spacing = True
+                prev_text = ''.join(c.text for c in prev_node.children)
+                curr_text = ''.join(c.text for c in node.children)
+                if not (prev_text.startswith('> ') and curr_text.startswith('> ')):
+                    needs_spacing = True
             # Blank line before/after headings (unless preceded by nothing)
             if isinstance(node, Heading) and not isinstance(prev_node, Heading):
                 needs_spacing = True
@@ -240,9 +245,16 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
                 format_actions.append((list_start, list_end - 1, 'unordered_list', None))
 
         elif isinstance(node, CodeBlock):
-            # Push as a plain paragraph — the \ue907 marker approach corrupts
-            # surrounding paragraphs (Google Docs treats it as a list marker).
-            text_parts.append(node.text + '\n')
+            # WORKAROUND: Google Docs has no native code block support.
+            # Code fences (```) are stripped on pull, leaving bare lines that
+            # get re-parsed as separate paragraphs with blank-line spacing
+            # injected between them — causing instability across round-trips.
+            # We project code blocks to a single paragraph with "> " prefix
+            # on each line. This survives pull and re-push as one paragraph
+            # (no inter-line spacing inserted). Google escapes ">" to "\>"
+            # on export, so we unescape on the pull side (native_md.py).
+            prefixed = '\n'.join(f'> {line}' for line in node.text.split('\n'))
+            text_parts.append(prefixed + '\n')
 
         elif isinstance(node, Table):
             table_start = sum(_utf16_len(p) for p in text_parts) + 1
