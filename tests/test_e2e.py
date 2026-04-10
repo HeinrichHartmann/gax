@@ -243,6 +243,37 @@ class TestDocE2E:
         final_content = tracking_file.read_text()
         assert "Updated E2E Tab" in final_content
 
+    def test_table_push_pull_cycle(self, check_auth, test_doc, temp_dir):
+        """Test: import markdown with table -> push -> pull -> verify cell content (#14)."""
+        fixture_content = (FIXTURES_DIR / "e2e_table_test.md").read_text()
+        test_file = temp_dir / "table_test.md"
+        test_file.write_text(fixture_content)
+
+        # Import as new tab
+        tracking_file = temp_dir / "table_test.tab.gax"
+        result = _run_gax(
+            "doc", "tab", "import",
+            test_doc["url"],
+            str(test_file),
+            "-o", str(tracking_file),
+        )
+        assert result.returncode == 0, f"Import failed: {result.stderr}"
+
+        # Push
+        result = _run_gax("doc", "tab", "push", str(tracking_file), "-y")
+        assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+        # Pull back
+        result = _run_gax("doc", "tab", "pull", str(tracking_file))
+        assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+        # Verify table cell content survived the round-trip
+        final_content = tracking_file.read_text()
+        assert "Hello World" in final_content
+        assert "Batch Training" in final_content
+        assert "Some description" in final_content
+        assert "Another description" in final_content
+
 
 # =============================================================================
 # Sheet E2E Tests
