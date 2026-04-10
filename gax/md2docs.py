@@ -63,6 +63,11 @@ class Table(Node):
     rows: list[list[str]]  # list of rows, each row is list of cell strings
 
 
+def _unescape_md(text: str) -> str:
+    """Unescape markdown backslash sequences (e.g. r'\\_' -> '_', r'\\-' -> '-')."""
+    return re.sub(r'\\(.)', r'\1', text)
+
+
 def parse_inline(text: str) -> list[Text]:
     """Parse inline formatting (bold, italic)."""
     result = []
@@ -72,19 +77,19 @@ def parse_inline(text: str) -> list[Text]:
     pos = 0
     for m in pattern.finditer(text):
         if m.start() > pos:
-            result.append(Text(text[pos:m.start()]))
+            result.append(Text(_unescape_md(text[pos:m.start()])))
 
         if m.group(2):  # ***bold+italic***
-            result.append(Text(m.group(2), bold=True, italic=True))
+            result.append(Text(_unescape_md(m.group(2)), bold=True, italic=True))
         elif m.group(3):  # **bold**
-            result.append(Text(m.group(3), bold=True))
+            result.append(Text(_unescape_md(m.group(3)), bold=True))
         elif m.group(4):  # *italic*
-            result.append(Text(m.group(4), italic=True))
+            result.append(Text(_unescape_md(m.group(4)), italic=True))
 
         pos = m.end()
 
     if pos < len(text):
-        result.append(Text(text[pos:]))
+        result.append(Text(_unescape_md(text[pos:])))
 
     return result if result else [Text(text)]
 
