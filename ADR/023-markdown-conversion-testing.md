@@ -176,6 +176,36 @@ Additional normalizations needed (identified by experiments):
 
 These should be added to `export_doc_markdown` to expand the canonical subset.
 
+## Implementation Status
+
+### Test Suite (`tests/test_roundtrip.py`)
+
+14 parametrized fixtures of progressive complexity, from single paragraph to mixed documents with tables, lists, and formatting. Three test classes:
+
+- **TestStability**: push → pull → push → pull, assert `M1 == M2`. All 14 pass.
+- **TestProjectionDiff**: push → pull, report diff against original. Informational, does not fail.
+- **TestComplexIdempotency**: full rich formatting fixture round-trip stability. Passes.
+
+Tab cleanup (module-scoped fixture) prevents hitting Google's 100-tab limit.
+
+### Fixes Applied
+
+1. **Ordered lists**: now use `createParagraphBullets` with `NUMBERED_DECIMAL_NESTED` instead of plain `1. ` text prefix. Produces proper Google Docs numbered lists.
+2. **Paragraph spacing**: empty paragraphs (`\n`) inserted between node types that need visual spacing (consecutive paragraphs, around headings/lists/code/tables). Preserves blank lines through round-trip.
+
+### Remaining Projection Diffs
+
+After the fixes above, the only remaining diffs between original and first-cycle output are:
+
+| Issue | Fixtures affected | Severity |
+|-------|------------------|----------|
+| Trailing `\n` missing | All | Trivial |
+| Ordered list renumbering (`2.` → `1.`) | ordered_list, mixed_document | Google behavior, not a bug |
+| Stray chars after tables (`0`, `4`) | simple_table, table_with_bold | Bug in table placeholder cleanup |
+| Code fences stripped (``` removed) | code_block | Unsupported feature |
+
+All fixtures are idempotent after one cycle despite these diffs.
+
 ## Consequences
 
 **Positive:**
