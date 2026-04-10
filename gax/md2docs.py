@@ -215,6 +215,15 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
     return plain_text, requests
 
 
+def extract_tables(md: str) -> list[list[list[str]]]:
+    """Extract table cell data from markdown.
+
+    Returns list of tables, each a list of rows, each a list of cell strings.
+    """
+    nodes = parse_markdown(md)
+    return [node.rows for node in nodes if isinstance(node, Table)]
+
+
 def markdown_to_requests(md: str, tab_id: str | None = None) -> list[dict]:
     """Convert markdown to Docs API batchUpdate requests."""
     nodes = parse_markdown(md)

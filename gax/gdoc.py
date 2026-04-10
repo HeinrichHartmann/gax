@@ -447,6 +447,71 @@ def create_tab_with_content(
     return tab_id
 
 
+def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) -> None:
+    """Populate empty table cells by reading back actual document indices.
+
+    After insertTable creates empty tables, this reads the document structure
+    to get real cell indices and inserts cell content.
+    """
+    doc = (
+        service.documents()
+        .get(documentId=document_id, includeTabsContent=True)
+        .execute()
+    )
+
+    # Find the tab's body content
+    for tab in doc.get("tabs", []):
+        props = tab.get("tabProperties", {})
+        if props.get("tabId") != tab_id:
+            continue
+
+        body = tab.get("documentTab", {}).get("body", {})
+        content = body.get("content", [])
+
+        # Find table elements in document
+        doc_tables = [elem for elem in content if "table" in elem]
+
+        if len(doc_tables) != len(tables_data):
+            logger.warning(
+                f"Table count mismatch: {len(doc_tables)} in doc vs {len(tables_data)} in markdown"
+            )
+            return
+
+        requests = []
+        for doc_table, md_rows in zip(doc_tables, tables_data):
+            table = doc_table["table"]
+            for r, doc_row in enumerate(table.get("tableRows", [])):
+                if r >= len(md_rows):
+                    break
+                md_row = md_rows[r]
+                for c, doc_cell in enumerate(doc_row.get("tableCells", [])):
+                    cell_text = md_row[c] if c < len(md_row) else ""
+                    if not cell_text:
+                        continue
+                    # Get start index of the cell's first paragraph
+                    cell_content = doc_cell.get("content", [])
+                    if not cell_content:
+                        continue
+                    para = cell_content[0]
+                    insert_idx = para.get("startIndex")
+                    if insert_idx is None:
+                        continue
+                    loc = {"index": insert_idx, "tabId": tab_id}
+                    requests.append(
+                        {"insertText": {"text": cell_text, "location": loc}}
+                    )
+
+        if requests:
+            # Reverse so last cell is populated first (stable indices)
+            requests.reverse()
+            service.documents().batchUpdate(
+                documentId=document_id,
+                body={"requests": requests},
+            ).execute()
+
+        break
+
+
 def update_tab_content(
     document_id: str, tab_name: str, markdown: str, *, service=None
 ) -> None:
@@ -517,6 +582,13 @@ def update_tab_content(
             documentId=document_id,
             body={"requests": content_requests},
         ).execute()
+
+    # Populate table cells (second pass: read back real indices)
+    from .md2docs import extract_tables
+
+    tables_data = extract_tables(markdown)
+    if tables_data:
+        _populate_tables(service, document_id, tab_id, tables_data)
 
 
 @tab.command("import")

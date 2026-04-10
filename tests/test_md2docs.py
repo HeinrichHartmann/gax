@@ -1,6 +1,6 @@
 """Tests for markdown to Google Docs conversion."""
 
-from gax.md2docs import parse_markdown, parse_inline, Heading, Paragraph, Table
+from gax.md2docs import parse_markdown, parse_inline, extract_tables, Heading, Paragraph, Table
 
 
 class TestParseInline:
@@ -61,6 +61,22 @@ class TestParseMarkdown:
         assert isinstance(nodes[0], Table)
         assert nodes[0].rows == [["A", "B"], ["1", "2"], ["3", "4"]]
 
+    def test_table_separator_minimal_dashes(self):
+        """Issue #14: |---|---| separator should be skipped."""
+        md = "| A | B |\n|---|---|\n| 1 | 2 |"
+        nodes = parse_markdown(md)
+        assert len(nodes) == 1
+        assert isinstance(nodes[0], Table)
+        assert nodes[0].rows == [["A", "B"], ["1", "2"]]
+
+    def test_table_separator_colon_dashes(self):
+        """Issue #14: | :---- | separator should be skipped."""
+        md = "| A | B |\n| :---- | :---- |\n| 1 | 2 |"
+        nodes = parse_markdown(md)
+        assert len(nodes) == 1
+        assert isinstance(nodes[0], Table)
+        assert nodes[0].rows == [["A", "B"], ["1", "2"]]
+
     def test_mixed_content(self):
         md = """# Title
 
@@ -74,3 +90,21 @@ Some **bold** text.
         assert isinstance(nodes[0], Heading)
         assert isinstance(nodes[1], Paragraph)
         assert isinstance(nodes[2], Table)
+
+
+class TestExtractTables:
+    def test_no_tables(self):
+        assert extract_tables("# Just a heading\nSome text") == []
+
+    def test_single_table(self):
+        md = "| A | B |\n|---|---|\n| 1 | 2 |"
+        tables = extract_tables(md)
+        assert len(tables) == 1
+        assert tables[0] == [["A", "B"], ["1", "2"]]
+
+    def test_multiple_tables(self):
+        md = "| A |\n|---|\n| 1 |\n\n# Break\n\n| X |\n|---|\n| Y |"
+        tables = extract_tables(md)
+        assert len(tables) == 2
+        assert tables[0] == [["A"], ["1"]]
+        assert tables[1] == [["X"], ["Y"]]
