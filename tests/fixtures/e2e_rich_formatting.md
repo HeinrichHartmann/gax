@@ -1,93 +1,183 @@
-# Project Evaluation Report
+# Markdown Round-Trip Test Fixture
 
-*Template for structured assessments*
+This fixture covers all supported markdown constructs for Google Docs round-trip testing. Each section isolates one feature. Google Docs normalizes list items to have blank lines between them.
 
-**Team:** Acme Engineering
+## Headings
 
-**Author:** _______________
+### H3 Heading
 
-**Status:** Draft
+#### H4 Heading
 
-## Cost Analysis
+##### H5 Heading
 
-Platform cost has two components that always stack:
+###### H6 Heading
 
-1. **Compute cost** - standard pricing for the instance type, billed for the entire time the cluster is provisioned.
-1. **Service surcharge** - charged on top of compute in platform units. For batch pipelines, the relevant tier is **Jobs Compute** (lowest rate).
+## Paragraphs
 
-The critical point: **you pay from start to termination**, regardless of whether a task is actively running.
+Single paragraph of text.
 
-*Fill in Current and Target columns. If the value is identical, write `=` in the Target column.*
+Two paragraphs with a blank line between them.
 
-| Metric | Current | Target | Comparison |
-| :---- | :---- | :---- | :---- |
-| **Platform** (e.g. Service A, Service B) |  | Platform X |  |
-| **Instance type** (e.g. m5.4xlarge) |  |  |  |
-| **Cluster size** (# nodes / vCPUs) |  |  |  |
-| **Cold start time** (trigger to first task) |  |  |  |
-| **Total run time** (wall-clock) |  |  |  |
-| **Cost per run** (actual or estimate) |  |  | cheaper / ~equal / more expensive |
+Second paragraph here.
 
-## Integration Scores
+A paragraph with a longer sentence that contains multiple clauses, separated by commas, to test line handling.
 
-*Use the 0-5 scale below.*
+## Bold
 
-- ✅ **5 - Seamless:** works as expected, zero friction
-- 🟢 **4 - Easy:** minor rough edges, nothing blocking
-- 🟡 **3 - Convenient:** some effort required, but straightforward
-- 🟠 **2 - Tedious:** significant manual steps or workarounds
-- 🔴 **1 - Major friction:** barely works, serious workarounds required
-- ⛔ **0 - Impossible:** not supported or completely blocked
-- ⬜ **N/A:** not tested or not applicable
+This has **bold** text.
 
-| Integration Point | Score | Comment |
-| :---- | :---- | :---- |
-| **Data Integrations** |  |  |
-| Data Lake | 🟢 4 | Reads and writes work well |
-| Feature Store | 🟡 3 | Some friction with schema setup |
-| Message Queue | N/A | *Not tested in this evaluation* |
-| **Platform Integrations** |  |  |
-| CI/CD Pipeline | ✅ 5 | YAML config works cleanly |
-| Secret Manager | 🟠 2 | Extra hops needed for credential rotation |
-| Monitoring Stack | 🔴 1 | No out-of-box integration |
+A line with **multiple bold** segments and **more bold** later.
 
-## Performance and Scaling
+## Italic
 
-### Batch Performance
+This has *italic* text.
 
-| Dimension | What to measure | Observed | Limit hit? | Comment |
-| :---- | :---- | :---- | :---- | :---- |
-| **Concurrency** | Max parallel tasks | 4 tasks | ✅ | No issues |
-| **Data volume** | Largest dataset processed | ~10M rows | ✅ | No failures at this scale |
-| **Throughput** | Records per minute at peak | 500K rec/min |  |  |
-| **Queue wait** | Time from submit to running | 4-10 min |  | Cold start dominates |
+A line with *multiple italic* segments and *more italic* later.
 
-### Serving Performance
+## Bold Italic
 
-*Skip if batch-only.*
+This has ***bold italic*** text.
 
-|  | Value |
+Mixed: **bold** then *italic* then ***both*** in one line.
+
+## Unordered Lists
+
+- First item
+
+- Second item
+
+- Third item
+
+## Ordered Lists
+
+1. First item
+
+1. Second item
+
+1. Third item
+
+## Nested Unordered Lists
+
+- Top level A
+
+    - Nested A1
+
+    - Nested A2
+
+- Top level B
+
+    - Nested B1
+
+        - Deep B1a
+
+        - Deep B1b
+
+    - Nested B2
+
+- Top level C
+
+## Nested Ordered Lists
+
+1. First
+
+    1. Sub-first
+
+    1. Sub-second
+
+1. Second
+
+    1. Sub-first
+
+1. Third
+
+## Lists With Formatting
+
+- **Bold item** with text
+
+- *Italic item* with text
+
+- Plain item
+
+- **Bold** and *italic* in one item
+
+## Tables
+
+### Simple Table
+
+| Name | Value |
 | :---- | :---- |
-| Expected normal load (req/sec) |  |
-| Expected peak load (req/sec) |  |
-| Typical payload size |  |
+| Alpha | 100 |
+| Beta | 200 |
 
-## Functional Requirements
+### Table With Bold
 
-### Onboarding Metrics
+| Category | Score |
+| :---- | :---- |
+| **Setup** | 5 |
+| **Deploy** | 4 |
 
-- **Time to Hello World:** ________ (mins/hours)
-- **Time to Production:** ________ (days/weeks)
+### Minimal Table
+
+| A |
+| :---- |
+| 1 |
+
+### Wide Table
+
+| Col1 | Col2 | Col3 | Col4 | Col5 | Col6 | Col7 | Col8 |
+| :---- | :---- | :---- | :---- | :---- | :---- | :---- | :---- |
+| a | b | c | d | e | f | g | h |
+| **bold** | *italic* | plain | **bold** | *italic* | plain | **bold** | *italic* |
+
+### Table With Emoji
+
+| Status | Meaning | Icon |
+| :---- | :---- | :---- |
+| 🟢 Pass | All checks OK | ✅ |
+| 🟡 Warning | Review needed | ⚠️ |
+| 🔴 Fail | Blocking issue | ❌ |
+| 🟣 Deferred | Postponed | 🔮 |
+
+### Table With Empty Cells
 
 | # | Requirement | Score | Comment |
 | :---- | :---- | :---- | :---- |
 | **Setup** |  |  |  |
-| R01 | **Onboard a new user** (access, permissions) | 🟠 2 | Not self-explanatory for new users |
-| R02 | Set up local dev environment |  |  |
+| R01 | **Onboard a new user** | 🟠 2 | Not self-explanatory |
+| R02 | Set up dev environment |  |  |
 | **Workflow** |  |  |  |
-| R03 | Install custom dependencies | 🟡 3 | Public packages work fine |
-| R04 | **Run code interactively** (notebook or IDE) | 🟡 3 | Cold start kills iteration speed |
-| R05 | **Deploy as scheduled job** | 🟢 4 | Config-driven deployment works well |
-| **Operations** |  |  |  |
-| R06 | Debug a failed job (logs, errors) | 🟠 2 | Error messages not always actionable |
-| R07 | Monitor a running job (progress, resources) | 🟡 3 | Basic metrics visible; gaps in GPU display |
+| R03 | Install dependencies | 🟡 3 | Public packages work |
+
+## Emoji
+
+Inline emoji: ✅ done, 🟢 pass, 🟡 warning, 🟠 caution, 🔴 fail, ⛔ blocked, ⬜ skipped.
+
+## Special Characters
+
+Prices: $100, $1,000, $10,000.00
+
+Percentages: 50%, 99.9%
+
+Underscores: ________
+
+## Mixed Structures
+
+Text before a list.
+
+- Item A
+
+- Item B
+
+Text between list and table.
+
+| X | Y |
+| :---- | :---- |
+| 1 | 2 |
+
+Text after a table.
+
+1. Ordered after table
+
+1. Second item
+
+Final paragraph.

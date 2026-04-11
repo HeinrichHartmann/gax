@@ -160,9 +160,9 @@ def export_doc_markdown(
     markdown = re.sub(r'[ \t]+$', '', markdown, flags=re.MULTILINE)
 
     # Normalize: Unescape Drive API over-escaped characters.
-    # Google's markdown export backslash-escapes -, >, #, ~, ` even in
-    # contexts where they're not special (e.g. "# nodes", "~equal", `=`).
-    markdown = re.sub(r'\\([->#~`])', r'\1', markdown)
+    # Google's markdown export backslash-escapes -, >, #, ~, _, ` even in
+    # contexts where they're not special (e.g. "# nodes", "~equal", `____`).
+    markdown = re.sub(r'\\([->#~`_])', r'\1', markdown)
 
     # Normalize: Ensure trailing newline
     if not markdown.endswith('\n'):
@@ -252,7 +252,7 @@ def split_doc_by_tabs(
             if header_text in tab_titles:
                 # Save previous tab
                 if current_tab is not None:
-                    result[current_tab] = "\n".join(current_lines).strip()
+                    result[current_tab] = "\n".join(current_lines).strip() + "\n"
                 # Start new tab
                 current_tab = header_text
                 current_lines = []
@@ -263,11 +263,11 @@ def split_doc_by_tabs(
 
     # Save last tab
     if current_tab is not None:
-        result[current_tab] = "\n".join(current_lines).strip()
+        result[current_tab] = "\n".join(current_lines).strip() + "\n"
 
     # Fallback: single-tab doc with no H1 title header — use full content
     if not result and len(tab_titles) == 1:
-        result[tab_titles[0]] = markdown.strip()
+        result[tab_titles[0]] = markdown.strip() + "\n"
 
     return result
 
