@@ -9,13 +9,9 @@ the identity property holds: pull(push(M)) == M.
 Required environment variables:
     GAX_TEST_DOC - Google Doc ID for testing
 
-Run with: make test-e2e
-
-Fixtures are organized into tiers to stay within Google Docs API quota
-(60 write requests/min). Run individual tiers with:
-    pytest -m tier1    # ~26 writes: text basics
-    pytest -m tier2    # ~22 writes: lists and code
-    pytest -m tier3    # ~50 writes: tables and complex docs
+Run with:
+    pytest -m e2e                # main rich fixture test
+    pytest -m isolated           # per-construct debugging tests (high API usage)
 """
 
 import difflib
@@ -297,54 +293,49 @@ FIXTURES = {**TIER1_FIXTURES, **TIER2_FIXTURES, **TIER3_FIXTURES}
 
 
 # =============================================================================
-# Stability tests by tier
+# Main e2e test: rich fixture round-trip
 # =============================================================================
 
 
 @pytest.mark.e2e
-@pytest.mark.tier1
-class TestStabilityTier1:
-    """Text basics: paragraphs, headings, bold/italic."""
+class TestRichFixture:
+    """Round-trip the full rich formatting fixture.
 
-    @pytest.mark.parametrize("name", TIER1_FIXTURES.keys())
-    def test_fixture(self, name, doc_id, services):
-        md = TIER1_FIXTURES[name]
-        assert_stable(md, doc_id, services, prefix=name)
+    This is the primary e2e test. It covers all supported constructs:
+    headings (h1-h6), bold, italic, bold+italic, ordered/unordered lists,
+    tables (plain, formatted, wide, minimal), emoji, special characters,
+    underscores, and various structural combinations.
+    """
 
-
-@pytest.mark.e2e
-@pytest.mark.tier2
-class TestStabilityTier2:
-    """Lists and code blocks."""
-
-    @pytest.mark.parametrize("name", TIER2_FIXTURES.keys())
-    def test_fixture(self, name, doc_id, services):
-        md = TIER2_FIXTURES[name]
-        assert_stable(md, doc_id, services, prefix=name)
-
-
-@pytest.mark.e2e
-@pytest.mark.tier3
-class TestStabilityTier3:
-    """Tables and complex mixed documents."""
-
-    @pytest.mark.parametrize("name", TIER3_FIXTURES.keys())
-    def test_fixture(self, name, doc_id, services):
-        md = TIER3_FIXTURES[name]
-        assert_stable(md, doc_id, services, prefix=name)
-
-
-@pytest.mark.e2e
-@pytest.mark.tier3
-class TestComplexIdempotency:
-    """Test that the full rich formatting fixture stabilizes."""
-
-    def test_rich_fixture(self, doc_id, services):
+    def test_roundtrip_stable(self, doc_id, services):
         from pathlib import Path
         fixture = Path(__file__).parent / "fixtures" / "e2e_rich_formatting.md"
         md = fixture.read_text()
         m1, _ = assert_stable(md, doc_id, services, prefix="rich")
         # Verify key content survived
-        assert "Project Evaluation Report" in m1
-        assert "Cost Analysis" in m1
-        assert "Integration Scores" in m1
+        assert "Markdown Round-Trip Test Fixture" in m1
+        assert "bold italic" in m1
+        assert "H6 Heading" in m1
+        assert "Deep B1a" in m1
+
+
+# =============================================================================
+# Isolated fixture tests: for debugging individual constructs
+# Run with: pytest -m isolated
+# =============================================================================
+
+
+@pytest.mark.e2e
+@pytest.mark.isolated
+class TestIsolatedFixtures:
+    """Per-construct round-trip tests for debugging.
+
+    These are subsumed by TestRichFixture but useful for pinpointing
+    which construct breaks when the rich fixture fails.
+    Not run by default — use: pytest -m isolated
+    """
+
+    @pytest.mark.parametrize("name", FIXTURES.keys())
+    def test_fixture(self, name, doc_id, services):
+        md = FIXTURES[name]
+        assert_stable(md, doc_id, services, prefix=name)

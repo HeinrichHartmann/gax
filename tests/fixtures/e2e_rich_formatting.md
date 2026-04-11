@@ -1,6 +1,21 @@
 # Markdown Round-Trip Test Fixture
 
-This fixture covers all supported markdown constructs for Google Docs round-trip testing. Each section isolates one feature. Google Docs normalizes list items to have blank lines between them.
+This fixture covers all supported markdown constructs for Google Docs round-trip testing. Each section isolates one feature. The fixture is in canonical form: it round-trips through Google Docs without any diff (M == M1).
+
+Google Docs canonical conventions discovered through testing:
+
+- Flat list items (top-level) have NO blank lines between them
+- Nested list items require blank lines between every item (all levels)
+- Ordered lists are always exported as `1.` (Google renumbers)
+- Table alignment is always `:----` (left-aligned), regardless of input
+
+Pull-side normalizations (where our output differs from Google's native export):
+
+- h6 headings: Google wraps in `*...*` (italic), we strip it back
+- Escaped chars: Google exports `\_`, `\.`, `\-`, `\>`, `\#`, `\~`, `\`backtick`\` — we unescape all
+- Bullet style: Google exports `* item`, we normalize to `- item`
+- Trailing whitespace: stripped from all lines
+- Trailing newline: ensured at end of file
 
 ## Headings
 
@@ -43,17 +58,13 @@ Mixed: **bold** then *italic* then ***both*** in one line.
 ## Unordered Lists
 
 - First item
-
 - Second item
-
 - Third item
 
 ## Ordered Lists
 
 1. First item
-
 1. Second item
-
 1. Third item
 
 ## Nested Unordered Lists
@@ -93,11 +104,8 @@ Mixed: **bold** then *italic* then ***both*** in one line.
 ## Lists With Formatting
 
 - **Bold item** with text
-
 - *Italic item* with text
-
 - Plain item
-
 - **Bold** and *italic* in one item
 
 ## Tables
@@ -160,12 +168,27 @@ Percentages: 50%, 99.9%
 
 Underscores: ________
 
+Dashes and tildes: value-based, cost-effective, ~approximate, ~~not this~~.
+
+Hash in text: issue #42, channel #general.
+
+Angle brackets and square brackets: see <value> and [note] here.
+
+Dots after numbers: Room 3.14 has 2.5 desks. Version 1.0 is ready.
+
+Backticks in text: use the `grep` command and `ls -la` for details.
+
+## Hyperlinks
+
+Visit [Google](https://www.google.com) for search.
+
+A paragraph with [multiple](https://example.com) links [inline](https://example.org).
+
 ## Mixed Structures
 
 Text before a list.
 
 - Item A
-
 - Item B
 
 Text between list and table.
@@ -177,7 +200,6 @@ Text between list and table.
 Text after a table.
 
 1. Ordered after table
-
 1. Second item
 
 Final paragraph.
