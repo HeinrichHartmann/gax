@@ -160,9 +160,12 @@ def export_doc_markdown(
     markdown = re.sub(r'[ \t]+$', '', markdown, flags=re.MULTILINE)
 
     # Normalize: Unescape Drive API over-escaped characters.
-    # Google's markdown export backslash-escapes -, >, #, ~, _, ` even in
-    # contexts where they're not special (e.g. "# nodes", "~equal", `____`).
-    markdown = re.sub(r'\\([->#~`_])', r'\1', markdown)
+    # Google's markdown export backslash-escapes many characters:
+    # -, >, #, ~, _, `, ., =, <, [, ], *
+    markdown = re.sub(r'\\([->#~`_.=<\[\]*])', r'\1', markdown)
+
+    # Normalize: Google wraps h6 content in italic markers; strip them
+    markdown = re.sub(r'^(######) \*(.+)\*$', r'\1 \2', markdown, flags=re.MULTILINE)
 
     # Normalize: Ensure trailing newline
     if not markdown.endswith('\n'):

@@ -12,8 +12,8 @@ Google Docs canonical conventions discovered through testing:
 Pull-side normalizations (where our output differs from Google's native export):
 
 - h6 headings: Google wraps in `*...*` (italic), we strip it back
-- Escaped chars: Google exports `\_`, `\.`, `\-`, `\>`, `\#`, `\~`, `\`backtick`\` — we unescape all
-- Bullet style: Google exports `* item`, we normalize to `- item`
+- Escaped chars: Google backslash-escapes -, >, #, ~, _, ., =, <, [, ], * — we unescape all
+- Bullet style: Google exports "* item", we normalize to "- item"
 - Trailing whitespace: stripped from all lines
 - Trailing newline: ensured at end of file
 
