@@ -59,7 +59,12 @@ class TestParseMarkdown:
         nodes = parse_markdown(md)
         assert len(nodes) == 1
         assert isinstance(nodes[0], Table)
-        assert nodes[0].rows == [["A", "B"], ["1", "2"], ["3", "4"]]
+        rows = nodes[0].rows
+        assert len(rows) == 3
+        assert rows[0][0][0].text == "A"
+        assert rows[0][1][0].text == "B"
+        assert rows[1][0][0].text == "1"
+        assert rows[2][1][0].text == "4"
 
     def test_table_separator_minimal_dashes(self):
         """Issue #14: |---|---| separator should be skipped."""
@@ -67,7 +72,8 @@ class TestParseMarkdown:
         nodes = parse_markdown(md)
         assert len(nodes) == 1
         assert isinstance(nodes[0], Table)
-        assert nodes[0].rows == [["A", "B"], ["1", "2"]]
+        assert len(nodes[0].rows) == 2
+        assert nodes[0].rows[0][0][0].text == "A"
 
     def test_table_separator_colon_dashes(self):
         """Issue #14: | :---- | separator should be skipped."""
@@ -75,7 +81,8 @@ class TestParseMarkdown:
         nodes = parse_markdown(md)
         assert len(nodes) == 1
         assert isinstance(nodes[0], Table)
-        assert nodes[0].rows == [["A", "B"], ["1", "2"]]
+        assert len(nodes[0].rows) == 2
+        assert nodes[0].rows[0][0][0].text == "A"
 
     def test_mixed_content(self):
         md = """# Title
@@ -138,11 +145,16 @@ class TestExtractTables:
         md = "| A | B |\n|---|---|\n| 1 | 2 |"
         tables = extract_tables(md)
         assert len(tables) == 1
-        assert tables[0] == [["A", "B"], ["1", "2"]]
+        assert len(tables[0]) == 2  # header + 1 data row
+        assert tables[0][0][0][0].text == "A"
+        assert tables[0][0][1][0].text == "B"
+        assert tables[0][1][0][0].text == "1"
 
     def test_multiple_tables(self):
         md = "| A |\n|---|\n| 1 |\n\n# Break\n\n| X |\n|---|\n| Y |"
         tables = extract_tables(md)
         assert len(tables) == 2
-        assert tables[0] == [["A"], ["1"]]
-        assert tables[1] == [["X"], ["Y"]]
+        assert tables[0][0][0][0].text == "A"
+        assert tables[0][1][0][0].text == "1"
+        assert tables[1][0][0][0].text == "X"
+        assert tables[1][1][0][0].text == "Y"

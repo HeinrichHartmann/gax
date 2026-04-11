@@ -148,7 +148,7 @@ Mixed: **bold** then *italic* then ***both*** in one line.
 
 ### Table With Empty Cells
 
-| # | Requirement | Score | Comment |
+| No. | Requirement | Score | Comment |
 | :---- | :---- | :---- | :---- |
 | **Setup** |  |  |  |
 | R01 | **Onboard a new user** | 🟠 2 | Not self-explanatory |

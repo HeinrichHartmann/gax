@@ -1,17 +1,19 @@
 """Convert Markdown to Google Docs API requests.
 
-AST-based approach supporting:
+Uses mistune for parsing. Supports:
 - Headings (# to ######)
 - Bold (**text**) and Italic (*text*)
-- Ordered lists (1. item)
-- Unordered lists (- item, * item)
+- Hyperlinks ([text](url))
+- Ordered lists (1. item) and Unordered lists (- item)
+- Nested lists
 - Code blocks (``` ... ```)
 - Tables (| col | col |) with inline formatting in cells
 - Paragraphs with inline formatting
 """
 
-import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import mistune
 
 
 def _utf16_len(s: str) -> int:
@@ -21,6 +23,11 @@ def _utf16_len(s: str) -> int:
     occupy 2 UTF-16 code units but count as 1 in Python's len().
     """
     return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
+
+
+# =============================================================================
+# AST nodes (intermediate representation between mistune and Docs API)
+# =============================================================================
 
 
 @dataclass
@@ -34,23 +41,29 @@ class Text(Node):
     text: str
     bold: bool = False
     italic: bool = False
+    url: str | None = None
 
 
 @dataclass
 class Heading(Node):
     level: int  # 1-6
-    text: str
+    children: list[Text] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return ''.join(c.text for c in self.children)
 
 
 @dataclass
 class Paragraph(Node):
-    children: list[Text]
+    children: list[Text] = field(default_factory=list)
 
 
 @dataclass
 class ListItem(Node):
-    children: list[Text]
+    children: list[Text] = field(default_factory=list)
     ordered: bool = False
+    depth: int = 0
 
 
 @dataclass
@@ -60,113 +73,172 @@ class CodeBlock(Node):
 
 @dataclass
 class Table(Node):
-    rows: list[list[str]]  # list of rows, each row is list of cell strings
+    rows: list[list[list[Text]]]  # list of rows, each row is list of cells, each cell is list of Text spans
 
 
-def _unescape_md(text: str) -> str:
-    """Unescape markdown backslash sequences (e.g. r'\\_' -> '_', r'\\-' -> '-')."""
-    return re.sub(r'\\(.)', r'\1', text)
+# =============================================================================
+# Mistune AST -> our AST
+# =============================================================================
+
+_parser = mistune.create_markdown(renderer=None, plugins=['table'])
+
+
+def _flatten_inline(tokens: list[dict], bold=False, italic=False, url=None) -> list[Text]:
+    """Recursively flatten mistune inline tokens into Text spans."""
+    result = []
+    for tok in tokens:
+        t = tok['type']
+        if t == 'text':
+            result.append(Text(tok['raw'], bold=bold, italic=italic, url=url))
+        elif t == 'strong':
+            result.extend(_flatten_inline(tok['children'], bold=True, italic=italic, url=url))
+        elif t == 'emphasis':
+            result.extend(_flatten_inline(tok['children'], bold=bold, italic=True, url=url))
+        elif t == 'link':
+            link_url = tok.get('attrs', {}).get('url', '')
+            result.extend(_flatten_inline(tok['children'], bold=bold, italic=italic, url=link_url))
+        elif t == 'codespan':
+            result.append(Text(tok.get('raw', tok.get('text', '')), bold=bold, italic=italic, url=url))
+        elif t == 'softbreak':
+            result.append(Text('\n', bold=bold, italic=italic, url=url))
+        elif t == 'block_text':
+            result.extend(_flatten_inline(tok.get('children', []), bold=bold, italic=italic, url=url))
+        else:
+            # Fallback: extract raw text
+            if 'raw' in tok:
+                result.append(Text(tok['raw'], bold=bold, italic=italic, url=url))
+            elif 'children' in tok:
+                result.extend(_flatten_inline(tok['children'], bold=bold, italic=italic, url=url))
+    return result
+
+
+def _extract_list_items(list_tok: dict, depth: int = 0) -> list[ListItem]:
+    """Extract ListItem nodes from a mistune list token, handling nesting."""
+    ordered = list_tok.get('attrs', {}).get('ordered', False)
+    items = []
+    for item_tok in list_tok.get('children', []):
+        if item_tok['type'] != 'list_item':
+            continue
+        inline_children = []
+        for child in item_tok.get('children', []):
+            if child['type'] == 'list':
+                # Nested list
+                items.extend(_extract_list_items(child, depth=depth + 1))
+            else:
+                inline_children.extend(_flatten_inline([child]))
+        if inline_children:
+            items.append(ListItem(children=inline_children, ordered=ordered, depth=depth))
+    return items
+
+
+def _table_to_rows(tok: dict) -> list[list[list[Text]]]:
+    """Convert mistune table token to list of rows of parsed cells."""
+    rows = []
+    for section in tok.get('children', []):
+        if section['type'] in ('table_head', 'table_body'):
+            section_children = section.get('children', [])
+            if section['type'] == 'table_head':
+                # table_head contains cells directly (it IS the row)
+                cells = []
+                for cell_tok in section_children:
+                    if cell_tok['type'] == 'table_cell':
+                        cells.append(_flatten_inline(cell_tok.get('children', [])))
+                if cells:
+                    rows.append(cells)
+            else:
+                # table_body contains table_row children
+                for row_tok in section_children:
+                    if row_tok['type'] != 'table_row':
+                        continue
+                    cells = []
+                    for cell_tok in row_tok.get('children', []):
+                        if cell_tok['type'] != 'table_cell':
+                            continue
+                        cells.append(_flatten_inline(cell_tok.get('children', [])))
+                    rows.append(cells)
+    return rows
+
+
+def _spans_to_md(spans: list[Text]) -> str:
+    """Convert Text spans back to markdown string (for table cells)."""
+    parts = []
+    for s in spans:
+        t = s.text
+        if s.bold and s.italic:
+            t = f'***{t}***'
+        elif s.bold:
+            t = f'**{t}**'
+        elif s.italic:
+            t = f'*{t}*'
+        parts.append(t)
+    return ''.join(parts)
 
 
 def parse_inline(text: str) -> list[Text]:
-    """Parse inline formatting (bold, italic)."""
+    """Parse inline formatting from a markdown string.
+
+    Public API used by table cell population in gdoc.py.
+    """
+    if not text or not text.strip():
+        return [Text(text)]
+    tokens = _parser(text)
     result = []
-    # Pattern: **bold**, *italic*, ***bold+italic***
-    pattern = re.compile(r'(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*)')
-
-    pos = 0
-    for m in pattern.finditer(text):
-        if m.start() > pos:
-            result.append(Text(_unescape_md(text[pos:m.start()])))
-
-        if m.group(2):  # ***bold+italic***
-            result.append(Text(_unescape_md(m.group(2)), bold=True, italic=True))
-        elif m.group(3):  # **bold**
-            result.append(Text(_unescape_md(m.group(3)), bold=True))
-        elif m.group(4):  # *italic*
-            result.append(Text(_unescape_md(m.group(4)), italic=True))
-
-        pos = m.end()
-
-    if pos < len(text):
-        result.append(Text(_unescape_md(text[pos:])))
-
+    for tok in tokens:
+        if tok['type'] in ('paragraph', 'block_text'):
+            result.extend(_flatten_inline(tok.get('children', [])))
+        else:
+            result.extend(_flatten_inline([tok]))
     return result if result else [Text(text)]
 
 
 def parse_markdown(md: str) -> list[Node]:
-    """Parse markdown into AST nodes."""
+    """Parse markdown into AST nodes using mistune."""
+    tokens = _parser(md)
     nodes = []
-    lines = md.split('\n')
-    i = 0
 
-    while i < len(lines):
-        line = lines[i]
+    for tok in tokens:
+        t = tok['type']
 
-        # Empty line
-        if not line.strip():
-            i += 1
+        if t == 'blank_line':
             continue
 
-        # Code block
-        if line.strip().startswith('```'):
-            i += 1
-            code_lines = []
-            while i < len(lines) and not lines[i].strip().startswith('```'):
-                code_lines.append(lines[i])
-                i += 1
-            if i < len(lines):
-                i += 1  # skip closing ```
-            nodes.append(CodeBlock(text='\n'.join(code_lines)))
-            continue
+        elif t == 'heading':
+            children = _flatten_inline(tok.get('children', []))
+            nodes.append(Heading(level=tok['attrs']['level'], children=children))
 
-        # Heading
-        m = re.match(r'^(#{1,6})\s+(.+)$', line)
-        if m:
-            nodes.append(Heading(level=len(m.group(1)), text=m.group(2)))
-            i += 1
-            continue
+        elif t == 'paragraph':
+            children = _flatten_inline(tok.get('children', []))
+            nodes.append(Paragraph(children=children))
 
-        # Table (starts with |)
-        if line.strip().startswith('|'):
-            rows = []
-            while i < len(lines) and lines[i].strip().startswith('|'):
-                row_line = lines[i].strip()
-                # Skip separator row (|---|---|)
-                if re.match(r'^\|[\s\-:|]+\|$', row_line):
-                    i += 1
-                    continue
-                # Parse cells
-                cells = [c.strip() for c in row_line.split('|')[1:-1]]
-                rows.append(cells)
-                i += 1
+        elif t == 'list':
+            items = _extract_list_items(tok)
+            nodes.extend(items)
+
+        elif t == 'block_code':
+            nodes.append(CodeBlock(text=tok.get('raw', '').rstrip('\n')))
+
+        elif t == 'table':
+            rows = _table_to_rows(tok)
             if rows:
                 nodes.append(Table(rows=rows))
-            continue
 
-        # Unordered list item (- or *)
-        m = re.match(r'^[-*]\s+(.+)$', line)
-        if m:
-            nodes.append(ListItem(children=parse_inline(m.group(1)), ordered=False))
-            i += 1
-            continue
-
-        # Ordered list item (1. 2. etc)
-        m = re.match(r'^\d+\.\s+(.+)$', line)
-        if m:
-            nodes.append(ListItem(children=parse_inline(m.group(1)), ordered=True))
-            i += 1
-            continue
-
-        # Regular paragraph
-        nodes.append(Paragraph(children=parse_inline(line)))
-        i += 1
+        elif t == 'block_quote':
+            # Flatten block quote children as paragraphs
+            for child in tok.get('children', []):
+                if child['type'] == 'paragraph':
+                    children = _flatten_inline(child.get('children', []))
+                    nodes.append(Paragraph(children=children))
 
     return nodes
 
 
+# =============================================================================
+# Docs API request generation
+# =============================================================================
+
+
 def _append_inline(text_parts: list[str], format_actions: list, children: list[Text]):
-    """Append inline-formatted text spans, tracking positions for bold/italic."""
+    """Append inline-formatted text spans, tracking positions for bold/italic/link."""
     for child in children:
         child_start = sum(_utf16_len(p) for p in text_parts) + 1
         text_parts.append(child.text)
@@ -175,6 +247,8 @@ def _append_inline(text_parts: list[str], format_actions: list, children: list[T
             format_actions.append((child_start, child_end, 'bold', None))
         if child.italic:
             format_actions.append((child_start, child_end, 'italic', None))
+        if child.url:
+            format_actions.append((child_start, child_end, 'link', child.url))
 
 
 def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str, list[dict]]:
@@ -225,24 +299,31 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
             text_parts.append(node.text + '\n')
             end = start + _utf16_len(node.text)
             format_actions.append((start, end, 'heading', node.level))
+            # Apply inline formatting within heading
+            offset = start
+            for child in node.children:
+                child_end = offset + _utf16_len(child.text)
+                if child.bold:
+                    format_actions.append((offset, child_end, 'bold', None))
+                if child.italic:
+                    format_actions.append((offset, child_end, 'italic', None))
+                if child.url:
+                    format_actions.append((offset, child_end, 'link', child.url))
+                offset = child_end
 
         elif isinstance(node, Paragraph):
             _append_inline(text_parts, format_actions, node.children)
             text_parts.append('\n')
 
         elif isinstance(node, ListItem):
+            list_start = sum(_utf16_len(p) for p in text_parts) + 1
+            _append_inline(text_parts, format_actions, node.children)
+            text_parts.append('\n')
+            list_end = sum(_utf16_len(p) for p in text_parts) + 1
             if node.ordered:
-                list_start = sum(_utf16_len(p) for p in text_parts) + 1
-                _append_inline(text_parts, format_actions, node.children)
-                text_parts.append('\n')
-                list_end = sum(_utf16_len(p) for p in text_parts) + 1
-                format_actions.append((list_start, list_end - 1, 'ordered_list', None))
+                format_actions.append((list_start, list_end - 1, 'ordered_list', node.depth))
             else:
-                list_start = sum(_utf16_len(p) for p in text_parts) + 1
-                _append_inline(text_parts, format_actions, node.children)
-                text_parts.append('\n')
-                list_end = sum(_utf16_len(p) for p in text_parts) + 1
-                format_actions.append((list_start, list_end - 1, 'unordered_list', None))
+                format_actions.append((list_start, list_end - 1, 'unordered_list', node.depth))
 
         elif isinstance(node, CodeBlock):
             # WORKAROUND: Google Docs has no native code block support.
@@ -262,7 +343,12 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
             num_cols = max(len(row) for row in node.rows) if node.rows else 0
 
             # Build placeholder text (will be replaced by actual table)
-            table_text = '\n'.join('\t'.join(row) for row in node.rows) + '\n'
+            def _cell_plain(spans: list[Text]) -> str:
+                return ''.join(s.text for s in spans)
+            table_text = '\n'.join(
+                '\t'.join(_cell_plain(cell) for cell in row)
+                for row in node.rows
+            ) + '\n'
             text_parts.append(table_text)
             table_end = sum(_utf16_len(p) for p in text_parts) + 1
 
@@ -322,6 +408,14 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
                         'fields': 'italic'
                     }
                 })
+            elif action == 'link':
+                result.append({
+                    'updateTextStyle': {
+                        'range': range_spec,
+                        'textStyle': {'link': {'url': params}},
+                        'fields': 'link'
+                    }
+                })
             elif action == 'unordered_list':
                 result.append({
                     'createParagraphBullets': {
@@ -338,7 +432,7 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
                 })
         return result
 
-    # 1. Apply non-table styles (heading, bold, italic, code_block) at stable positions
+    # 1. Apply non-table styles (heading, bold, italic, link) at stable positions
     requests.extend(_build_style_requests(other_actions))
 
     # 2. Apply table operations last (delete placeholder + insert empty table).
@@ -372,10 +466,11 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
     return plain_text, requests
 
 
-def extract_tables(md: str) -> list[list[list[str]]]:
+def extract_tables(md: str) -> list[list[list[list[Text]]]]:
     """Extract table cell data from markdown.
 
-    Returns list of tables, each a list of rows, each a list of cell strings.
+    Returns list of tables, each a list of rows, each a list of cells,
+    each cell a list of Text spans.
     """
     nodes = parse_markdown(md)
     return [node.rows for node in nodes if isinstance(node, Table)]
