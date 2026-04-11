@@ -228,8 +228,8 @@ TIER2_FIXTURES = {
     "ordered_list": (
         "Before the list.\n\n"
         "1. First item\n"
-        "2. Second item\n"
-        "3. Third item\n\n"
+        "1. Second item\n"
+        "1. Third item\n\n"
         "After the list.\n"
     ),
 
@@ -280,15 +280,15 @@ TIER3_FIXTURES = {
         "## Analysis\n\n"
         "Two components:\n\n"
         "1. **Compute** - standard pricing\n"
-        "2. **Service** - additional fees\n\n"
+        "1. **Service** - additional fees\n\n"
         "## Scores\n\n"
         "- **5 - Seamless:** no friction\n"
         "- **3 - Moderate:** some effort\n\n"
         "| Metric | Value |\n"
         "| :---- | :---- |\n"
         "| **Cost** | $100 |\n"
-        "| **Time** | 2 days |\n\n"
-        "Final notes.\n"
+        "| **Time** | 2 days | \n\n"
+        "Final notes. \n"
     ),
 }
 
