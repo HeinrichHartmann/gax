@@ -4,7 +4,7 @@
 
 **Team:** Acme Engineering
 
-**Author:** \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
+**Author:** _______________
 
 **Status:** Draft
 
@@ -76,8 +76,8 @@ The critical point: **you pay from start to termination**, regardless of whether
 
 ### Onboarding Metrics
 
-- **Time to Hello World:** \_\_\_\_\_\_\_\_ (mins/hours)
-- **Time to Production:** \_\_\_\_\_\_\_\_ (days/weeks)
+- **Time to Hello World:** ________ (mins/hours)
+- **Time to Production:** ________ (days/weeks)
 
 | # | Requirement | Score | Comment |
 | :---- | :---- | :---- | :---- |

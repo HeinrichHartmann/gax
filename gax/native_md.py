@@ -156,13 +156,17 @@ def export_doc_markdown(
     # Normalize: Drive API exports bullet lists as "* item", standardize to "- item"
     markdown = re.sub(r'^\* ', '- ', markdown, flags=re.MULTILINE)
 
-    # Normalize: Remove Drive API trailing soft-breaks (two spaces at line end)
-    markdown = re.sub(r'  $', '', markdown, flags=re.MULTILINE)
+    # Normalize: Remove trailing whitespace from all lines
+    markdown = re.sub(r'[ \t]+$', '', markdown, flags=re.MULTILINE)
 
     # Normalize: Unescape Drive API over-escaped characters.
     # Google's markdown export backslash-escapes -, >, #, ~, ` even in
     # contexts where they're not special (e.g. "# nodes", "~equal", `=`).
     markdown = re.sub(r'\\([->#~`])', r'\1', markdown)
+
+    # Normalize: Ensure trailing newline
+    if not markdown.endswith('\n'):
+        markdown += '\n'
 
     return markdown
 
