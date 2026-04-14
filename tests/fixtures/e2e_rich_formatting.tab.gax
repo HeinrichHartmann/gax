@@ -8,8 +8,9 @@ tab: e2e_rich_formatting
 # Project Evaluation Report
 
 *Template for structured assessments*
+See [evaluation guidelines](https://example.com/guidelines) for details.
 **Team:** Acme Engineering
-**Author:** \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
+**Author:** _______________
 **Status:** Draft
 
 ## Cost Analysis
@@ -21,9 +22,7 @@ Platform cost has two components that always stack:
 
 The critical point: **you pay from start to termination**, regardless of whether a task is actively running.
 
-```
-Cost per run = provisioned time x (compute rate + service rate)
-```
+> Cost per run = provisioned time x (compute rate + service rate)
 
 *Fill in Current and Target columns. If the value is identical, write `=` in the Target column.*
 
@@ -84,8 +83,8 @@ Cost per run = provisioned time x (compute rate + service rate)
 
 ### Onboarding Metrics
 
-* **Time to Hello World:** \_\_\_\_\_\_\_\_ (mins/hours)
-* **Time to Production:** \_\_\_\_\_\_\_\_ (days/weeks)
+* **Time to Hello World:** ________ (mins/hours)
+* **Time to Production:** ________ (days/weeks)
 
 | # | Requirement | Score | Comment |
 | :---- | :---- | :---- | :---- |

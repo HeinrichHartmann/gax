@@ -12,6 +12,7 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.0",
     "rich>=13.0",
+    "mistune>=3.2.0",
 ]
 
 [project.scripts]
@@ -31,4 +32,5 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "e2e: end-to-end integration tests (require auth, use real Google APIs)",
+    "isolated: per-construct round-trip tests for debugging (high API usage)",
 ]

@@ -396,8 +396,9 @@ def tab_list(url: str):
 
 
 def create_tab_with_content(
-    document_id: str, tab_name: str, markdown: str, *, service=None
-) -> str:
+    document_id: str, tab_name: str, markdown: str, *, service=None,
+    num_retries: int = 0,
+) -> tuple[str, list]:
     """Create a new tab and populate it with markdown content.
 
     Args:
@@ -405,9 +406,10 @@ def create_tab_with_content(
         tab_name: Name for the new tab
         markdown: Markdown content to insert
         service: Optional Docs API service for testing
+        num_retries: Retries with exponential backoff on 429/5xx
 
     Returns:
-        The new tab's ID
+        Tuple of (tab_id, push_warnings)
     """
     from .md2docs import markdown_to_requests
 
@@ -430,35 +432,43 @@ def create_tab_with_content(
                 ]
             },
         )
-        .execute()
+        .execute(num_retries=num_retries)
     )
 
     # Get the new tab ID from response
     tab_id = create_response["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
 
     # Step 2: Insert markdown content
-    content_requests = markdown_to_requests(markdown, tab_id)
+    content_requests, tables_data, warnings = markdown_to_requests(markdown, tab_id)
     if content_requests:
         service.documents().batchUpdate(
             documentId=document_id,
             body={"requests": content_requests},
-        ).execute()
+        ).execute(num_retries=num_retries)
 
-    return tab_id
+    # Step 3: Populate table cells (read back real indices from API)
+    if tables_data:
+        _populate_tables(service, document_id, tab_id, tables_data,
+                         num_retries=num_retries)
+
+    return tab_id, warnings
 
 
-def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) -> None:
+def _populate_tables(
+    service, document_id: str, tab_id: str, tables_data: list,
+    num_retries: int = 0,
+) -> None:
     """Populate empty table cells by reading back actual document indices.
 
     After insertTable creates empty tables, this reads the document structure
     to get real cell indices, inserts cell content, and applies inline formatting.
     """
-    from .md2docs import parse_inline, _utf16_len
+    from .md2docs import _utf16_len
 
     doc = (
         service.documents()
         .get(documentId=document_id, includeTabsContent=True)
-        .execute()
+        .execute(num_retries=num_retries)
     )
 
     # Find the tab's body content
@@ -481,7 +491,7 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
 
         # Pass 1: Insert plain text into cells (strip markdown syntax)
         insert_requests = []
-        # Track cells that need formatting: (insert_idx, cell_text)
+        # Track cells that need formatting: (insert_idx, spans)
         cells_to_format = []
 
         for doc_table, md_rows in zip(doc_tables, tables_data):
@@ -491,8 +501,8 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
                     break
                 md_row = md_rows[r]
                 for c, doc_cell in enumerate(doc_row.get("tableCells", [])):
-                    cell_text = md_row[c] if c < len(md_row) else ""
-                    if not cell_text:
+                    spans = md_row[c] if c < len(md_row) else []
+                    if not spans:
                         continue
                     cell_content = doc_cell.get("content", [])
                     if not cell_content:
@@ -501,16 +511,15 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
                     insert_idx = para.get("startIndex")
                     if insert_idx is None:
                         continue
-
-                    # Parse inline formatting to get plain text
-                    spans = parse_inline(cell_text)
                     plain = "".join(s.text for s in spans)
+                    if not plain:
+                        continue
 
                     loc = {"index": insert_idx, "tabId": tab_id}
                     insert_requests.append(
                         {"insertText": {"text": plain, "location": loc}}
                     )
-                    cells_to_format.append((insert_idx, cell_text, spans))
+                    cells_to_format.append((insert_idx, spans))
 
         if insert_requests:
             # Reverse so last cell is populated first (stable indices)
@@ -518,7 +527,7 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
             service.documents().batchUpdate(
                 documentId=document_id,
                 body={"requests": insert_requests},
-            ).execute()
+            ).execute(num_retries=num_retries)
 
         # Pass 2: Apply bold/italic formatting to cell content
         # Re-read the document to get updated indices
@@ -526,8 +535,8 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
             break
 
         has_formatting = any(
-            any(s.bold or s.italic for s in spans)
-            for _, _, spans in cells_to_format
+            any(s.bold or s.italic or s.strikethrough or s.url for s in spans)
+            for _, spans in cells_to_format
         )
         if not has_formatting:
             break
@@ -535,7 +544,7 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
         doc = (
             service.documents()
             .get(documentId=document_id, includeTabsContent=True)
-            .execute()
+            .execute(num_retries=num_retries)
         )
 
         # Re-find tables and build formatting requests
@@ -549,7 +558,6 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
             doc_tables2 = [elem for elem in content2 if "table" in elem]
 
             fmt_requests = []
-            table_idx = 0
             for doc_table, md_rows in zip(doc_tables2, tables_data):
                 table = doc_table["table"]
                 for r, doc_row in enumerate(table.get("tableRows", [])):
@@ -557,8 +565,8 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
                         break
                     md_row = md_rows[r]
                     for c, doc_cell in enumerate(doc_row.get("tableCells", [])):
-                        cell_text = md_row[c] if c < len(md_row) else ""
-                        if not cell_text:
+                        spans = md_row[c] if c < len(md_row) else []
+                        if not spans:
                             continue
                         cell_content = doc_cell.get("content", [])
                         if not cell_content:
@@ -568,7 +576,6 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
                         if cell_start is None:
                             continue
 
-                        spans = parse_inline(cell_text)
                         offset = cell_start
                         for span in spans:
                             span_end = offset + _utf16_len(span.text)
@@ -596,13 +603,37 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
                                         "fields": "italic",
                                     }
                                 })
+                            if span.strikethrough:
+                                fmt_requests.append({
+                                    "updateTextStyle": {
+                                        "range": {
+                                            "startIndex": offset,
+                                            "endIndex": span_end,
+                                            "tabId": tab_id,
+                                        },
+                                        "textStyle": {"strikethrough": True},
+                                        "fields": "strikethrough",
+                                    }
+                                })
+                            if span.url:
+                                fmt_requests.append({
+                                    "updateTextStyle": {
+                                        "range": {
+                                            "startIndex": offset,
+                                            "endIndex": span_end,
+                                            "tabId": tab_id,
+                                        },
+                                        "textStyle": {"link": {"url": span.url}},
+                                        "fields": "link",
+                                    }
+                                })
                             offset = span_end
 
             if fmt_requests:
                 service.documents().batchUpdate(
                     documentId=document_id,
                     body={"requests": fmt_requests},
-                ).execute()
+                ).execute(num_retries=num_retries)
 
             break
 
@@ -611,7 +642,7 @@ def _populate_tables(service, document_id: str, tab_id: str, tables_data: list) 
 
 def update_tab_content(
     document_id: str, tab_name: str, markdown: str, *, service=None
-) -> None:
+) -> list:
     """Replace tab content with new markdown.
 
     Args:
@@ -673,7 +704,7 @@ def update_tab_content(
             break
 
     # Insert new content
-    content_requests = markdown_to_requests(markdown, tab_id)
+    content_requests, tables_data, warnings = markdown_to_requests(markdown, tab_id)
     if content_requests:
         service.documents().batchUpdate(
             documentId=document_id,
@@ -681,11 +712,10 @@ def update_tab_content(
         ).execute()
 
     # Populate table cells (second pass: read back real indices)
-    from .md2docs import extract_tables
-
-    tables_data = extract_tables(markdown)
     if tables_data:
         _populate_tables(service, document_id, tab_id, tables_data)
+
+    return warnings
 
 
 @tab.command("import")
@@ -722,7 +752,9 @@ def tab_import(url: str, file: Path, output: Optional[Path]):
 
         # Create the tab
         click.echo(f"Creating tab '{tab_name}' in {document_id}...")
-        tab_id = create_tab_with_content(document_id, tab_name, content)
+        tab_id, warnings = create_tab_with_content(document_id, tab_name, content)
+        for w in warnings:
+            click.echo(f"  Warning: {w.feature}: {w.detail}")
         click.echo(f"Created tab: {tab_id}")
 
         # Get document title for tracking file
@@ -968,6 +1000,12 @@ def tab_push(file: Path, yes: bool):
         for line in diff:
             click.echo(line.rstrip("\n"))
         click.echo("-" * 40)
+
+        # Check for unsupported features
+        from .md2docs import parse_markdown, check_unsupported
+        push_warnings = check_unsupported(parse_markdown(local_section.content))
+        for w in push_warnings:
+            click.echo(f"  Warning: {w.feature}: {w.detail}")
 
         # Confirm
         if not yes:
