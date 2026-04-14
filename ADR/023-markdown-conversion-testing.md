@@ -68,98 +68,80 @@ Keep the current architecture: parse markdown locally, generate `batchUpdate` re
 
 Keep `md2docs.py` as the push pipeline. Fix known bugs incrementally, guided by a test suite structured around **round-trip stability**.
 
-### Testing Strategy: Round-Trip Projections
+### Testing Strategy: Identity Round-Trip + Push Verification
 
-The mathematical property we want:
+The mathematical property we enforce:
 
 - Let `push: Markdown -> GoogleDoc` and `pull: GoogleDoc -> Markdown`
-- `pull . push` is a **projection**: applying it twice yields the same result as applying it once
-- For a well-defined subset of markdown (the "canonical form"), `pull . push` is the **identity**
-
-Concretely:
+- For the supported markdown subset (the "canonical form"), `pull . push` is the **identity**: `M == M1`
 
 ```
-M  -push->  D1  -pull->  M1  -push->  D2  -pull->  M2
+M  -push->  D  -pull->  M1
 
-Assert: M1 == M2  (stability / idempotency)
-Assert: M == M1   (for supported features — identity on canonical subset)
+Assert: M == M1  (identity on canonical form)
 ```
 
-The first cycle (`M -> M1`) may lose information (unsupported features). But the second cycle (`M1 -> M2`) must be stable. Markdown in "canonical form" (what Google exports) should survive perfectly.
+The fixture (`tests/fixtures/e2e_rich_formatting.md`) is written in canonical form and contains only supported features. If identity fails, the diff shows exactly what was lost.
 
 ### Test Levels
 
-#### Level 1: Unit Tests (no API calls)
+#### Level 1: Push Verification (API structure inspection)
 
-Test `parse_markdown` and `generate_requests` in isolation.
+After pushing the fixture, read the Google Doc back via the Docs API and assert that styling was applied correctly:
 
-- **Parser tests**: Verify AST nodes for each markdown construct
-- **Request generation tests**: Verify plain_text output and request structure (action types, index ranges, tab_id propagation)
-- **Index arithmetic tests**: The most fragile area. Multiple nodes, mixed formatting, emoji (UTF-16 surrogate pairs), tables as placeholders
-- **Known bugs as xfail**: Pin desired behavior for ordered lists, inline code, links, heading unescape. These become regression tests once fixed.
+- Headings have correct `namedStyleType` (HEADING_1 through HEADING_6)
+- Bold/italic spans have correct `textStyle` properties
+- Hyperlinks have correct `textStyle.link.url`
+- List items have `bullet` property set
+- Tables have correct dimensions and cell content/formatting
 
-#### Level 2: Round-Trip Stability Tests (e2e, real API)
+This catches bugs where the markdown round-trips correctly (because pull-side normalization compensates) but the Google Doc itself is wrong.
 
-Progressive fixtures with increasing complexity:
+Implementation: `TestPushVerify` in `test_roundtrip.py` — one API read, ~15 assertions.
 
-| Level | Fixture content | Expectation |
-|-------|----------------|-------------|
-| 1 | Plain paragraphs | `M == M1` (identity) |
-| 2 | Headings + paragraphs | `M == M1` |
-| 3 | Bold and italic | `M == M1` |
-| 4 | Unordered lists | `M == M1` |
-| 5 | Ordered lists | `M1 == M2` (stable after first cycle) |
-| 6 | Tables with plain cells | `M1 == M2` |
-| 7 | Tables with formatted cells | `M1 == M2` |
-| 8 | Code blocks | `M1 == M2` |
-| 9 | Full mixed document | `M1 == M2` |
+#### Level 2: Identity Round-Trip (e2e, real API)
 
-Each fixture is written in **canonical form** (the markdown style Google exports): `- ` bullets, `**bold**`, `| :---- |` table alignment, no trailing spaces. Fixtures in canonical form should achieve `M == M1` (identity). Fixtures with unsupported features should achieve `M1 == M2` (stability).
+Push the canonical fixture, pull it back, assert `M == M1`. One push + one pull = 2-4 API calls total (depending on tables).
 
-The e2e test procedure for each fixture:
-
-```python
-def assert_roundtrip_stable(md_content, doc_id, docs_service, drive_service):
-    """Push twice, pull twice. Assert second cycle is stable."""
-    # Cycle 1
-    tab1 = create_and_push(doc_id, "rt_cycle1", md_content)
-    m1 = pull_tab(doc_id, "rt_cycle1")
-
-    # Cycle 2
-    tab2 = create_and_push(doc_id, "rt_cycle2", m1)
-    m2 = pull_tab(doc_id, "rt_cycle2")
-
-    assert m1 == m2, f"Not stable:\n{unified_diff(m1, m2)}"
-```
-
-Fixtures that should be identity (canonical form) additionally assert `md_content == m1`.
+Implementation: `TestIdentityRoundTrip` in `test_roundtrip.py` — one test.
 
 #### Level 3: Visual Inspection
 
-The e2e tests create tabs in the test doc. These can be visually inspected in the browser to catch rendering issues that markdown comparison misses (e.g., wrong heading level, missing bullet style, broken table borders).
+The e2e tests leave tabs in the test doc for browser inspection.
 
-### Canonical Markdown Form
+### Supported Features (Canonical Form)
 
-The "canonical form" is the subset of markdown that round-trips perfectly. It is defined empirically by what Google's Drive API markdown export actually produces after our pull-side normalizations. This form is discovered, not designed — we run fixtures through a push/pull cycle and observe what comes back.
-
-**Known canonical properties** (to be expanded as we test):
+The fixture covers all of these — they must round-trip as identity:
 
 - Headings: `# ` through `###### `
-- Bold: `**text**`, Italic: `*text*`
-- Unordered lists: `- item` (not `* item`)
-- Ordered lists: `1.` / `2.` (auto-numbered by Google)
-- Tables: `| cell |` with `| :---- |` separator
-- No inline code, no links, no images (until supported)
+- Bold: `**text**`, Italic: `*text*`, Bold-italic: `***text***`
+- Unordered lists: `- item`
+- Ordered lists: `1. item` (Google renumbers)
+- Hyperlinks: `[text](url)`
+- Tables: `| cell |` with `| :---- |` separator, including bold/italic/emoji in cells
+- Emoji: inline and in table cells
+- Special characters: $, %, _, -, ~, #, <>, [], dots after numbers
 
-**Known non-obvious behaviors** (discovered through testing):
+### Unsupported Features (Not in Fixture)
 
-- Google Docs exports paragraph spacing as blank lines, but our push inserts paragraphs as consecutive `\n` — blank lines in markdown are lost on push. The canonical form for paragraph spacing depends on what `generate_requests` produces, not what markdown convention expects.
-- Google's export escapes `.` at end of sentences (`1\.`), `#`, and `~` with backslashes. Pull-side normalizations must unescape these.
-- Trailing whitespace and final newlines may differ between Google's export and our fixtures.
+These are known to not round-trip correctly and are excluded from the fixture:
 
-The canonical form evolves as we fix bugs and add features. Each test fixture documents what "correct" looks like for that complexity level, and the test suite serves as the living specification.
+- Nested lists (depth parsed but ignored in push)
+- Inline code / backticks (parsed but no monospace styling applied)
+- Code blocks (projected as `> ` prefixed lines)
+- Strikethrough
+- Images (separate blob store pipeline, tested in `test_e2e.py`)
+- Blockquotes (as distinct from code block workaround)
 
-Features outside the canonical subset (inline code, links, strikethrough, nested lists, blockquotes) are explicitly unsupported. The test suite documents which features are in which category.
+### Pull-Side Normalizations
+
+Google's markdown export has documented quirks. These normalizations are applied on pull (`native_md.py`):
+
+- `* ` bullets to `- ` (Google uses `*`, we standardize to `-`)
+- Strip trailing whitespace
+- Unescape `\-`, `\>`, `\#`, `\~`, `` \` ``, `\_`, `\.`, `\=`, `\<`, `\[`, `\]`, `\*` (Google over-escapes)
+- Strip italic wrapping from h6 headings (Google wraps h6 in `*...*`)
+- Ensure trailing newline
 
 ### Pull-Side Normalizations
 

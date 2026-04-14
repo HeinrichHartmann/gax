@@ -243,82 +243,8 @@ class TestDocE2E:
         final_content = tracking_file.read_text()
         assert "Updated E2E Tab" in final_content
 
-    def test_table_push_pull_cycle(self, check_auth, test_doc, temp_dir):
-        """Test: import markdown with table -> push -> pull -> verify cell content (#14)."""
-        fixture_content = (FIXTURES_DIR / "e2e_table_test.md").read_text()
-        test_file = temp_dir / "table_test.md"
-        test_file.write_text(fixture_content)
-
-        # Import as new tab
-        tracking_file = temp_dir / "table_test.tab.gax"
-        result = _run_gax(
-            "doc", "tab", "import",
-            test_doc["url"],
-            str(test_file),
-            "-o", str(tracking_file),
-        )
-        assert result.returncode == 0, f"Import failed: {result.stderr}"
-
-        # Push
-        result = _run_gax("doc", "tab", "push", str(tracking_file), "-y")
-        assert result.returncode == 0, f"Push failed: {result.stderr}"
-
-        # Pull back
-        result = _run_gax("doc", "tab", "pull", str(tracking_file))
-        assert result.returncode == 0, f"Pull failed: {result.stderr}"
-
-        # Verify table cell content survived the round-trip
-        final_content = tracking_file.read_text()
-        assert "Hello World" in final_content
-        assert "Batch Training" in final_content
-        assert "Some description" in final_content
-        assert "Another description" in final_content
-
-    def test_rich_formatting_round_trip(self, check_auth, test_doc, temp_dir):
-        """Golden test: push markdown -> pull -> output must equal input.
-
-        The fixture is crafted to be a fixed point of the push/pull cycle.
-        If this fails, the diff shows exactly what formatting was lost.
-        """
-        fixture_path = FIXTURES_DIR / "e2e_rich_formatting.md"
-        before = fixture_path.read_text()
-        test_file = temp_dir / "rich_fmt.md"
-        test_file.write_text(before)
-
-        # Import as new tab
-        tracking_file = temp_dir / "rich_fmt.tab.gax"
-        result = _run_gax(
-            "doc", "tab", "import",
-            test_doc["url"],
-            str(test_file),
-            "-o", str(tracking_file),
-        )
-        assert result.returncode == 0, f"Import failed: {result.stderr}"
-
-        # Push
-        result = _run_gax("doc", "tab", "push", str(tracking_file), "-y")
-        assert result.returncode == 0, f"Push failed: {result.stderr}"
-
-        # Pull back
-        result = _run_gax("doc", "tab", "pull", str(tracking_file))
-        assert result.returncode == 0, f"Pull failed: {result.stderr}"
-
-        # Extract markdown body (skip YAML header)
-        raw = tracking_file.read_text()
-        parts = raw.split("---", 2)
-        after = parts[2].strip() + "\n" if len(parts) >= 3 else raw
-
-        # Golden comparison
-        if before != after:
-            import difflib
-            diff = difflib.unified_diff(
-                before.splitlines(keepends=True),
-                after.splitlines(keepends=True),
-                fromfile="before (fixture)",
-                tofile="after (push/pull round-trip)",
-            )
-            diff_text = "".join(diff)
-            assert False, f"Round-trip diff (push lost formatting):\n{diff_text}"
+    # NOTE: table_push_pull_cycle and rich_formatting_round_trip tests
+    # moved to test_roundtrip.py (TestPushVerify + TestIdentityRoundTrip)
 
 
 # =============================================================================

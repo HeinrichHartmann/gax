@@ -439,12 +439,17 @@ def create_tab_with_content(
     tab_id = create_response["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
 
     # Step 2: Insert markdown content
-    content_requests = markdown_to_requests(markdown, tab_id)
+    content_requests, tables_data = markdown_to_requests(markdown, tab_id)
     if content_requests:
         service.documents().batchUpdate(
             documentId=document_id,
             body={"requests": content_requests},
         ).execute(num_retries=num_retries)
+
+    # Step 3: Populate table cells (read back real indices from API)
+    if tables_data:
+        _populate_tables(service, document_id, tab_id, tables_data,
+                         num_retries=num_retries)
 
     return tab_id
 
@@ -458,7 +463,7 @@ def _populate_tables(
     After insertTable creates empty tables, this reads the document structure
     to get real cell indices, inserts cell content, and applies inline formatting.
     """
-    from .md2docs import parse_inline, _utf16_len
+    from .md2docs import _utf16_len
 
     doc = (
         service.documents()
@@ -486,7 +491,7 @@ def _populate_tables(
 
         # Pass 1: Insert plain text into cells (strip markdown syntax)
         insert_requests = []
-        # Track cells that need formatting: (insert_idx, cell_text)
+        # Track cells that need formatting: (insert_idx, spans)
         cells_to_format = []
 
         for doc_table, md_rows in zip(doc_tables, tables_data):
@@ -496,8 +501,8 @@ def _populate_tables(
                     break
                 md_row = md_rows[r]
                 for c, doc_cell in enumerate(doc_row.get("tableCells", [])):
-                    cell_text = md_row[c] if c < len(md_row) else ""
-                    if not cell_text:
+                    spans = md_row[c] if c < len(md_row) else []
+                    if not spans:
                         continue
                     cell_content = doc_cell.get("content", [])
                     if not cell_content:
@@ -506,16 +511,15 @@ def _populate_tables(
                     insert_idx = para.get("startIndex")
                     if insert_idx is None:
                         continue
-
-                    # Parse inline formatting to get plain text
-                    spans = parse_inline(cell_text)
                     plain = "".join(s.text for s in spans)
+                    if not plain:
+                        continue
 
                     loc = {"index": insert_idx, "tabId": tab_id}
                     insert_requests.append(
                         {"insertText": {"text": plain, "location": loc}}
                     )
-                    cells_to_format.append((insert_idx, cell_text, spans))
+                    cells_to_format.append((insert_idx, spans))
 
         if insert_requests:
             # Reverse so last cell is populated first (stable indices)
@@ -531,8 +535,8 @@ def _populate_tables(
             break
 
         has_formatting = any(
-            any(s.bold or s.italic for s in spans)
-            for _, _, spans in cells_to_format
+            any(s.bold or s.italic or s.url for s in spans)
+            for _, spans in cells_to_format
         )
         if not has_formatting:
             break
@@ -561,8 +565,8 @@ def _populate_tables(
                         break
                     md_row = md_rows[r]
                     for c, doc_cell in enumerate(doc_row.get("tableCells", [])):
-                        cell_text = md_row[c] if c < len(md_row) else ""
-                        if not cell_text:
+                        spans = md_row[c] if c < len(md_row) else []
+                        if not spans:
                             continue
                         cell_content = doc_cell.get("content", [])
                         if not cell_content:
@@ -572,7 +576,6 @@ def _populate_tables(
                         if cell_start is None:
                             continue
 
-                        spans = parse_inline(cell_text)
                         offset = cell_start
                         for span in spans:
                             span_end = offset + _utf16_len(span.text)
@@ -598,6 +601,18 @@ def _populate_tables(
                                         },
                                         "textStyle": {"italic": True},
                                         "fields": "italic",
+                                    }
+                                })
+                            if span.url:
+                                fmt_requests.append({
+                                    "updateTextStyle": {
+                                        "range": {
+                                            "startIndex": offset,
+                                            "endIndex": span_end,
+                                            "tabId": tab_id,
+                                        },
+                                        "textStyle": {"link": {"url": span.url}},
+                                        "fields": "link",
                                     }
                                 })
                             offset = span_end
@@ -677,7 +692,7 @@ def update_tab_content(
             break
 
     # Insert new content
-    content_requests = markdown_to_requests(markdown, tab_id)
+    content_requests, tables_data = markdown_to_requests(markdown, tab_id)
     if content_requests:
         service.documents().batchUpdate(
             documentId=document_id,
@@ -685,9 +700,6 @@ def update_tab_content(
         ).execute()
 
     # Populate table cells (second pass: read back real indices)
-    from .md2docs import extract_tables
-
-    tables_data = extract_tables(markdown)
     if tables_data:
         _populate_tables(service, document_id, tab_id, tables_data)
 

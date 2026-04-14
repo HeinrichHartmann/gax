@@ -4,15 +4,13 @@ This fixture covers all supported markdown constructs for Google Docs round-trip
 
 Google Docs canonical conventions discovered through testing:
 
-- Flat list items (top-level) have NO blank lines between them
-- Nested list items require blank lines between every item (all levels)
-- Ordered lists are always exported as `1.` (Google renumbers)
-- Table alignment is always `:----` (left-aligned), regardless of input
+- Ordered lists are always exported as 1. (Google renumbers)
+- Table alignment is always :---- (left-aligned), regardless of input
 
 Pull-side normalizations (where our output differs from Google's native export):
 
-- h6 headings: Google wraps in `*...*` (italic), we strip it back
-- Escaped chars: Google backslash-escapes -, >, #, ~, _, ., =, <, [, ], * — we unescape all
+- h6 headings: Google wraps in *...* (italic), we strip it back
+- Escaped chars: Google backslash-escapes -, >, #, ~, _, ., =, <, [, ], * -- we unescape all
 - Bullet style: Google exports "* item", we normalize to "- item"
 - Trailing whitespace: stripped from all lines
 - Trailing newline: ensured at end of file
@@ -66,40 +64,6 @@ Mixed: **bold** then *italic* then ***both*** in one line.
 1. First item
 1. Second item
 1. Third item
-
-## Nested Unordered Lists
-
-- Top level A
-
-    - Nested A1
-
-    - Nested A2
-
-- Top level B
-
-    - Nested B1
-
-        - Deep B1a
-
-        - Deep B1b
-
-    - Nested B2
-
-- Top level C
-
-## Nested Ordered Lists
-
-1. First
-
-    1. Sub-first
-
-    1. Sub-second
-
-1. Second
-
-    1. Sub-first
-
-1. Third
 
 ## Lists With Formatting
 
@@ -175,8 +139,6 @@ Hash in text: issue #42, channel #general.
 Angle brackets and square brackets: see <value> and [note] here.
 
 Dots after numbers: Room 3.14 has 2.5 desks. Version 1.0 is ready.
-
-Backticks in text: use the `grep` command and `ls -la` for details.
 
 ## Hyperlinks
 

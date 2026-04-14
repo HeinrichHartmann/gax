@@ -159,37 +159,6 @@ def _table_to_rows(tok: dict) -> list[list[list[Text]]]:
     return rows
 
 
-def _spans_to_md(spans: list[Text]) -> str:
-    """Convert Text spans back to markdown string (for table cells)."""
-    parts = []
-    for s in spans:
-        t = s.text
-        if s.bold and s.italic:
-            t = f'***{t}***'
-        elif s.bold:
-            t = f'**{t}**'
-        elif s.italic:
-            t = f'*{t}*'
-        parts.append(t)
-    return ''.join(parts)
-
-
-def parse_inline(text: str) -> list[Text]:
-    """Parse inline formatting from a markdown string.
-
-    Public API used by table cell population in gdoc.py.
-    """
-    if not text or not text.strip():
-        return [Text(text)]
-    tokens = _parser(text)
-    result = []
-    for tok in tokens:
-        if tok['type'] in ('paragraph', 'block_text'):
-            result.extend(_flatten_inline(tok.get('children', [])))
-        else:
-            result.extend(_flatten_inline([tok]))
-    return result if result else [Text(text)]
-
 
 def parse_markdown(md: str) -> list[Node]:
     """Parse markdown into AST nodes using mistune."""
@@ -466,18 +435,14 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
     return plain_text, requests
 
 
-def extract_tables(md: str) -> list[list[list[list[Text]]]]:
-    """Extract table cell data from markdown.
+def markdown_to_requests(md: str, tab_id: str | None = None) -> tuple[list[dict], list[list[list[list[Text]]]]]:
+    """Convert markdown to Docs API batchUpdate requests.
 
-    Returns list of tables, each a list of rows, each a list of cells,
-    each cell a list of Text spans.
+    Parses the markdown once and returns both the API requests and the
+    pre-parsed table cell data (list of tables, each a list of rows,
+    each a list of cells, each cell a list of Text spans).
     """
     nodes = parse_markdown(md)
-    return [node.rows for node in nodes if isinstance(node, Table)]
-
-
-def markdown_to_requests(md: str, tab_id: str | None = None) -> list[dict]:
-    """Convert markdown to Docs API batchUpdate requests."""
-    nodes = parse_markdown(md)
     _, requests = generate_requests(nodes, tab_id)
-    return requests
+    tables = [node.rows for node in nodes if isinstance(node, Table)]
+    return requests, tables
