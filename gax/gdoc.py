@@ -398,7 +398,7 @@ def tab_list(url: str):
 def create_tab_with_content(
     document_id: str, tab_name: str, markdown: str, *, service=None,
     num_retries: int = 0,
-) -> str:
+) -> tuple[str, list]:
     """Create a new tab and populate it with markdown content.
 
     Args:
@@ -409,7 +409,7 @@ def create_tab_with_content(
         num_retries: Retries with exponential backoff on 429/5xx
 
     Returns:
-        The new tab's ID
+        Tuple of (tab_id, push_warnings)
     """
     from .md2docs import markdown_to_requests
 
@@ -439,7 +439,7 @@ def create_tab_with_content(
     tab_id = create_response["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
 
     # Step 2: Insert markdown content
-    content_requests, tables_data = markdown_to_requests(markdown, tab_id)
+    content_requests, tables_data, warnings = markdown_to_requests(markdown, tab_id)
     if content_requests:
         service.documents().batchUpdate(
             documentId=document_id,
@@ -451,7 +451,7 @@ def create_tab_with_content(
         _populate_tables(service, document_id, tab_id, tables_data,
                          num_retries=num_retries)
 
-    return tab_id
+    return tab_id, warnings
 
 
 def _populate_tables(
@@ -535,7 +535,7 @@ def _populate_tables(
             break
 
         has_formatting = any(
-            any(s.bold or s.italic or s.url for s in spans)
+            any(s.bold or s.italic or s.strikethrough or s.url for s in spans)
             for _, spans in cells_to_format
         )
         if not has_formatting:
@@ -603,6 +603,18 @@ def _populate_tables(
                                         "fields": "italic",
                                     }
                                 })
+                            if span.strikethrough:
+                                fmt_requests.append({
+                                    "updateTextStyle": {
+                                        "range": {
+                                            "startIndex": offset,
+                                            "endIndex": span_end,
+                                            "tabId": tab_id,
+                                        },
+                                        "textStyle": {"strikethrough": True},
+                                        "fields": "strikethrough",
+                                    }
+                                })
                             if span.url:
                                 fmt_requests.append({
                                     "updateTextStyle": {
@@ -630,7 +642,7 @@ def _populate_tables(
 
 def update_tab_content(
     document_id: str, tab_name: str, markdown: str, *, service=None
-) -> None:
+) -> list:
     """Replace tab content with new markdown.
 
     Args:
@@ -692,7 +704,7 @@ def update_tab_content(
             break
 
     # Insert new content
-    content_requests, tables_data = markdown_to_requests(markdown, tab_id)
+    content_requests, tables_data, warnings = markdown_to_requests(markdown, tab_id)
     if content_requests:
         service.documents().batchUpdate(
             documentId=document_id,
@@ -702,6 +714,8 @@ def update_tab_content(
     # Populate table cells (second pass: read back real indices)
     if tables_data:
         _populate_tables(service, document_id, tab_id, tables_data)
+
+    return warnings
 
 
 @tab.command("import")
@@ -738,7 +752,9 @@ def tab_import(url: str, file: Path, output: Optional[Path]):
 
         # Create the tab
         click.echo(f"Creating tab '{tab_name}' in {document_id}...")
-        tab_id = create_tab_with_content(document_id, tab_name, content)
+        tab_id, warnings = create_tab_with_content(document_id, tab_name, content)
+        for w in warnings:
+            click.echo(f"  Warning: {w.feature}: {w.detail}")
         click.echo(f"Created tab: {tab_id}")
 
         # Get document title for tracking file
@@ -984,6 +1000,12 @@ def tab_push(file: Path, yes: bool):
         for line in diff:
             click.echo(line.rstrip("\n"))
         click.echo("-" * 40)
+
+        # Check for unsupported features
+        from .md2docs import parse_markdown, check_unsupported
+        push_warnings = check_unsupported(parse_markdown(local_section.content))
+        for w in push_warnings:
+            click.echo(f"  Warning: {w.feature}: {w.detail}")
 
         # Confirm
         if not yes:

@@ -436,12 +436,19 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
                 if not diff:
                     return True, "no changes"
 
+                # Check for unsupported features before confirming
+                from .md2docs import parse_markdown, check_unsupported
+                push_warnings = check_unsupported(parse_markdown(local_section.content))
+
                 if not yes:
                     click.echo("Changes to push:")
                     click.echo("-" * 40)
                     for line in diff:
                         click.echo(line.rstrip("\n"))
                     click.echo("-" * 40)
+                    if push_warnings:
+                        for w in push_warnings:
+                            click.echo(f"  Warning: {w.feature}: {w.detail}")
                     if not click.confirm("Push these changes?"):
                         return False, "cancelled"
 

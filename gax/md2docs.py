@@ -41,6 +41,7 @@ class Text(Node):
     text: str
     bold: bool = False
     italic: bool = False
+    strikethrough: bool = False
     url: str | None = None
 
 
@@ -76,39 +77,76 @@ class Table(Node):
     rows: list[list[list[Text]]]  # list of rows, each row is list of cells, each cell is list of Text spans
 
 
+@dataclass
+class PushWarning:
+    """Warning about a feature that won't push faithfully."""
+    feature: str   # e.g. "nested lists"
+    reason: str    # "api_limitation" | "workaround" | "not_implemented"
+    detail: str    # human-readable explanation
+
+
+def check_unsupported(nodes: list[Node]) -> list[PushWarning]:
+    """Scan AST for features that won't push faithfully.
+
+    Returns one warning per feature type (deduplicated).
+    """
+    warnings: list[PushWarning] = []
+    seen: set[str] = set()
+
+    for node in nodes:
+        if isinstance(node, ListItem) and node.depth > 0 and "nested lists" not in seen:
+            seen.add("nested lists")
+            warnings.append(PushWarning(
+                feature="nested lists",
+                reason="api_limitation",
+                detail="Nested list items will be flattened to top level (Docs API has no nesting-level support)",
+            ))
+        if isinstance(node, CodeBlock) and "code blocks" not in seen:
+            seen.add("code blocks")
+            warnings.append(PushWarning(
+                feature="code blocks",
+                reason="workaround",
+                detail='Code blocks are converted to "> " prefixed lines (Docs has no code block element)',
+            ))
+
+    return warnings
+
+
 # =============================================================================
 # Mistune AST -> our AST
 # =============================================================================
 
-_parser = mistune.create_markdown(renderer=None, plugins=['table'])
+_parser = mistune.create_markdown(renderer=None, plugins=['table', 'strikethrough'])
 
 
-def _flatten_inline(tokens: list[dict], bold=False, italic=False, url=None) -> list[Text]:
+def _flatten_inline(tokens: list[dict], bold=False, italic=False, strikethrough=False, url=None) -> list[Text]:
     """Recursively flatten mistune inline tokens into Text spans."""
     result = []
     for tok in tokens:
         t = tok['type']
         if t == 'text':
-            result.append(Text(tok['raw'], bold=bold, italic=italic, url=url))
+            result.append(Text(tok['raw'], bold=bold, italic=italic, strikethrough=strikethrough, url=url))
         elif t == 'strong':
-            result.extend(_flatten_inline(tok['children'], bold=True, italic=italic, url=url))
+            result.extend(_flatten_inline(tok['children'], bold=True, italic=italic, strikethrough=strikethrough, url=url))
         elif t == 'emphasis':
-            result.extend(_flatten_inline(tok['children'], bold=bold, italic=True, url=url))
+            result.extend(_flatten_inline(tok['children'], bold=bold, italic=True, strikethrough=strikethrough, url=url))
+        elif t == 'strikethrough':
+            result.extend(_flatten_inline(tok['children'], bold=bold, italic=italic, strikethrough=True, url=url))
         elif t == 'link':
             link_url = tok.get('attrs', {}).get('url', '')
-            result.extend(_flatten_inline(tok['children'], bold=bold, italic=italic, url=link_url))
+            result.extend(_flatten_inline(tok['children'], bold=bold, italic=italic, strikethrough=strikethrough, url=link_url))
         elif t == 'codespan':
-            result.append(Text(tok.get('raw', tok.get('text', '')), bold=bold, italic=italic, url=url))
+            result.append(Text(tok.get('raw', tok.get('text', '')), bold=bold, italic=italic, strikethrough=strikethrough, url=url))
         elif t == 'softbreak':
-            result.append(Text('\n', bold=bold, italic=italic, url=url))
+            result.append(Text('\n', bold=bold, italic=italic, strikethrough=strikethrough, url=url))
         elif t == 'block_text':
-            result.extend(_flatten_inline(tok.get('children', []), bold=bold, italic=italic, url=url))
+            result.extend(_flatten_inline(tok.get('children', []), bold=bold, italic=italic, strikethrough=strikethrough, url=url))
         else:
             # Fallback: extract raw text
             if 'raw' in tok:
-                result.append(Text(tok['raw'], bold=bold, italic=italic, url=url))
+                result.append(Text(tok['raw'], bold=bold, italic=italic, strikethrough=strikethrough, url=url))
             elif 'children' in tok:
-                result.extend(_flatten_inline(tok['children'], bold=bold, italic=italic, url=url))
+                result.extend(_flatten_inline(tok['children'], bold=bold, italic=italic, strikethrough=strikethrough, url=url))
     return result
 
 
@@ -207,7 +245,7 @@ def parse_markdown(md: str) -> list[Node]:
 
 
 def _append_inline(text_parts: list[str], format_actions: list, children: list[Text]):
-    """Append inline-formatted text spans, tracking positions for bold/italic/link."""
+    """Append inline-formatted text spans, tracking positions for bold/italic/strikethrough/link."""
     for child in children:
         child_start = sum(_utf16_len(p) for p in text_parts) + 1
         text_parts.append(child.text)
@@ -216,6 +254,8 @@ def _append_inline(text_parts: list[str], format_actions: list, children: list[T
             format_actions.append((child_start, child_end, 'bold', None))
         if child.italic:
             format_actions.append((child_start, child_end, 'italic', None))
+        if child.strikethrough:
+            format_actions.append((child_start, child_end, 'strikethrough', None))
         if child.url:
             format_actions.append((child_start, child_end, 'link', child.url))
 
@@ -276,6 +316,8 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
                     format_actions.append((offset, child_end, 'bold', None))
                 if child.italic:
                     format_actions.append((offset, child_end, 'italic', None))
+                if child.strikethrough:
+                    format_actions.append((offset, child_end, 'strikethrough', None))
                 if child.url:
                     format_actions.append((offset, child_end, 'link', child.url))
                 offset = child_end
@@ -377,6 +419,14 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
                         'fields': 'italic'
                     }
                 })
+            elif action == 'strikethrough':
+                result.append({
+                    'updateTextStyle': {
+                        'range': range_spec,
+                        'textStyle': {'strikethrough': True},
+                        'fields': 'strikethrough'
+                    }
+                })
             elif action == 'link':
                 result.append({
                     'updateTextStyle': {
@@ -435,14 +485,14 @@ def generate_requests(nodes: list[Node], tab_id: str | None = None) -> tuple[str
     return plain_text, requests
 
 
-def markdown_to_requests(md: str, tab_id: str | None = None) -> tuple[list[dict], list[list[list[list[Text]]]]]:
+def markdown_to_requests(md: str, tab_id: str | None = None) -> tuple[list[dict], list[list[list[list[Text]]]], list[PushWarning]]:
     """Convert markdown to Docs API batchUpdate requests.
 
-    Parses the markdown once and returns both the API requests and the
-    pre-parsed table cell data (list of tables, each a list of rows,
-    each a list of cells, each cell a list of Text spans).
+    Parses the markdown once and returns the API requests, pre-parsed table
+    cell data, and any warnings about unsupported features.
     """
     nodes = parse_markdown(md)
     _, requests = generate_requests(nodes, tab_id)
     tables = [node.rows for node in nodes if isinstance(node, Table)]
-    return requests, tables
+    warnings = check_unsupported(nodes)
+    return requests, tables, warnings

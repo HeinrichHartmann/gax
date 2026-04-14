@@ -97,7 +97,7 @@ def pushed_fixture(doc_id, services):
     """Push the fixture to a new tab. Returns (tab_name, tab_id, fixture_md)."""
     md = FIXTURE_PATH.read_text()
     tab_name = _unique("rt_verify")
-    tab_id = create_tab_with_content(
+    tab_id, _warnings = create_tab_with_content(
         doc_id, tab_name, md, service=services["docs"],
         num_retries=NUM_RETRIES,
     )

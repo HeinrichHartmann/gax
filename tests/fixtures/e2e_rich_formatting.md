@@ -15,6 +15,12 @@ Pull-side normalizations (where our output differs from Google's native export):
 - Trailing whitespace: stripped from all lines
 - Trailing newline: ensured at end of file
 
+Known limitations (features that do NOT round-trip):
+
+- Nested lists: flattened to depth 0 on push. The Docs API only has createParagraphBullets (flat, level 0). There is no updateBullet or setNestingLevel request. Tried setting indentStart/indentFirstLine to match nesting-level indent values -- nestingLevel stays at 0. Verified 2026-04-14.
+- Code blocks: projected to "> " prefixed lines on push (Docs has no code block element). Fenced blocks (triple backtick) are lost on pull; the "> " prefix survives round-trip as a workaround.
+- Inline code: backticks are stripped by Google's markdown export. No monospace styling preserved.
+
 ## Headings
 
 ### H3 Heading
@@ -52,6 +58,14 @@ A line with *multiple italic* segments and *more italic* later.
 This has ***bold italic*** text.
 
 Mixed: **bold** then *italic* then ***both*** in one line.
+
+## Strikethrough
+
+This has ~~deleted~~ text.
+
+A line with ~~multiple struck~~ segments and ~~more struck~~ later.
+
+Mixed: **bold** then ~~struck~~ then **~~bold struck~~** in one line.
 
 ## Unordered Lists
 
