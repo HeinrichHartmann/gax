@@ -206,28 +206,7 @@ The reverse transition (tabs collapsed to one) works the same way: a directory i
 
 ### Existing Multipart Files
 
-`gax migrate` will convert existing multipart files to directories:
-
-```bash
-gax migrate budget.sheet.gax
-# → budget.sheet.gax.md.d/
-#   ├── .gax.yaml
-#   ├── revenue.tab.gax.md
-#   └── expenses.tab.gax.md
-```
-
-Or migrate all files in a directory:
-
-```bash
-gax migrate .
-```
-
-`gax` will refuse to operate on old-format multipart files and print:
-
-```
-Error: 'budget.sheet.gax' is a multipart file (old format).
-Run: gax migrate budget.sheet.gax
-```
+Multipart files are not supported. Re-pull from the remote source to get the directory layout.
 
 ## Alternatives Considered
 

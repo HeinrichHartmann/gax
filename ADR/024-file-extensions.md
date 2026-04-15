@@ -77,24 +77,11 @@ gax pull -y *.sheet.gax.md # All sheets
 
 ## Migration
 
-### Renaming Existing Files
+Rename existing files with a one-liner:
 
 ```bash
-# Rename all existing gax files
 for f in **/*.gax; do mv "$f" "${f}.md"; done
 ```
-
-`gax` will provide a `gax migrate` subcommand (or a `--rename` flag on `gax pull`) that renames files in a working directory and rewrites any `source:` references as needed.
-
-### Backward Compatibility
-
-`gax` will continue to read `.gax` files (without the `.md` suffix) and emit a deprecation warning:
-
-```
-Warning: 'project-notes.doc.gax' uses the old extension. Rename to 'project-notes.doc.gax.md'.
-```
-
-Old-extension support is removed in the next major version.
 
 ## Consequences
 
