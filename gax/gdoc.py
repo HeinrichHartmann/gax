@@ -396,7 +396,11 @@ def tab_list(url: str):
 
 
 def create_tab_with_content(
-    document_id: str, tab_name: str, markdown: str, *, service=None,
+    document_id: str,
+    tab_name: str,
+    markdown: str,
+    *,
+    service=None,
     num_retries: int = 0,
 ) -> tuple[str, list]:
     """Create a new tab and populate it with markdown content.
@@ -423,13 +427,7 @@ def create_tab_with_content(
         .batchUpdate(
             documentId=document_id,
             body={
-                "requests": [
-                    {
-                        "addDocumentTab": {
-                            "tabProperties": {"title": tab_name}
-                        }
-                    }
-                ]
+                "requests": [{"addDocumentTab": {"tabProperties": {"title": tab_name}}}]
             },
         )
         .execute(num_retries=num_retries)
@@ -448,14 +446,18 @@ def create_tab_with_content(
 
     # Step 3: Populate table cells (read back real indices from API)
     if tables_data:
-        _populate_tables(service, document_id, tab_id, tables_data,
-                         num_retries=num_retries)
+        _populate_tables(
+            service, document_id, tab_id, tables_data, num_retries=num_retries
+        )
 
     return tab_id, warnings
 
 
 def _populate_tables(
-    service, document_id: str, tab_id: str, tables_data: list,
+    service,
+    document_id: str,
+    tab_id: str,
+    tables_data: list,
     num_retries: int = 0,
 ) -> None:
     """Populate empty table cells by reading back actual document indices.
@@ -580,53 +582,61 @@ def _populate_tables(
                         for span in spans:
                             span_end = offset + _utf16_len(span.text)
                             if span.bold:
-                                fmt_requests.append({
-                                    "updateTextStyle": {
-                                        "range": {
-                                            "startIndex": offset,
-                                            "endIndex": span_end,
-                                            "tabId": tab_id,
-                                        },
-                                        "textStyle": {"bold": True},
-                                        "fields": "bold",
+                                fmt_requests.append(
+                                    {
+                                        "updateTextStyle": {
+                                            "range": {
+                                                "startIndex": offset,
+                                                "endIndex": span_end,
+                                                "tabId": tab_id,
+                                            },
+                                            "textStyle": {"bold": True},
+                                            "fields": "bold",
+                                        }
                                     }
-                                })
+                                )
                             if span.italic:
-                                fmt_requests.append({
-                                    "updateTextStyle": {
-                                        "range": {
-                                            "startIndex": offset,
-                                            "endIndex": span_end,
-                                            "tabId": tab_id,
-                                        },
-                                        "textStyle": {"italic": True},
-                                        "fields": "italic",
+                                fmt_requests.append(
+                                    {
+                                        "updateTextStyle": {
+                                            "range": {
+                                                "startIndex": offset,
+                                                "endIndex": span_end,
+                                                "tabId": tab_id,
+                                            },
+                                            "textStyle": {"italic": True},
+                                            "fields": "italic",
+                                        }
                                     }
-                                })
+                                )
                             if span.strikethrough:
-                                fmt_requests.append({
-                                    "updateTextStyle": {
-                                        "range": {
-                                            "startIndex": offset,
-                                            "endIndex": span_end,
-                                            "tabId": tab_id,
-                                        },
-                                        "textStyle": {"strikethrough": True},
-                                        "fields": "strikethrough",
+                                fmt_requests.append(
+                                    {
+                                        "updateTextStyle": {
+                                            "range": {
+                                                "startIndex": offset,
+                                                "endIndex": span_end,
+                                                "tabId": tab_id,
+                                            },
+                                            "textStyle": {"strikethrough": True},
+                                            "fields": "strikethrough",
+                                        }
                                     }
-                                })
+                                )
                             if span.url:
-                                fmt_requests.append({
-                                    "updateTextStyle": {
-                                        "range": {
-                                            "startIndex": offset,
-                                            "endIndex": span_end,
-                                            "tabId": tab_id,
-                                        },
-                                        "textStyle": {"link": {"url": span.url}},
-                                        "fields": "link",
+                                fmt_requests.append(
+                                    {
+                                        "updateTextStyle": {
+                                            "range": {
+                                                "startIndex": offset,
+                                                "endIndex": span_end,
+                                                "tabId": tab_id,
+                                            },
+                                            "textStyle": {"link": {"url": span.url}},
+                                            "fields": "link",
+                                        }
                                     }
-                                })
+                                )
                             offset = span_end
 
             if fmt_requests:
@@ -725,7 +735,7 @@ def update_tab_content(
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output tracking file (default: <filename>.tab.gax)",
+    help="Output tracking file (default: <filename>.tab.gax.md)",
 )
 def tab_import(url: str, file: Path, output: Optional[Path]):
     """Import a markdown file as a new tab in a document."""
@@ -743,10 +753,12 @@ def tab_import(url: str, file: Path, output: Optional[Path]):
         if output:
             tracking_path = output
         else:
-            tracking_path = file.with_suffix(".tab.gax")
+            tracking_path = file.with_suffix(".tab.gax.md")
 
         if tracking_path.exists():
-            click.echo(f"Error: Tracking file already exists: {tracking_path}", err=True)
+            click.echo(
+                f"Error: Tracking file already exists: {tracking_path}", err=True
+            )
             click.echo("Use 'gax doc tab push' to update an existing tab.")
             sys.exit(1)
 
@@ -840,10 +852,10 @@ def pull_single_tab(
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (default: <tab>.tab.gax)",
+    help="Output file (default: <tab>.tab.gax.md)",
 )
 def tab_clone(url: str, tab_name: str, output: Optional[Path]):
-    """Clone a single tab to a .tab.gax file."""
+    """Clone a single tab to a .tab.gax.md file."""
     try:
         document_id = extract_doc_id(url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
@@ -858,7 +870,7 @@ def tab_clone(url: str, tab_name: str, output: Optional[Path]):
         else:
             safe_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
             safe_name = re.sub(r"\s+", "_", safe_name)
-            file_path = Path(f"{safe_name}.tab.gax")
+            file_path = Path(f"{safe_name}.tab.gax.md")
 
         if file_path.exists():
             click.echo(f"Error: File already exists: {file_path}", err=True)
@@ -1003,6 +1015,7 @@ def tab_push(file: Path, yes: bool):
 
         # Check for unsupported features
         from .md2docs import parse_markdown, check_unsupported
+
         push_warnings = check_unsupported(parse_markdown(local_section.content))
         for w in push_warnings:
             click.echo(f"  Warning: {w.feature}: {w.detail}")
@@ -1067,7 +1080,7 @@ def _add_comments_to_sections(
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (default: <title>.doc.gax)",
+    help="Output file (default: <title>.doc.gax.md)",
 )
 @click.option(
     "--with-comments",
@@ -1075,7 +1088,7 @@ def _add_comments_to_sections(
     help="Include document comments as separate sections",
 )
 def clone(url: str, output: Optional[Path], with_comments: bool):
-    """Clone a Google Doc to a local .doc.gax file."""
+    """Clone a Google Doc to a local .doc.gax.md file."""
     try:
         document_id = extract_doc_id(url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
@@ -1095,7 +1108,7 @@ def clone(url: str, output: Optional[Path], with_comments: bool):
             # Generate filename from title
             safe_name = re.sub(r'[<>:"/\\|?*]', "-", sections[0].title)
             safe_name = re.sub(r"\s+", "_", safe_name)
-            file_path = Path(f"{safe_name}.doc.gax")
+            file_path = Path(f"{safe_name}.doc.gax.md")
 
         if file_path.exists():
             click.echo(f"Error: File already exists: {file_path}", err=True)
@@ -1159,12 +1172,12 @@ def pull(file: Path, with_comments: bool):
     "-o",
     "--output",
     type=click.Path(path_type=Path),
-    help="Output folder (default: <title>.doc.gax.d)",
+    help="Output folder (default: <title>.doc.gax.md.d)",
 )
 def checkout(url: str, output: Optional[Path]):
     """Checkout all tabs to individual files in a folder.
 
-    Creates a folder with individual .tab.gax files for each tab.
+    Creates a folder with individual .tab.gax.md files for each tab.
     Incremental: skips existing files.
     """
     try:
@@ -1188,7 +1201,7 @@ def checkout(url: str, output: Optional[Path]):
         else:
             safe_name = re.sub(r'[<>:"/\\|?*]', "-", title)
             safe_name = re.sub(r"\s+", "_", safe_name)
-            folder = Path(f"{safe_name}.doc.gax.d")
+            folder = Path(f"{safe_name}.doc.gax.md.d")
 
         # Create folder
         folder.mkdir(parents=True, exist_ok=True)
@@ -1204,7 +1217,11 @@ def checkout(url: str, output: Optional[Path]):
         metadata_path = folder / ".gax.yaml"
         with open(metadata_path, "w") as f:
             yaml.dump(
-                metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+                metadata,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
             )
 
         click.echo(f"Checking out {len(sections)} tabs to {folder}/")
@@ -1225,7 +1242,7 @@ def checkout(url: str, output: Optional[Path]):
                 # Generate filename
                 safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
                 safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-                file_path = folder / f"{safe_tab_name}.tab.gax"
+                file_path = folder / f"{safe_tab_name}.tab.gax.md"
 
                 # Skip if exists
                 if file_path.exists():

@@ -71,10 +71,14 @@ def clear_doc_tabs(doc_id: str) -> list[str]:
     creds = get_authenticated_credentials()
     service = build("docs", "v1", credentials=creds)
 
-    doc = service.documents().get(
-        documentId=doc_id,
-        includeTabsContent=True,  # Required to get tabs list
-    ).execute()
+    doc = (
+        service.documents()
+        .get(
+            documentId=doc_id,
+            includeTabsContent=True,  # Required to get tabs list
+        )
+        .execute()
+    )
 
     tabs = doc.get("tabs", [])
     if len(tabs) <= 1:
@@ -90,7 +94,7 @@ def clear_doc_tabs(doc_id: str) -> list[str]:
             try:
                 service.documents().batchUpdate(
                     documentId=doc_id,
-                    body={"requests": [{"deleteTab": {"tabId": tab_id}}]}
+                    body={"requests": [{"deleteTab": {"tabId": tab_id}}]},
                 ).execute()
                 deleted.append(title)
             except Exception as e:
@@ -123,7 +127,7 @@ def clear_sheet_tabs(sheet_id: str) -> list[str]:
             try:
                 service.spreadsheets().batchUpdate(
                     spreadsheetId=sheet_id,
-                    body={"requests": [{"deleteSheet": {"sheetId": sheet_tab_id}}]}
+                    body={"requests": [{"deleteSheet": {"sheetId": sheet_tab_id}}]},
                 ).execute()
                 deleted.append(title)
             except Exception as e:
@@ -191,12 +195,15 @@ class TestDocE2E:
         test_file.write_text(fixture_content)
 
         # Step 1: Import as new tab
-        tracking_file = temp_dir / "doc1.tab.gax"
+        tracking_file = temp_dir / "doc1.tab.gax.md"
         result = _run_gax(
-            "doc", "tab", "import",
+            "doc",
+            "tab",
+            "import",
             test_doc["url"],
             str(test_file),
-            "-o", str(tracking_file),
+            "-o",
+            str(tracking_file),
         )
         assert result.returncode == 0, f"Import failed: {result.stderr}"
         assert "Created tab" in result.stdout
@@ -218,12 +225,15 @@ class TestDocE2E:
         test_file.write_text(fixture_content)
 
         # Import
-        tracking_file = temp_dir / "doc2.tab.gax"
+        tracking_file = temp_dir / "doc2.tab.gax.md"
         result = _run_gax(
-            "doc", "tab", "import",
+            "doc",
+            "tab",
+            "import",
             test_doc["url"],
             str(test_file),
-            "-o", str(tracking_file),
+            "-o",
+            str(tracking_file),
         )
         assert result.returncode == 0, f"Import failed: {result.stderr}"
 
@@ -267,7 +277,7 @@ class TestSheetE2E:
         # Add sheet
         service.spreadsheets().batchUpdate(
             spreadsheetId=sheet_id,
-            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]}
+            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
         ).execute()
 
         # Add some data
@@ -281,16 +291,19 @@ class TestSheetE2E:
                     ["1", "Test", "active"],
                     ["2", "Data", "pending"],
                 ]
-            }
+            },
         ).execute()
 
         # Clone the tab
-        output_file = temp_dir / f"{tab_name}.sheet.gax"
+        output_file = temp_dir / f"{tab_name}.sheet.gax.md"
         result = _run_gax(
-            "sheet", "tab", "clone",
+            "sheet",
+            "tab",
+            "clone",
             test_sheet["url"],
             tab_name,
-            "-o", str(output_file),
+            "-o",
+            str(output_file),
         )
         assert result.returncode == 0, f"Clone failed: {result.stderr}"
         assert output_file.exists()
@@ -315,7 +328,7 @@ class TestSheetE2E:
         # Add sheet with initial data
         service.spreadsheets().batchUpdate(
             spreadsheetId=sheet_id,
-            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]}
+            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
         ).execute()
 
         service.spreadsheets().values().update(
@@ -327,16 +340,19 @@ class TestSheetE2E:
                     ["key", "value"],
                     ["original", "data"],
                 ]
-            }
+            },
         ).execute()
 
         # Clone
-        output_file = temp_dir / f"{tab_name}.sheet.gax"
+        output_file = temp_dir / f"{tab_name}.sheet.gax.md"
         result = _run_gax(
-            "sheet", "tab", "clone",
+            "sheet",
+            "tab",
+            "clone",
             test_sheet["url"],
             tab_name,
-            "-o", str(output_file),
+            "-o",
+            str(output_file),
         )
         assert result.returncode == 0, f"Clone failed: {result.stderr}"
 
@@ -350,10 +366,15 @@ class TestSheetE2E:
         assert result.returncode == 0, f"Push failed: {result.stderr}"
 
         # Verify via API
-        values = service.spreadsheets().values().get(
-            spreadsheetId=sheet_id,
-            range=f"{tab_name}!A1:B2",
-        ).execute()
+        values = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=sheet_id,
+                range=f"{tab_name}!A1:B2",
+            )
+            .execute()
+        )
 
         assert values["values"][1][0] == "modified"
 
@@ -376,10 +397,13 @@ class TestCombinedE2E:
             test_file.write_text(fixture_content)
 
             result = _run_gax(
-                "doc", "tab", "import",
+                "doc",
+                "tab",
+                "import",
                 test_doc["url"],
                 str(test_file),
-                "-o", str(temp_dir / f"multi{i}.tab.gax"),
+                "-o",
+                str(temp_dir / f"multi{i}.tab.gax.md"),
             )
             assert result.returncode == 0, f"Doc import {i} failed: {result.stderr}"
 
@@ -394,13 +418,14 @@ class TestCombinedE2E:
             # Add sheet
             service.spreadsheets().batchUpdate(
                 spreadsheetId=sheet_id,
-                body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]}
+                body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
             ).execute()
 
             # Read fixture and parse markdown table
             fixture_content = (FIXTURES_DIR / fixture).read_text()
             lines = [
-                ln for ln in fixture_content.strip().split("\n")
+                ln
+                for ln in fixture_content.strip().split("\n")
                 if ln.strip() and not ln.startswith("|--")
             ]
             values = []
@@ -413,21 +438,24 @@ class TestCombinedE2E:
                 spreadsheetId=sheet_id,
                 range=f"{tab_name}!A1",
                 valueInputOption="RAW",
-                body={"values": values}
+                body={"values": values},
             ).execute()
 
             # Clone
-            output_file = temp_dir / f"{tab_name}.sheet.gax"
+            output_file = temp_dir / f"{tab_name}.sheet.gax.md"
             result = _run_gax(
-                "sheet", "tab", "clone",
+                "sheet",
+                "tab",
+                "clone",
                 test_sheet["url"],
                 tab_name,
-                "-o", str(output_file),
+                "-o",
+                str(output_file),
             )
             assert result.returncode == 0, f"Sheet clone {i} failed: {result.stderr}"
 
         # Verify we have 4 tracking files
-        tracking_files = list(temp_dir.glob("*.gax"))
+        tracking_files = list(temp_dir.glob("*.gax.md"))
         assert len(tracking_files) == 4
 
 
@@ -471,13 +499,16 @@ class TestImageE2E:
         # Step 3: Verify the image data is correct
         # Extract the base64 from the result and compare
         import re
-        match = re.search(r'base64,([A-Za-z0-9+/=]+)', inlined)
+
+        match = re.search(r"base64,([A-Za-z0-9+/=]+)", inlined)
         assert match, "Should find base64 data"
 
         # Decode both and compare
         original_bytes = base64.b64decode(red_pixel_b64)
         roundtrip_bytes = base64.b64decode(match.group(1))
-        assert original_bytes == roundtrip_bytes, "Image data should match after roundtrip"
+        assert original_bytes == roundtrip_bytes, (
+            "Image data should match after roundtrip"
+        )
 
     def test_image_pull_from_real_doc(self, check_auth, temp_dir):
         """Test pulling from a document that has images (Signals doc)."""
@@ -486,7 +517,7 @@ class TestImageE2E:
         signals_url = f"https://docs.google.com/document/d/{signals_doc_id}/edit"
 
         # Clone the full doc
-        output_file = temp_dir / "signals.doc.gax"
+        output_file = temp_dir / "signals.doc.gax.md"
         result = _run_gax("doc", "clone", signals_url, "-o", str(output_file))
         assert result.returncode == 0, f"Clone failed: {result.stderr}"
 
@@ -501,9 +532,11 @@ class TestImageE2E:
 
             # Verify blob file exists
             import re
+
             urls = re.findall(r'file://([^\s\)>"]+)', content)
             for url in urls:
                 from pathlib import Path
+
                 assert Path(url).exists(), f"Blob file should exist: {url}"
 
 
@@ -516,6 +549,7 @@ def _check_calendar_access() -> bool:
     """Check if we have calendar API access (scope may need re-auth)."""
     try:
         from gax.gcal import list_calendars
+
         list_calendars()
         return True
     except Exception:
@@ -563,7 +597,7 @@ class TestCalendarE2E:
     def test_event_create_push_delete_cycle(self, check_calendar_auth, temp_dir):
         """Test: create new event -> push -> pull -> delete."""
         # Step 1: Create a new event file
-        event_file = temp_dir / "test_event.cal.gax"
+        event_file = temp_dir / "test_event.cal.gax.md"
         result = _run_gax("cal", "event", "new", "-o", str(event_file))
         assert result.returncode == 0, f"New failed: {result.stderr}"
         assert event_file.exists()
@@ -572,6 +606,7 @@ class TestCalendarE2E:
         content = event_file.read_text()
         # Update title to be unique and identifiable
         import time
+
         test_title = f"GAX_E2E_TEST_{int(time.time())}"
         updated_content = content.replace("New Event", test_title)
         event_file.write_text(updated_content)
@@ -586,6 +621,7 @@ class TestCalendarE2E:
         assert "id:" in content
         # ID should not be empty
         import re
+
         id_match = re.search(r"^id:\s*(\S+)", content, re.MULTILINE)
         assert id_match, "Event should have an ID after push"
         event_id = id_match.group(1)
@@ -613,11 +649,12 @@ class TestCalendarE2E:
         This test creates an event, clones it, then cleans up.
         """
         # First create an event to clone
-        event_file = temp_dir / "original.cal.gax"
+        event_file = temp_dir / "original.cal.gax.md"
         result = _run_gax("cal", "event", "new", "-o", str(event_file))
         assert result.returncode == 0
 
         import time
+
         test_title = f"GAX_CLONE_TEST_{int(time.time())}"
         content = event_file.read_text()
         updated_content = content.replace("New Event", test_title)
@@ -630,11 +667,12 @@ class TestCalendarE2E:
         # Get the event ID
         content = event_file.read_text()
         import re
+
         id_match = re.search(r"^id:\s*(\S+)", content, re.MULTILINE)
         event_id = id_match.group(1)
 
         # Clone the event
-        clone_file = temp_dir / "cloned.cal.gax"
+        clone_file = temp_dir / "cloned.cal.gax.md"
         result = _run_gax("cal", "event", "clone", event_id, "-o", str(clone_file))
         assert result.returncode == 0, f"Clone failed: {result.stderr}"
         assert clone_file.exists()

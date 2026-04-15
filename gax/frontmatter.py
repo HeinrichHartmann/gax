@@ -1,4 +1,4 @@
-"""YAML frontmatter parsing for .sheet.gax files"""
+"""YAML frontmatter parsing for .sheet.gax.md files"""
 
 import yaml
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ class SheetConfig:
 
 
 def parse_file(path: Path) -> tuple[SheetConfig, str]:
-    """Parse a .sheet.gax file into config and data sections."""
+    """Parse a .sheet.gax.md file into config and data sections."""
     content = path.read_text()
     return parse_content(content)
 
@@ -50,7 +50,7 @@ def parse_content(content: str) -> tuple[SheetConfig, str]:
 
 
 def write_file(path: Path, config: SheetConfig, data: str) -> None:
-    """Write config and data to a .sheet.gax file."""
+    """Write config and data to a .sheet.gax.md file."""
     content = format_content(config, data)
     path.write_text(content)
 

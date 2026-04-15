@@ -35,9 +35,20 @@ MESSAGE_LIST_VISIBILITY = {
 
 # System labels that cannot be modified
 SYSTEM_LABELS = {
-    "INBOX", "SPAM", "TRASH", "UNREAD", "STARRED", "IMPORTANT",
-    "SENT", "DRAFT", "CHAT", "CATEGORY_PERSONAL", "CATEGORY_SOCIAL",
-    "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_FORUMS",
+    "INBOX",
+    "SPAM",
+    "TRASH",
+    "UNREAD",
+    "STARRED",
+    "IMPORTANT",
+    "SENT",
+    "DRAFT",
+    "CHAT",
+    "CATEGORY_PERSONAL",
+    "CATEGORY_SOCIAL",
+    "CATEGORY_PROMOTIONS",
+    "CATEGORY_UPDATES",
+    "CATEGORY_FORUMS",
 }
 
 
@@ -134,18 +145,29 @@ def label_pull_to_file(path, include_all: bool = False) -> int:
         f.write("# Rename: add 'rename_from: OldName'\n")
         f.write("# Delete: remove from list, use --delete flag\n")
         f.write("---\n")
-        yaml.dump(header, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        yaml.dump(
+            header, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+        )
         f.write("---\n")
-        yaml.dump(label_list, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        yaml.dump(
+            label_list, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+        )
 
     return len(label_list)
 
 
 @label.command("clone")
-@click.option("-o", "--output", default="mail-labels.gax", help="Output file (default: mail-labels.gax)")
-@click.option("--all", "include_all", is_flag=True, help="Include system labels (read-only)")
+@click.option(
+    "-o",
+    "--output",
+    default="mail-labels.gax.md",
+    help="Output file (default: mail-labels.gax.md)",
+)
+@click.option(
+    "--all", "include_all", is_flag=True, help="Include system labels (read-only)"
+)
 def label_clone(output: str, include_all: bool):
-    """Clone Gmail labels to a .gax file.
+    """Clone Gmail labels to a .gax.md file.
 
     Creates a state file with all user labels and their settings.
     Edit this file and use 'plan' to preview changes, 'apply' to execute.
@@ -153,12 +175,14 @@ def label_clone(output: str, include_all: bool):
     \b
     Example:
         gax mail-label clone
-        gax mail-label clone -o mylabels.gax
+        gax mail-label clone -o mylabels.gax.md
         gax mail-label clone --all  # include system labels
     """
     try:
         if Path(output).exists():
-            click.echo(f"Error: {output} already exists. Use 'pull' to update.", err=True)
+            click.echo(
+                f"Error: {output} already exists. Use 'pull' to update.", err=True
+            )
             sys.exit(1)
         count = label_pull_to_file(output, include_all)
         click.echo(f"Cloned {count} labels to {output}")
@@ -169,7 +193,9 @@ def label_clone(output: str, include_all: bool):
 
 @label.command("pull")
 @click.argument("file", type=click.Path(exists=True))
-@click.option("--all", "include_all", is_flag=True, help="Include system labels (read-only)")
+@click.option(
+    "--all", "include_all", is_flag=True, help="Include system labels (read-only)"
+)
 def label_pull(file: str, include_all: bool):
     """Pull latest labels to existing file.
 
@@ -211,7 +237,9 @@ def _parse_labels_file(path: str) -> list:
 @label.command("plan")
 @click.argument("file", type=click.Path(exists=True))
 @click.option("-o", "--output", default="labels.plan.yaml", help="Output plan file")
-@click.option("--delete", "allow_delete", is_flag=True, help="Include deletions in plan")
+@click.option(
+    "--delete", "allow_delete", is_flag=True, help="Include deletions in plan"
+)
 def label_plan(file: str, output: str, allow_delete: bool):
     """Generate plan from edited labels file.
 
@@ -265,12 +293,14 @@ def label_plan(file: str, output: str, allow_delete: bool):
             if "rename_from" in desired:
                 old_name = desired["rename_from"]
                 if old_name in current_labels:
-                    plan["rename"].append({
-                        "from": old_name,
-                        "to": name,
-                        "id": current_labels[old_name]["id"],
-                        **_extract_settings(desired),
-                    })
+                    plan["rename"].append(
+                        {
+                            "from": old_name,
+                            "to": name,
+                            "id": current_labels[old_name]["id"],
+                            **_extract_settings(desired),
+                        }
+                    )
                 elif name not in current_labels:
                     plan["create"].append({"name": name, **_extract_settings(desired)})
             elif name not in current_labels:
@@ -278,11 +308,13 @@ def label_plan(file: str, output: str, allow_delete: bool):
             else:
                 current = current_labels[name]
                 if _needs_update(current, desired):
-                    plan["update"].append({
-                        "name": name,
-                        "id": current["id"],
-                        **_extract_settings(desired),
-                    })
+                    plan["update"].append(
+                        {
+                            "name": name,
+                            "id": current["id"],
+                            **_extract_settings(desired),
+                        }
+                    )
 
         # Check for deletes
         if allow_delete:
@@ -293,7 +325,9 @@ def label_plan(file: str, output: str, allow_delete: bool):
                     plan["delete"].append({"name": name, "id": current["id"]})
 
         # Remove empty lists
-        plan = {k: v for k, v in plan.items() if v or k in ("type", "source", "generated")}
+        plan = {
+            k: v for k, v in plan.items() if v or k in ("type", "source", "generated")
+        }
 
         # Show summary
         has_changes = any(k in plan for k in ("create", "rename", "update", "delete"))
@@ -328,11 +362,15 @@ def label_plan(file: str, output: str, allow_delete: bool):
                 if name not in desired_map and name not in rename_map:
                     potential_deletes.append(name)
             if potential_deletes:
-                click.echo(f"  (Skipped {len(potential_deletes)} deletions, use --delete)")
+                click.echo(
+                    f"  (Skipped {len(potential_deletes)} deletions, use --delete)"
+                )
 
         # Write plan
         with open(output, "w") as f:
-            yaml.dump(plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            yaml.dump(
+                plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+            )
 
         click.echo(f"Wrote plan to {output}")
 
@@ -343,7 +381,7 @@ def label_plan(file: str, output: str, allow_delete: bool):
 
 @label.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
-@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def label_apply(plan_file: str, yes: bool):
     """Apply label changes from plan file.
 
@@ -392,14 +430,18 @@ def label_apply(plan_file: str, yes: bool):
             return
 
         # Execute changes
-        total_changes = len(to_create) + len(to_rename) + len(to_update) + len(to_delete)
+        total_changes = (
+            len(to_create) + len(to_rename) + len(to_update) + len(to_delete)
+        )
 
         with operation("Applying label changes", total=total_changes) as op:
             # 1. Create (parents first for nesting)
             created = set()
             for item in sorted(to_create, key=lambda x: x["name"].count("/")):
                 logger.info(f"Creating: {item['name']}")
-                _create_label_with_parents(service, item["name"], item, current_labels, created)
+                _create_label_with_parents(
+                    service, item["name"], item, current_labels, created
+                )
                 op.advance()
 
             # 2. Rename
@@ -407,7 +449,9 @@ def label_apply(plan_file: str, yes: bool):
                 logger.info(f"Renaming: {item['from']} -> {item['to']}")
                 body = {"name": item["to"]}
                 _apply_settings(body, item)
-                service.users().labels().patch(userId="me", id=item["id"], body=body).execute()
+                service.users().labels().patch(
+                    userId="me", id=item["id"], body=body
+                ).execute()
                 op.advance()
 
             # 3. Update
@@ -415,7 +459,9 @@ def label_apply(plan_file: str, yes: bool):
                 logger.info(f"Updating: {item['name']}")
                 body = {}
                 _apply_settings(body, item)
-                service.users().labels().patch(userId="me", id=item["id"], body=body).execute()
+                service.users().labels().patch(
+                    userId="me", id=item["id"], body=body
+                ).execute()
                 op.advance()
 
             # 4. Delete
@@ -503,7 +549,9 @@ def _create_label_with_parents(
             parent = "/".join(parts[: i + 1])
             if parent not in current_labels and parent not in created:
                 body = {"name": parent, "labelListVisibility": "labelShow"}
-                result = service.users().labels().create(userId="me", body=body).execute()
+                result = (
+                    service.users().labels().create(userId="me", body=body).execute()
+                )
                 current_labels[parent] = result
                 created.add(parent)
                 click.echo(f"Created: {parent} (parent)")

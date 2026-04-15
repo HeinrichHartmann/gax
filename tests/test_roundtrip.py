@@ -55,9 +55,11 @@ def services():
 
 def _clear_doc_tabs(doc_id, docs_service):
     """Delete all tabs except the first one."""
-    doc = docs_service.documents().get(
-        documentId=doc_id, includeTabsContent=True
-    ).execute(num_retries=NUM_RETRIES)
+    doc = (
+        docs_service.documents()
+        .get(documentId=doc_id, includeTabsContent=True)
+        .execute(num_retries=NUM_RETRIES)
+    )
     tabs = doc.get("tabs", [])
     requests = []
     for tab in tabs[1:]:
@@ -98,7 +100,10 @@ def pushed_fixture(doc_id, services):
     md = FIXTURE_PATH.read_text()
     tab_name = _unique("rt_verify")
     tab_id, _warnings = create_tab_with_content(
-        doc_id, tab_name, md, service=services["docs"],
+        doc_id,
+        tab_name,
+        md,
+        service=services["docs"],
         num_retries=NUM_RETRIES,
     )
     return tab_name, tab_id, md
@@ -134,20 +139,24 @@ def _collect_paragraphs(body_content):
                 continue
             tr = e["textRun"]
             ts = tr.get("textStyle", {})
-            runs.append({
-                "text": tr["content"],
-                "bold": ts.get("bold", False),
-                "italic": ts.get("italic", False),
-                "link": ts.get("link", {}).get("url"),
-            })
+            runs.append(
+                {
+                    "text": tr["content"],
+                    "bold": ts.get("bold", False),
+                    "italic": ts.get("italic", False),
+                    "link": ts.get("link", {}).get("url"),
+                }
+            )
 
         full_text = "".join(r["text"] for r in runs).strip()
-        paragraphs.append({
-            "text": full_text,
-            "named_style": named_style,
-            "bullet": bullet,
-            "runs": runs,
-        })
+        paragraphs.append(
+            {
+                "text": full_text,
+                "named_style": named_style,
+                "bullet": bullet,
+                "runs": runs,
+            }
+        )
     return paragraphs
 
 
@@ -171,14 +180,22 @@ def _collect_tables(body_content):
                                 tr = e["textRun"]
                                 ts = tr.get("textStyle", {})
                                 cell_text += tr["content"]
-                                cell_runs.append({
-                                    "text": tr["content"],
-                                    "bold": ts.get("bold", False),
-                                    "italic": ts.get("italic", False),
-                                })
+                                cell_runs.append(
+                                    {
+                                        "text": tr["content"],
+                                        "bold": ts.get("bold", False),
+                                        "italic": ts.get("italic", False),
+                                    }
+                                )
                 cells.append({"text": cell_text.strip(), "runs": cell_runs})
             rows.append(cells)
-        tables.append({"rows": rows, "num_rows": len(rows), "num_cols": len(rows[0]) if rows else 0})
+        tables.append(
+            {
+                "rows": rows,
+                "num_rows": len(rows),
+                "num_cols": len(rows[0]) if rows else 0,
+            }
+        )
     return tables
 
 
@@ -190,9 +207,12 @@ class TestPushVerify:
     def doc_structure(self, doc_id, services, pushed_fixture):
         """Read the pushed document structure once for all assertions."""
         _, tab_id, _ = pushed_fixture
-        doc = services["docs"].documents().get(
-            documentId=doc_id, includeTabsContent=True
-        ).execute(num_retries=NUM_RETRIES)
+        doc = (
+            services["docs"]
+            .documents()
+            .get(documentId=doc_id, includeTabsContent=True)
+            .execute(num_retries=NUM_RETRIES)
+        )
         body = _get_tab_body(doc, tab_id)
         return {
             "paragraphs": _collect_paragraphs(body),
@@ -211,7 +231,9 @@ class TestPushVerify:
         for r in para["runs"]:
             if text_substring in r["text"]:
                 return r
-        raise AssertionError(f"Run containing {text_substring!r} not found in {para['text']!r}")
+        raise AssertionError(
+            f"Run containing {text_substring!r} not found in {para['text']!r}"
+        )
 
     # --- Headings ---
 
@@ -276,14 +298,18 @@ class TestPushVerify:
 
     def test_unordered_list_has_bullets(self, doc_structure):
         # Filter to the one that's a bullet (not ordered)
-        items = [p for p in doc_structure["paragraphs"]
-                 if "First item" in p["text"] and p["bullet"] is not None]
+        items = [
+            p
+            for p in doc_structure["paragraphs"]
+            if "First item" in p["text"] and p["bullet"] is not None
+        ]
         assert len(items) >= 1, "No bulleted 'First item' found"
 
     def test_ordered_list_has_bullets(self, doc_structure):
         # Ordered lists also get bullet property in Google Docs
-        items = [p for p in doc_structure["paragraphs"]
-                 if "Ordered after table" in p["text"]]
+        items = [
+            p for p in doc_structure["paragraphs"] if "Ordered after table" in p["text"]
+        ]
         assert len(items) == 1
         assert items[0]["bullet"] is not None
 
@@ -297,9 +323,11 @@ class TestPushVerify:
     def test_simple_table_structure(self, doc_structure):
         tables = doc_structure["tables"]
         # Find the simple 2-col table with Alpha/Beta
-        simple = [t for t in tables if any(
-            any(c["text"] == "Alpha" for c in row) for row in t["rows"]
-        )]
+        simple = [
+            t
+            for t in tables
+            if any(any(c["text"] == "Alpha" for c in row) for row in t["rows"])
+        ]
         assert len(simple) == 1
         t = simple[0]
         assert t["num_rows"] == 3  # header + 2 data rows
@@ -307,16 +335,20 @@ class TestPushVerify:
 
     def test_table_with_bold_cells(self, doc_structure):
         tables = doc_structure["tables"]
-        bold_table = [t for t in tables if any(
-            any(c["text"] == "Setup" for c in row) for row in t["rows"]
-        )]
+        bold_table = [
+            t
+            for t in tables
+            if any(any(c["text"] == "Setup" for c in row) for row in t["rows"])
+        ]
         assert len(bold_table) >= 1
         t = bold_table[0]
         # Find the "Setup" cell and check it has bold
         for row in t["rows"]:
             for cell in row:
                 if cell["text"] == "Setup":
-                    assert any(r["bold"] for r in cell["runs"]), "Setup cell should be bold"
+                    assert any(r["bold"] for r in cell["runs"]), (
+                        "Setup cell should be bold"
+                    )
 
     def test_wide_table(self, doc_structure):
         tables = doc_structure["tables"]
@@ -325,9 +357,11 @@ class TestPushVerify:
 
     def test_table_with_emoji(self, doc_structure):
         tables = doc_structure["tables"]
-        emoji_table = [t for t in tables if any(
-            any("🟢" in c["text"] for c in row) for row in t["rows"]
-        )]
+        emoji_table = [
+            t
+            for t in tables
+            if any(any("🟢" in c["text"] for c in row) for row in t["rows"])
+        ]
         assert len(emoji_table) == 1
 
     def test_table_count(self, doc_structure):
@@ -348,17 +382,20 @@ class TestIdentityRoundTrip:
         tab_name, _, md = pushed_fixture
 
         m1 = export_tab_markdown(
-            doc_id, tab_name,
+            doc_id,
+            tab_name,
             docs_service=services["docs"],
             drive_service=services["drive"],
             num_retries=NUM_RETRIES,
         )
 
         if md != m1:
-            d = "".join(difflib.unified_diff(
-                md.splitlines(keepends=True),
-                m1.splitlines(keepends=True),
-                fromfile="fixture",
-                tofile="pulled",
-            ))
+            d = "".join(
+                difflib.unified_diff(
+                    md.splitlines(keepends=True),
+                    m1.splitlines(keepends=True),
+                    fromfile="fixture",
+                    tofile="pulled",
+                )
+            )
             assert False, f"Identity failed (M != M1):\n{d}"

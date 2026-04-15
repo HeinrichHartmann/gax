@@ -49,7 +49,7 @@ def get_form(form_id: str, *, service=None) -> dict:
 
 
 def form_to_yaml(form: dict, source_url: str) -> str:
-    """Convert Forms API response to YAML .form.gax format.
+    """Convert Forms API response to YAML .form.gax.md format.
 
     Returns YAML frontmatter + YAML body for faithful round-trip.
     """
@@ -103,8 +103,12 @@ def form_to_yaml(form: dict, source_url: str) -> str:
         body["responderUri"] = responder_uri
 
     # Format output
-    header_yaml = yaml.dump(header, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    body_yaml = yaml.dump(body, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    header_yaml = yaml.dump(
+        header, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
+    body_yaml = yaml.dump(
+        body, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
 
     return f"---\n{header_yaml}---\n{body_yaml}"
 
@@ -132,7 +136,9 @@ def form_to_markdown(form: dict, source_url: str) -> str:
         "content-type": "text/markdown",
     }
 
-    header_yaml = yaml.dump(header, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    header_yaml = yaml.dump(
+        header, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
 
     # Build markdown body
     lines = []
@@ -342,19 +348,19 @@ def form_to_markdown(form: dict, source_url: str) -> str:
 
 
 def parse_form_file(file_path: Path) -> dict:
-    """Parse a .form.gax file and return header dict.
+    """Parse a .form.gax.md file and return header dict.
 
     Returns dict with: id, title, source, content-type, etc.
     """
     content = file_path.read_text(encoding="utf-8")
 
     if not content.startswith("---"):
-        raise ValueError("Invalid .form.gax file: missing YAML header")
+        raise ValueError("Invalid .form.gax.md file: missing YAML header")
 
     # Split header from body
     parts = content.split("---", 2)
     if len(parts) < 3:
-        raise ValueError("Invalid .form.gax file: malformed header")
+        raise ValueError("Invalid .form.gax.md file: malformed header")
 
     header_yaml = parts[1].strip()
     header = yaml.safe_load(header_yaml)
@@ -363,19 +369,19 @@ def parse_form_file(file_path: Path) -> dict:
 
 
 def parse_form_file_full(file_path: Path) -> tuple[dict, dict]:
-    """Parse a .form.gax file and return (header, body) dicts.
+    """Parse a .form.gax.md file and return (header, body) dicts.
 
     The body contains the form structure (items, settings, etc.).
     """
     content = file_path.read_text(encoding="utf-8")
 
     if not content.startswith("---"):
-        raise ValueError("Invalid .form.gax file: missing YAML header")
+        raise ValueError("Invalid .form.gax.md file: missing YAML header")
 
     # Split header from body
     parts = content.split("---", 2)
     if len(parts) < 3:
-        raise ValueError("Invalid .form.gax file: malformed header")
+        raise ValueError("Invalid .form.gax.md file: malformed header")
 
     header_yaml = parts[1].strip()
     body_content = parts[2].strip()
@@ -384,7 +390,9 @@ def parse_form_file_full(file_path: Path) -> tuple[dict, dict]:
 
     # Body is YAML for yaml format, otherwise not parseable
     if header.get("content-type") != "application/yaml":
-        raise ValueError("Plan/apply only works with YAML format files (use --format yaml)")
+        raise ValueError(
+            "Plan/apply only works with YAML format files (use --format yaml)"
+        )
 
     body = yaml.safe_load(body_content)
     return header, body
@@ -511,7 +519,7 @@ def form():
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (default: <title>.form.gax)",
+    help="Output file (default: <title>.form.gax.md)",
 )
 @click.option(
     "--format",
@@ -522,7 +530,7 @@ def form():
     help="Content format: md (readable, default) or yaml (round-trip safe)",
 )
 def clone(url: str, output: Optional[Path], fmt: str):
-    """Clone a Google Form to a local .form.gax file.
+    """Clone a Google Form to a local .form.gax.md file.
 
     By default, creates a human-readable markdown representation.
     Use --format yaml for faithful round-trip representation (required for push).
@@ -550,7 +558,7 @@ def clone(url: str, output: Optional[Path], fmt: str):
         else:
             safe_name = re.sub(r'[<>:"/\\|?*]', "-", doc_title)
             safe_name = re.sub(r"\s+", "_", safe_name)
-            file_path = Path(f"{safe_name}.form.gax")
+            file_path = Path(f"{safe_name}.form.gax.md")
 
         if file_path.exists():
             click.echo(f"Error: File already exists: {file_path}", err=True)
@@ -559,7 +567,9 @@ def clone(url: str, output: Optional[Path], fmt: str):
         file_path.write_text(content, encoding="utf-8")
 
         items = form_data.get("items", [])
-        questions = sum(1 for i in items if "questionItem" in i or "questionGroupItem" in i)
+        questions = sum(
+            1 for i in items if "questionItem" in i or "questionGroupItem" in i
+        )
 
         success(f"Created: {file_path}")
         click.echo(f"Title: {doc_title}")
@@ -589,7 +599,9 @@ def pull(file: Path):
                 click.echo("Error: No form ID found in file", err=True)
                 sys.exit(1)
 
-        source_url = header.get("source", f"https://docs.google.com/forms/d/{form_id}/edit")
+        source_url = header.get(
+            "source", f"https://docs.google.com/forms/d/{form_id}/edit"
+        )
         content_type = header.get("content-type", "text/markdown")
 
         click.echo(f"Pulling: {form_id}")
@@ -604,7 +616,9 @@ def pull(file: Path):
         file.write_text(content, encoding="utf-8")
 
         items = form_data.get("items", [])
-        questions = sum(1 for i in items if "questionItem" in i or "questionGroupItem" in i)
+        questions = sum(
+            1 for i in items if "questionItem" in i or "questionGroupItem" in i
+        )
 
         success(f"Updated: {file}")
         click.echo(f"Questions: {questions}")
@@ -685,83 +699,126 @@ def plan(file: Path, output: str):
                 if not item_id:
                     # New item - needs to be created
                     logger.info(f"New item: {item_title}")
-                    plan_data["create"].append({
-                        "index": local_idx,
-                        "title": item_title,
-                        "item": local_item,
-                    })
+                    plan_data["create"].append(
+                        {
+                            "index": local_idx,
+                            "title": item_title,
+                            "item": local_item,
+                        }
+                    )
                 else:
                     seen_remote_ids.add(item_id)
                     if item_id in remote_by_id:
                         remote_item = remote_by_id[item_id]["item"]
                         # Check if item type changed (e.g., pageBreakItem -> textItem)
-                        item_types = ["questionItem", "pageBreakItem", "textItem", "imageItem", "videoItem"]
-                        local_type = next((t for t in item_types if t in local_item), None)
-                        remote_type = next((t for t in item_types if t in remote_item), None)
+                        item_types = [
+                            "questionItem",
+                            "pageBreakItem",
+                            "textItem",
+                            "imageItem",
+                            "videoItem",
+                        ]
+                        local_type = next(
+                            (t for t in item_types if t in local_item), None
+                        )
+                        remote_type = next(
+                            (t for t in item_types if t in remote_item), None
+                        )
 
                         if local_type != remote_type:
                             # Type changed - need delete + create (can't update item type)
                             logger.info(f"Type changed: {item_title}")
-                            plan_data["delete"].append({
-                                "itemId": item_id,
-                                "index": remote_by_id[item_id]["index"],
-                                "title": remote_item.get("title", "(untitled)"),
-                            })
+                            plan_data["delete"].append(
+                                {
+                                    "itemId": item_id,
+                                    "index": remote_by_id[item_id]["index"],
+                                    "title": remote_item.get("title", "(untitled)"),
+                                }
+                            )
                             # Create without itemId so it gets a new one
-                            new_item = {k: v for k, v in local_item.items() if k != "itemId"}
-                            plan_data["create"].append({
-                                "index": local_idx,
-                                "title": item_title,
-                                "item": new_item,
-                            })
+                            new_item = {
+                                k: v for k, v in local_item.items() if k != "itemId"
+                            }
+                            plan_data["create"].append(
+                                {
+                                    "index": local_idx,
+                                    "title": item_title,
+                                    "item": new_item,
+                                }
+                            )
                         elif not _items_equal(local_item, remote_item):
                             # Same type but content changed - update
                             logger.info(f"Item changed: {item_title}")
-                            plan_data["update"].append({
-                                "index": local_idx,
-                                "itemId": item_id,
-                                "title": item_title,
-                                "item": local_item,
-                            })
+                            plan_data["update"].append(
+                                {
+                                    "index": local_idx,
+                                    "itemId": item_id,
+                                    "title": item_title,
+                                    "item": local_item,
+                                }
+                            )
 
                         # Check if position changed (needs move)
                         remote_idx = remote_by_id[item_id]["index"]
                         if local_idx != remote_idx:
                             logger.info(f"Item moved: {item_title}")
-                            plan_data["move"].append({
-                                "itemId": item_id,
-                                "from_index": remote_idx,
-                                "to_index": local_idx,
-                                "title": item_title,
-                            })
+                            plan_data["move"].append(
+                                {
+                                    "itemId": item_id,
+                                    "from_index": remote_idx,
+                                    "to_index": local_idx,
+                                    "title": item_title,
+                                }
+                            )
                     else:
                         # Item has ID but not in remote - treat as create
-                        logger.warning(f"Item {item_id} not found remotely, will create new")
-                        plan_data["create"].append({
-                            "index": local_idx,
-                            "title": item_title,
-                            "item": local_item,
-                        })
+                        logger.warning(
+                            f"Item {item_id} not found remotely, will create new"
+                        )
+                        plan_data["create"].append(
+                            {
+                                "index": local_idx,
+                                "title": item_title,
+                                "item": local_item,
+                            }
+                        )
                 op.advance()
 
         # Check for deletes - remote items not in local
         with operation("Checking for deletions", total=len(remote_by_id)) as op:
             for item_id, remote_data in remote_by_id.items():
                 if item_id not in seen_remote_ids:
-                    logger.info(f"Item to delete: {remote_data['item'].get('title', '(untitled)')}")
-                    plan_data["delete"].append({
-                        "itemId": item_id,
-                        "index": remote_data["index"],
-                        "title": remote_data["item"].get("title", "(untitled)"),
-                    })
+                    logger.info(
+                        f"Item to delete: {remote_data['item'].get('title', '(untitled)')}"
+                    )
+                    plan_data["delete"].append(
+                        {
+                            "itemId": item_id,
+                            "index": remote_data["index"],
+                            "title": remote_data["item"].get("title", "(untitled)"),
+                        }
+                    )
                 op.advance()
 
         # Remove empty lists for cleaner output
-        plan_data = {k: v for k, v in plan_data.items()
-                     if v or k in ("type", "form_id", "source", "generated")}
+        plan_data = {
+            k: v
+            for k, v in plan_data.items()
+            if v or k in ("type", "form_id", "source", "generated")
+        }
 
         # Show summary
-        has_changes = any(k in plan_data for k in ("create", "update", "delete", "move", "update_info", "update_settings"))
+        has_changes = any(
+            k in plan_data
+            for k in (
+                "create",
+                "update",
+                "delete",
+                "move",
+                "update_info",
+                "update_settings",
+            )
+        )
         if not has_changes:
             click.echo("No changes to apply.")
             return
@@ -782,7 +839,9 @@ def plan(file: Path, output: str):
         if "move" in plan_data:
             click.echo(f"  Move: {len(plan_data['move'])}")
             for item in plan_data["move"]:
-                click.echo(f"    > [{item['from_index']}] -> [{item['to_index']}] {item['title']}")
+                click.echo(
+                    f"    > [{item['from_index']}] -> [{item['to_index']}] {item['title']}"
+                )
         if "update_info" in plan_data:
             click.echo("  Update info: yes")
         if "update_settings" in plan_data:
@@ -790,7 +849,13 @@ def plan(file: Path, output: str):
 
         # Write plan
         with open(output, "w") as f:
-            yaml.dump(plan_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            yaml.dump(
+                plan_data,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
 
         success(f"Wrote plan to {output}")
         click.echo(f"Review and run: gax form apply {output}")
@@ -802,7 +867,7 @@ def plan(file: Path, output: str):
 
 @form.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True, path_type=Path))
-@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def apply(plan_file: Path, yes: bool):
     """Apply form changes from a plan file.
 
@@ -830,7 +895,14 @@ def apply(plan_file: Path, yes: bool):
         update_info = plan_data.get("update_info")
         update_settings = plan_data.get("update_settings")
 
-        if not to_create and not to_update and not to_delete and not to_move and not update_info and not update_settings:
+        if (
+            not to_create
+            and not to_update
+            and not to_delete
+            and not to_move
+            and not update_info
+            and not update_settings
+        ):
             click.echo("No changes in plan.")
             return
 
@@ -865,22 +937,26 @@ def apply(plan_file: Path, yes: bool):
 
         # Update form info (title, description)
         if update_info:
-            requests.append({
-                "updateFormInfo": {
-                    "info": update_info,
-                    "updateMask": ",".join(update_info.keys())
+            requests.append(
+                {
+                    "updateFormInfo": {
+                        "info": update_info,
+                        "updateMask": ",".join(update_info.keys()),
+                    }
                 }
-            })
+            )
             click.echo("  ~ Updating form info")
 
         # Update form settings
         if update_settings:
-            requests.append({
-                "updateSettings": {
-                    "settings": update_settings,
-                    "updateMask": ",".join(update_settings.keys())
+            requests.append(
+                {
+                    "updateSettings": {
+                        "settings": update_settings,
+                        "updateMask": ",".join(update_settings.keys()),
+                    }
                 }
-            })
+            )
             click.echo("  ~ Updating form settings")
 
         # Build itemId -> current index map
@@ -899,7 +975,10 @@ def apply(plan_file: Path, yes: bool):
                     logger.info(f"Updating: {item['title']}")
                     click.echo(f"  ~ Updating: {item['title']}")
                 else:
-                    click.echo(f"  ! Skipping update (item not found): {item['title']}", err=True)
+                    click.echo(
+                        f"  ! Skipping update (item not found): {item['title']}",
+                        err=True,
+                    )
                 op.advance()
 
         # Deletes - process in reverse index order to maintain correct indices
@@ -928,10 +1007,11 @@ def apply(plan_file: Path, yes: bool):
         # Execute non-move requests first
         if requests:
             click.echo(f"\nExecuting {len(requests)} request(s)...")
-            result = service.forms().batchUpdate(
-                formId=form_id,
-                body={"requests": requests}
-            ).execute()
+            result = (
+                service.forms()
+                .batchUpdate(formId=form_id, body={"requests": requests})
+                .execute()
+            )
             replies = result.get("replies", [])
             created_count = sum(1 for r in replies if "createItem" in r)
             click.echo(f"Done: {len(replies)} operations completed")
@@ -957,7 +1037,9 @@ def apply(plan_file: Path, yes: bool):
                             break
 
                     if current_idx is None:
-                        click.echo(f"  ! Item {item_id} not found, skipping move", err=True)
+                        click.echo(
+                            f"  ! Item {item_id} not found, skipping move", err=True
+                        )
                         op.advance()
                         continue
 
@@ -970,15 +1052,18 @@ def apply(plan_file: Path, yes: bool):
                     move_request = {
                         "moveItem": {
                             "originalLocation": {"index": current_idx},
-                            "newLocation": {"index": target_idx}
+                            "newLocation": {"index": target_idx},
                         }
                     }
                     service.forms().batchUpdate(
-                        formId=form_id,
-                        body={"requests": [move_request]}
+                        formId=form_id, body={"requests": [move_request]}
                     ).execute()
-                    logger.info(f"Moved: {move['title']} [{current_idx}] -> [{target_idx}]")
-                    click.echo(f"  > Moved: {move['title']} [{current_idx}] -> [{target_idx}]")
+                    logger.info(
+                        f"Moved: {move['title']} [{current_idx}] -> [{target_idx}]"
+                    )
+                    click.echo(
+                        f"  > Moved: {move['title']} [{current_idx}] -> [{target_idx}]"
+                    )
                     op.advance()
 
         if not requests and not to_move:
@@ -988,7 +1073,9 @@ def apply(plan_file: Path, yes: bool):
         # Suggest pulling to sync local file
         source_file = plan_data.get("source")
         if source_file:
-            click.echo(f"\nRun 'gax form pull {source_file}' to sync local file with new IDs")
+            click.echo(
+                f"\nRun 'gax form pull {source_file}' to sync local file with new IDs"
+            )
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

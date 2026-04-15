@@ -103,7 +103,10 @@ class TestPullThread:
                             {"name": "From", "value": "sender@example.com"},
                             {"name": "To", "value": "recipient@example.com"},
                             {"name": "Subject", "value": "Hello"},
-                            {"name": "Date", "value": "Tue, 11 Mar 2025 08:00:00 -0700"},
+                            {
+                                "name": "Date",
+                                "value": "Tue, 11 Mar 2025 08:00:00 -0700",
+                            },
                         ],
                         "body": {
                             "data": "SGVsbG8gV29ybGQh"  # "Hello World!"
@@ -133,7 +136,7 @@ class TestFormatMultipart:
         content = format_multipart(sections)
 
         # Write to temp file
-        output_file = tmp_path / "Project_Update.mail.gax"
+        output_file = tmp_path / "Project_Update.mail.gax.md"
         output_file.write_text(content)
 
         # Verify file contents
@@ -197,7 +200,10 @@ class TestMultipartMimeTypes:
                             {"name": "From", "value": "sender@example.com"},
                             {"name": "To", "value": "recipient@example.com"},
                             {"name": "Subject", "value": "Multipart Test"},
-                            {"name": "Date", "value": "Wed, 12 Mar 2025 14:00:00 -0700"},
+                            {
+                                "name": "Date",
+                                "value": "Wed, 12 Mar 2025 14:00:00 -0700",
+                            },
                         ],
                         "parts": [
                             {

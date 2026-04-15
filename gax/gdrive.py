@@ -25,9 +25,9 @@ def extract_file_id(url_or_id: str) -> str:
     """Extract file ID from Google Drive URL or return as-is if already an ID."""
     # Match various Drive URL formats
     patterns = [
-        r'/file/d/([a-zA-Z0-9_-]+)',
-        r'id=([a-zA-Z0-9_-]+)',
-        r'^([a-zA-Z0-9_-]+)$',  # Just an ID
+        r"/file/d/([a-zA-Z0-9_-]+)",
+        r"id=([a-zA-Z0-9_-]+)",
+        r"^([a-zA-Z0-9_-]+)$",  # Just an ID
     ]
 
     for pattern in patterns:
@@ -44,18 +44,19 @@ def download_file(file_id: str, output_path: Path) -> dict:
     Returns metadata dict with file info.
     """
     creds = get_authenticated_credentials()
-    service = build('drive', 'v3', credentials=creds)
+    service = build("drive", "v3", credentials=creds)
 
     # Get file metadata
-    file_metadata = service.files().get(
-        fileId=file_id,
-        fields='id,name,mimeType,size,webViewLink,webContentLink'
-    ).execute()
+    file_metadata = (
+        service.files()
+        .get(fileId=file_id, fields="id,name,mimeType,size,webViewLink,webContentLink")
+        .execute()
+    )
 
     # Download file content
     request = service.files().get_media(fileId=file_id)
 
-    with open(output_path, 'wb') as f:
+    with open(output_path, "wb") as f:
         downloader = MediaIoBaseDownload(f, request)
         done = False
         while not done:
@@ -68,7 +69,7 @@ def upload_file(
     file_path: Path,
     name: Optional[str] = None,
     parent_folder_id: Optional[str] = None,
-    public: bool = False
+    public: bool = False,
 ) -> dict:
     """Upload a file to Google Drive.
 
@@ -82,31 +83,39 @@ def upload_file(
         File metadata dict
     """
     creds = get_authenticated_credentials()
-    service = build('drive', 'v3', credentials=creds)
+    service = build("drive", "v3", credentials=creds)
 
     file_name = name or file_path.name
 
     # Prepare metadata
-    file_metadata = {'name': file_name}
+    file_metadata = {"name": file_name}
     if parent_folder_id:
-        file_metadata['parents'] = [parent_folder_id]
+        file_metadata["parents"] = [parent_folder_id]
 
     # Upload file
     media = MediaFileUpload(str(file_path), resumable=True)
-    file = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id,name,mimeType,size,webViewLink,webContentLink'
-    ).execute()
+    file = (
+        service.files()
+        .create(
+            body=file_metadata,
+            media_body=media,
+            fields="id,name,mimeType,size,webViewLink,webContentLink",
+        )
+        .execute()
+    )
 
     # Set public permissions if requested
     if public:
-        set_public(file['id'], True)
+        set_public(file["id"], True)
         # Re-fetch to get webContentLink after making public
-        file = service.files().get(
-            fileId=file['id'],
-            fields='id,name,mimeType,size,webViewLink,webContentLink'
-        ).execute()
+        file = (
+            service.files()
+            .get(
+                fileId=file["id"],
+                fields="id,name,mimeType,size,webViewLink,webContentLink",
+            )
+            .execute()
+        )
 
     return file
 
@@ -123,24 +132,32 @@ def update_file(file_id: str, file_path: Path, public: Optional[bool] = None) ->
         Updated file metadata dict
     """
     creds = get_authenticated_credentials()
-    service = build('drive', 'v3', credentials=creds)
+    service = build("drive", "v3", credentials=creds)
 
     # Update file content
     media = MediaFileUpload(str(file_path), resumable=True)
-    file = service.files().update(
-        fileId=file_id,
-        media_body=media,
-        fields='id,name,mimeType,size,webViewLink,webContentLink'
-    ).execute()
+    file = (
+        service.files()
+        .update(
+            fileId=file_id,
+            media_body=media,
+            fields="id,name,mimeType,size,webViewLink,webContentLink",
+        )
+        .execute()
+    )
 
     # Update sharing if specified
     if public is not None:
         set_public(file_id, public)
         # Re-fetch to get updated webContentLink
-        file = service.files().get(
-            fileId=file_id,
-            fields='id,name,mimeType,size,webViewLink,webContentLink'
-        ).execute()
+        file = (
+            service.files()
+            .get(
+                fileId=file_id,
+                fields="id,name,mimeType,size,webViewLink,webContentLink",
+            )
+            .execute()
+        )
 
     return file
 
@@ -153,35 +170,28 @@ def set_public(file_id: str, public: bool = True):
         public: True to make public, False to make private
     """
     creds = get_authenticated_credentials()
-    service = build('drive', 'v3', credentials=creds)
+    service = build("drive", "v3", credentials=creds)
 
     if public:
         # Add public reader permission
-        permission = {
-            'type': 'anyone',
-            'role': 'reader'
-        }
-        service.permissions().create(
-            fileId=file_id,
-            body=permission
-        ).execute()
+        permission = {"type": "anyone", "role": "reader"}
+        service.permissions().create(fileId=file_id, body=permission).execute()
     else:
         # Remove public permissions
         permissions = service.permissions().list(fileId=file_id).execute()
-        perms = permissions.get('permissions', [])
+        perms = permissions.get("permissions", [])
         with operation("Removing public permissions", total=len(perms)) as op:
             for perm in perms:
-                if perm.get('type') == 'anyone':
+                if perm.get("type") == "anyone":
                     logger.info(f"Removing permission: {perm['id']}")
                     service.permissions().delete(
-                        fileId=file_id,
-                        permissionId=perm['id']
+                        fileId=file_id, permissionId=perm["id"]
                     ).execute()
                 op.advance()
 
 
 def create_tracking_file(file_path: Path, metadata: dict) -> Path:
-    """Create a .gax tracking file for a downloaded file.
+    """Create a .gax.md tracking file for a downloaded file.
 
     Args:
         file_path: Path to the downloaded file
@@ -190,41 +200,50 @@ def create_tracking_file(file_path: Path, metadata: dict) -> Path:
     Returns:
         Path to the tracking file
     """
-    tracking_path = file_path.with_suffix(file_path.suffix + '.gax')
+    tracking_path = file_path.with_suffix(file_path.suffix + ".gax.md")
 
     tracking_data = {
-        'type': 'gax/file',
-        'file_id': metadata['id'],
-        'name': metadata['name'],
-        'mime_type': metadata.get('mimeType', ''),
-        'source': metadata.get('webViewLink', f"https://drive.google.com/file/d/{metadata['id']}/view"),
-        'pulled': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        'size': int(metadata.get('size', 0)),
+        "type": "gax/file",
+        "file_id": metadata["id"],
+        "name": metadata["name"],
+        "mime_type": metadata.get("mimeType", ""),
+        "source": metadata.get(
+            "webViewLink", f"https://drive.google.com/file/d/{metadata['id']}/view"
+        ),
+        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "size": int(metadata.get("size", 0)),
     }
 
     # Add download link if available (for public files)
-    if metadata.get('webContentLink'):
-        tracking_data['download'] = metadata['webContentLink']
+    if metadata.get("webContentLink"):
+        tracking_data["download"] = metadata["webContentLink"]
 
-    with open(tracking_path, 'w') as f:
-        yaml.dump(tracking_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    with open(tracking_path, "w") as f:
+        yaml.dump(
+            tracking_data,
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+        )
 
     return tracking_path
 
 
 def read_tracking_file(tracking_path: Path) -> dict:
-    """Read a .gax tracking file.
+    """Read a .gax.md tracking file.
 
     Returns:
         Tracking data dict
     """
-    with open(tracking_path, 'r') as f:
+    with open(tracking_path, "r") as f:
         return yaml.safe_load(f)
 
 
 # =============================================================================
 # CLI commands
 # =============================================================================
+
 
 @click.group()
 def file():
@@ -233,12 +252,14 @@ def file():
 
 
 @file.command()
-@click.argument('url_or_id')
-@click.option('-o', '--output', type=click.Path(path_type=Path), help='Output file path')
+@click.argument("url_or_id")
+@click.option(
+    "-o", "--output", type=click.Path(path_type=Path), help="Output file path"
+)
 def clone(url_or_id: str, output: Optional[Path]):
     """Clone a file from Google Drive.
 
-    Downloads the file and creates a tracking .gax file.
+    Downloads the file and creates a tracking .gax.md file.
     """
     try:
         file_id = extract_file_id(url_or_id)
@@ -247,17 +268,21 @@ def clone(url_or_id: str, output: Optional[Path]):
 
         # Get metadata first to determine filename
         creds = get_authenticated_credentials()
-        service = build('drive', 'v3', credentials=creds)
-        metadata = service.files().get(
-            fileId=file_id,
-            fields='id,name,mimeType,size,webViewLink,webContentLink'
-        ).execute()
+        service = build("drive", "v3", credentials=creds)
+        metadata = (
+            service.files()
+            .get(
+                fileId=file_id,
+                fields="id,name,mimeType,size,webViewLink,webContentLink",
+            )
+            .execute()
+        )
 
         # Determine output path
         if output:
             file_path = output
         else:
-            file_path = Path(metadata['name'])
+            file_path = Path(metadata["name"])
 
         if file_path.exists():
             error(f"File already exists: {file_path}")
@@ -275,7 +300,7 @@ def clone(url_or_id: str, output: Optional[Path]):
         success(f"Created: {file_path}")
         click.echo(f"Tracking: {tracking_path}")
         click.echo(f"Size: {metadata.get('size', 'unknown')} bytes")
-        if metadata.get('webContentLink'):
+        if metadata.get("webContentLink"):
             click.echo(f"Public download: {metadata.get('webContentLink')}")
 
     except Exception as e:
@@ -284,15 +309,15 @@ def clone(url_or_id: str, output: Optional[Path]):
 
 
 @file.command()
-@click.argument('file_path', type=click.Path(exists=True, path_type=Path))
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 def pull(file_path: Path):
     """Pull latest version of a file from Google Drive.
 
-    Requires a .gax tracking file.
+    Requires a .gax.md tracking file.
     """
     try:
         # Find tracking file
-        tracking_path = file_path.with_suffix(file_path.suffix + '.gax')
+        tracking_path = file_path.with_suffix(file_path.suffix + ".gax.md")
         if not tracking_path.exists():
             error(f"No tracking file found: {tracking_path}")
             click.echo("Use 'gax file clone' to download a tracked file.", err=True)
@@ -300,7 +325,7 @@ def pull(file_path: Path):
 
         # Read tracking data
         tracking_data = read_tracking_file(tracking_path)
-        file_id = tracking_data.get('file_id')
+        file_id = tracking_data.get("file_id")
 
         if not file_id:
             error("No file_id in tracking file")
@@ -324,23 +349,23 @@ def pull(file_path: Path):
 
 
 @file.command()
-@click.argument('file_path', type=click.Path(exists=True, path_type=Path))
-@click.option('--public', is_flag=True, help='Make file publicly accessible')
-@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--public", is_flag=True, help="Make file publicly accessible")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def push(file_path: Path, public: bool, yes: bool):
     """Push local file to Google Drive.
 
-    If file has a .gax tracking file, updates existing file.
+    If file has a .gax.md tracking file, updates existing file.
     Otherwise, uploads as a new file.
     """
     try:
         # Check for tracking file
-        tracking_path = file_path.with_suffix(file_path.suffix + '.gax')
+        tracking_path = file_path.with_suffix(file_path.suffix + ".gax.md")
 
         if tracking_path.exists():
             # Update existing file
             tracking_data = read_tracking_file(tracking_path)
-            file_id = tracking_data.get('file_id')
+            file_id = tracking_data.get("file_id")
 
             if not file_id:
                 error("No file_id in tracking file")
@@ -360,7 +385,9 @@ def push(file_path: Path, public: bool, yes: bool):
 
             with operation(f"Pushing changes to {file_id}") as op:
                 logger.info("Updating Drive file")
-                metadata = update_file(file_id, file_path, public=public if public else None)
+                metadata = update_file(
+                    file_id, file_path, public=public if public else None
+                )
                 op.update("Updating tracking file")
 
             # Update tracking file
@@ -368,7 +395,7 @@ def push(file_path: Path, public: bool, yes: bool):
 
             success(f"Updated: {metadata['name']}")
             click.echo(f"View: {metadata.get('webViewLink')}")
-            if metadata.get('webContentLink'):
+            if metadata.get("webContentLink"):
                 click.echo(f"Download: {metadata.get('webContentLink')}")
 
         else:
@@ -393,7 +420,7 @@ def push(file_path: Path, public: bool, yes: bool):
             success(f"Uploaded: {metadata['name']}")
             click.echo(f"Tracking: {tracking_path}")
             click.echo(f"View: {metadata.get('webViewLink')}")
-            if metadata.get('webContentLink'):
+            if metadata.get("webContentLink"):
                 click.echo(f"Download: {metadata.get('webContentLink')}")
 
     except Exception as e:

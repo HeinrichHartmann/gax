@@ -143,10 +143,12 @@ class TestGSheetClientWrite:
         """Test writing a simple DataFrame."""
         gc, worksheet = make_mock_gc([])
 
-        df = pd.DataFrame({
-            "Name": ["Alice", "Bob"],
-            "Score": [100, 95],
-        })
+        df = pd.DataFrame(
+            {
+                "Name": ["Alice", "Bob"],
+                "Score": [100, 95],
+            }
+        )
 
         client = GSheetClient(gc=gc)
         rows = client.write("spreadsheet-123", "Sheet1", df)
@@ -169,10 +171,12 @@ class TestGSheetClientWrite:
         """Test writing with formula interpretation enabled."""
         gc, worksheet = make_mock_gc([])
 
-        df = pd.DataFrame({
-            "Value": [10, 20],
-            "Formula": ["=A2*2", "=A3*2"],
-        })
+        df = pd.DataFrame(
+            {
+                "Value": [10, 20],
+                "Formula": ["=A2*2", "=A3*2"],
+            }
+        )
 
         client = GSheetClient(gc=gc)
         client.write("spreadsheet-123", "Sheet1", df, with_formulas=True)
@@ -194,7 +198,7 @@ class TestPullPush:
             url="https://docs.google.com/spreadsheets/d/test-sheet-123",
         )
         initial_data = "Name,Age\nOld,0\n"
-        file_path = tmp_path / "test.sheet.gax"
+        file_path = tmp_path / "test.sheet.gax.md"
         file_path.write_text(format_content(config, initial_data))
 
         # Mock sheet with new data
@@ -226,7 +230,7 @@ class TestPullPush:
             format="csv",
         )
         data = "Product,Price\nWidget,9.99\nGadget,19.99\n"
-        file_path = tmp_path / "products.sheet.gax"
+        file_path = tmp_path / "products.sheet.gax.md"
         file_path.write_text(format_content(config, data))
 
         # Mock sheet
@@ -260,7 +264,7 @@ class TestRoundTrip:
             tab="Data",
             format="csv",
         )
-        file_path = tmp_path / "roundtrip.sheet.gax"
+        file_path = tmp_path / "roundtrip.sheet.gax.md"
         file_path.write_text(format_content(config, "Name,Value\n"))
 
         # Mock for pull - returns server data
@@ -350,7 +354,9 @@ class TestCloneAll:
         client = GSheetClient(gc=gc)
 
         title, sections = clone_all(
-            "simple-id", "https://docs.google.com/spreadsheets/d/simple-id", client=client
+            "simple-id",
+            "https://docs.google.com/spreadsheets/d/simple-id",
+            client=client,
         )
 
         assert title == "Simple Sheet"
@@ -399,7 +405,7 @@ class TestPullAll:
                 content="Month,Amount\nOld,0\n",
             ),
         ]
-        file_path = tmp_path / "test.sheet.gax"
+        file_path = tmp_path / "test.sheet.gax.md"
         file_path.write_text(format_multipart(sections))
 
         # Mock with updated data
@@ -449,7 +455,7 @@ class TestPullAll:
             client=client,
         )
 
-        file_path = tmp_path / "roundtrip.sheet.gax"
+        file_path = tmp_path / "roundtrip.sheet.gax.md"
         file_path.write_text(format_multipart(sections))
 
         # Modify on "server" (new mock)

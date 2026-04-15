@@ -83,7 +83,9 @@ class TestPullDoc:
         mock_native_md.get_doc_tabs.return_value = [
             {"id": "t1", "title": "Simple Doc", "index": 0}
         ]
-        mock_native_md.export_doc_markdown.return_value = "# Simple Doc\n\nHello World\n"
+        mock_native_md.export_doc_markdown.return_value = (
+            "# Simple Doc\n\nHello World\n"
+        )
         mock_native_md.split_doc_by_tabs.return_value = {"Simple Doc": "Hello World"}
 
         docs_service = MagicMock()
@@ -153,7 +155,7 @@ class TestFormatMultipart:
         content = format_multipart(sections)
 
         # Write to temp file
-        output_file = tmp_path / "Project_Plan.doc.gax"
+        output_file = tmp_path / "Project_Plan.doc.gax.md"
         output_file.write_text(content)
 
         # Verify file contents
@@ -200,7 +202,7 @@ class TestFormatMultipart:
         for i, section in enumerate(sections):
             single = format_section(section)
 
-            output_file = tmp_path / f"section_{i + 1}.doc.gax"
+            output_file = tmp_path / f"section_{i + 1}.doc.gax.md"
             output_file.write_text(single)
 
             # Verify it's valid
