@@ -11,8 +11,6 @@ from gax.diff_push import (
     _node_type,
 )
 
-import pytest
-
 
 # =============================================================================
 # Alignment tests
@@ -240,23 +238,61 @@ class TestDiffToMutations:
                 elif "location" in val:
                     assert val["location"]["tabId"] == "my_tab"
 
-    def test_insert_raises(self):
+    def test_insert_paragraph(self):
         base = parse_markdown("Text.\n")
         edited = parse_markdown("Text.\n\nNew paragraph.\n")
         ops = ast_diff(base, edited)
 
         alignment = self._make_alignment(base, [(1, 7)])
-        with pytest.raises(ValueError, match="Insert operations not yet supported"):
-            diff_to_mutations(ops, alignment, "tab1")
+        mutations = diff_to_mutations(ops, alignment, "tab1")
 
-    def test_delete_raises(self):
+        types = [list(m.keys())[0] for m in mutations]
+        assert "insertText" in types
+        # The inserted text should contain "New paragraph."
+        insert_reqs = [m for m in mutations if "insertText" in m]
+        assert any("New paragraph." in m["insertText"]["text"] for m in insert_reqs)
+
+    def test_delete_paragraph(self):
         base = parse_markdown("Para one.\n\nPara two.\n")
         edited = parse_markdown("Para one.\n")
         ops = ast_diff(base, edited)
 
         alignment = self._make_alignment(base, [(1, 11), (12, 22)])
-        with pytest.raises(ValueError, match="Delete operations not yet supported"):
-            diff_to_mutations(ops, alignment, "tab1")
+        mutations = diff_to_mutations(ops, alignment, "tab1")
+
+        types = [list(m.keys())[0] for m in mutations]
+        assert "deleteContentRange" in types
+        # Should delete the range of "Para two."
+        delete_reqs = [m for m in mutations if "deleteContentRange" in m]
+        assert any(
+            m["deleteContentRange"]["range"]["startIndex"] == 12
+            for m in delete_reqs
+        )
+
+    def test_insert_heading(self):
+        base = parse_markdown("# Title\n\nText.\n")
+        edited = parse_markdown("# Title\n\n## New Section\n\nText.\n")
+        ops = ast_diff(base, edited)
+
+        alignment = self._make_alignment(base, [(1, 7), (8, 14)])
+        mutations = diff_to_mutations(ops, alignment, "tab1")
+
+        # Should have insertText + updateParagraphStyle for heading
+        types = [list(m.keys())[0] for m in mutations]
+        assert "insertText" in types
+        assert "updateParagraphStyle" in types
+
+    def test_insert_list_item(self):
+        base = parse_markdown("- Alpha\n- Beta\n")
+        edited = parse_markdown("- Alpha\n- New item\n- Beta\n")
+        ops = ast_diff(base, edited)
+
+        alignment = self._make_alignment(base, [(1, 8), (8, 14)])
+        mutations = diff_to_mutations(ops, alignment, "tab1")
+
+        types = [list(m.keys())[0] for m in mutations]
+        assert "insertText" in types
+        assert "createParagraphBullets" in types
 
     def test_heading_level_change(self):
         base = parse_markdown("## Subheading\n")

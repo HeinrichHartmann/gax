@@ -282,6 +282,8 @@ class EditOp:
     edit_idx: int | None  # index in edited AST (None for deletes)
     base_node: Node | None
     edit_node: Node | None
+    # For inserts: the base index after which to insert (None = insert at start)
+    insert_after: int | None = None
 
 
 def _node_key(node: Node) -> str:
@@ -318,15 +320,20 @@ def ast_diff(base_nodes: list[Node], edited_nodes: list[Node]) -> list[EditOp]:
             # Extra base nodes → deletes
             for k in range(pairs, i2 - i1):
                 ops.append(EditOp("delete", i1 + k, None, base_nodes[i1 + k], None))
-            # Extra edited nodes → inserts
+            # Extra edited nodes → inserts (after last base node in this block)
+            insert_after = i1 + pairs - 1 if pairs > 0 else i1 - 1
             for k in range(pairs, j2 - j1):
-                ops.append(EditOp("insert", None, j1 + k, None, edited_nodes[j1 + k]))
+                ops.append(EditOp("insert", None, j1 + k, None, edited_nodes[j1 + k],
+                                  insert_after=insert_after if insert_after >= 0 else None))
         elif tag == "delete":
             for k in range(i1, i2):
                 ops.append(EditOp("delete", k, None, base_nodes[k], None))
         elif tag == "insert":
+            # Insert before base position i1 → after base node i1-1
+            insert_after = i1 - 1 if i1 > 0 else None
             for k in range(j1, j2):
-                ops.append(EditOp("insert", None, k, None, edited_nodes[k]))
+                ops.append(EditOp("insert", None, k, None, edited_nodes[k],
+                                  insert_after=insert_after))
 
     return ops
 
@@ -397,16 +404,48 @@ def diff_to_mutations(
                 )
 
         elif op.type == "insert":
-            raise ValueError(
-                f"Insert operations not yet supported (node: {_node_type(op.edit_node)}). "
-                "Use full-replace push for structural changes."
+            if op.edit_node is None:
+                continue
+            # Find insertion index: after the aligned node, or at doc start
+            if op.insert_after is not None and op.insert_after < len(alignment):
+                insert_idx = alignment[op.insert_after].end_index
+            elif alignment:
+                # Insert before the first node
+                insert_idx = alignment[0].start_index
+            else:
+                insert_idx = 1  # start of document
+
+            requests.extend(
+                _insert_node_requests(op.edit_node, insert_idx, tab_id)
             )
 
         elif op.type == "delete":
-            raise ValueError(
-                f"Delete operations not yet supported (node: {_node_type(op.base_node)}). "
-                "Use full-replace push for structural changes."
-            )
+            if op.base_idx is None or op.base_idx >= len(alignment):
+                continue
+            aligned = alignment[op.base_idx]
+            # Delete the full range including the trailing newline
+            requests.append({
+                "deleteContentRange": {
+                    "range": {
+                        "startIndex": aligned.start_index,
+                        "endIndex": aligned.end_index,
+                        "tabId": tab_id,
+                    }
+                }
+            })
+
+    # Sort requests by index in reverse order so earlier indices stay stable
+    def _sort_key(req):
+        for val in req.values():
+            if isinstance(val, dict):
+                r = val.get("range") or val.get("location")
+                if r and "startIndex" in r:
+                    return -r["startIndex"]
+                if r and "index" in r:
+                    return -r["index"]
+        return 0
+
+    requests.sort(key=_sort_key)
 
     return requests
 
@@ -485,6 +524,115 @@ def _update_paragraph_requests(
 
     # Step 4: Apply inline formatting (bold, italic, strikethrough, links)
     offset = start
+    for span in children:
+        span_end = offset + _utf16_len(span.text)
+        if span.bold:
+            requests.append({
+                "updateTextStyle": {
+                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
+                    "textStyle": {"bold": True},
+                    "fields": "bold",
+                }
+            })
+        if span.italic:
+            requests.append({
+                "updateTextStyle": {
+                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
+                    "textStyle": {"italic": True},
+                    "fields": "italic",
+                }
+            })
+        if span.strikethrough:
+            requests.append({
+                "updateTextStyle": {
+                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
+                    "textStyle": {"strikethrough": True},
+                    "fields": "strikethrough",
+                }
+            })
+        if span.url:
+            requests.append({
+                "updateTextStyle": {
+                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
+                    "textStyle": {"link": {"url": span.url}},
+                    "fields": "link",
+                }
+            })
+        offset = span_end
+
+    return requests
+
+
+def _insert_node_requests(
+    node: Node,
+    insert_idx: int,
+    tab_id: str,
+) -> list[dict]:
+    """Generate requests to insert a new node at a given index.
+
+    Inserts the text content with a trailing newline, then applies
+    paragraph style and inline formatting.
+    """
+    requests = []
+
+    if isinstance(node, Heading):
+        text = node.text + "\n"
+        children = node.children
+    elif isinstance(node, (Paragraph, ListItem)):
+        text = "".join(c.text for c in node.children) + "\n"
+        children = node.children
+    elif isinstance(node, CodeBlock):
+        prefixed = "\n".join(f"> {line}" for line in node.text.split("\n"))
+        text = prefixed + "\n"
+        children = []
+    else:
+        return requests
+
+    # Insert text
+    requests.append({
+        "insertText": {
+            "text": text,
+            "location": {"index": insert_idx, "tabId": tab_id},
+        }
+    })
+
+    # Apply heading style
+    if isinstance(node, Heading):
+        style_map = {
+            1: "HEADING_1", 2: "HEADING_2", 3: "HEADING_3",
+            4: "HEADING_4", 5: "HEADING_5", 6: "HEADING_6",
+        }
+        requests.append({
+            "updateParagraphStyle": {
+                "range": {
+                    "startIndex": insert_idx,
+                    "endIndex": insert_idx + _utf16_len(node.text),
+                    "tabId": tab_id,
+                },
+                "paragraphStyle": {
+                    "namedStyleType": style_map.get(node.level, "HEADING_1"),
+                },
+                "fields": "namedStyleType",
+            }
+        })
+
+    # Apply bullet style
+    if isinstance(node, ListItem):
+        text_len = _utf16_len(text)
+        preset = "NUMBERED_DECIMAL_NESTED" if node.ordered else "BULLET_DISC_CIRCLE_SQUARE"
+        requests.append({
+            "createParagraphBullets": {
+                "range": {
+                    "startIndex": insert_idx,
+                    "endIndex": insert_idx + text_len - 1,
+                    "tabId": tab_id,
+                },
+                "bulletPreset": preset,
+            }
+        })
+
+    # Apply inline formatting
+    offset = insert_idx
     for span in children:
         span_end = offset + _utf16_len(span.text)
         if span.bold:
@@ -610,15 +758,13 @@ def preview_diff(
         for op in updates:
             summary.append(_op_summary(op))
     if inserts:
-        summary.append(f"{len(inserts)} insert(s) (will use full-replace fallback):")
+        summary.append(f"{len(inserts)} insert(s):")
         for op in inserts:
             summary.append(_op_summary(op))
-        warnings.append("Insert operations require full-replace fallback.")
     if deletes:
-        summary.append(f"{len(deletes)} delete(s) (will use full-replace fallback):")
+        summary.append(f"{len(deletes)} delete(s):")
         for op in deletes:
             summary.append(_op_summary(op))
-        warnings.append("Delete operations require full-replace fallback.")
 
     return DiffPreview(
         ops=ops,
