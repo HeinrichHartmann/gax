@@ -7,20 +7,20 @@
 - `gax mail list checkout FOLDER` - Materialize full threads to folder
 - `gax mail thread` subgroup (clone/pull/reply)
 - `gax mail list` subgroup (clone/pull/plan/apply/checkout) - replaces relabel
-- `gax mail label clone [FILE]` - Clone labels to `.label.mail.gax` file
-- `gax mail filter clone [FILE]` - Clone filters to `.filter.mail.gax` file
+- `gax mail label clone [FILE]` - Clone labels to `.label.mail.gax.md` file
+- `gax mail filter clone [FILE]` - Clone filters to `.filter.mail.gax.md` file
 - `gax mail label` moved under mail
 - `gax mail filter` moved under mail
 - Frontmatter format for labels and filters files (header separated by `---`)
-- Support for `.gax.yaml` header detection in unified pull
+- Support for `.gax.md.yaml` header detection in unified pull
 - `gax man` now shows positional arguments in command signatures
 - `make readme` target to auto-generate README from `gax man`
 
 ### Changed
 - `gax/relabel` type renamed to `gax/list`
 - Labels/filters now use frontmatter format with `---` separator
-- Labels default file: `labels.yaml` → `label.mail.gax`
-- Filters default file: `filters.yaml` → `filter.mail.gax`
+- Labels default file: `labels.yaml` → `label.mail.gax.md`
+- Filters default file: `filters.yaml` → `filter.mail.gax.md`
 - OAuth scope: `documents.readonly` → `documents` (enables doc import)
 - Default mail list limit: 100 → 20
 - CLI consistency: all clone commands now use FILE/FOLDER as positional arg
@@ -43,8 +43,8 @@
 All resource commands follow this pattern:
 
 ```
-clone [TARGET]     → create new .gax file
-pull FILE          → update existing .gax file
+clone [TARGET]     → create new .gax.md file
+pull FILE          → update existing .gax.md file
 plan FILE          → generate changeset (IaC resources)
 apply PLAN         → apply changeset upstream
 ```
@@ -73,7 +73,7 @@ gax mail list checkout Inbox/ -q "in:inbox"
 
 # Mail threads
 gax mail thread clone THREAD_ID
-gax mail thread pull thread.mail.gax
+gax mail thread pull thread.mail.gax.md
 
 # Docs
 gax doc clone URL

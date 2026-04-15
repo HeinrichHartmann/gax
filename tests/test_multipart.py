@@ -336,7 +336,11 @@ class TestRoundTrip:
         """Simple content should round-trip correctly."""
         original = [
             Section(
-                headers={"title": "Test", "source": "https://example.com", "section": 1},
+                headers={
+                    "title": "Test",
+                    "source": "https://example.com",
+                    "section": 1,
+                },
                 content="Hello world",
             )
         ]
@@ -364,7 +368,9 @@ class TestRoundTrip:
         """Multiple sections should round-trip correctly."""
         original = [
             Section(headers={"title": "Doc", "section": 1}, content="First"),
-            Section(headers={"title": "Doc", "section": 2}, content="Second\n---\nDanger"),
+            Section(
+                headers={"title": "Doc", "section": 2}, content="Second\n---\nDanger"
+            ),
             Section(headers={"title": "Doc", "section": 3}, content="Third"),
         ]
 

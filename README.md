@@ -8,7 +8,7 @@ Designed to be equally usable by humans and AI agents, gax facilitates AI-enhanc
 
 - **Native abstractions** - Work at the same level as upstream: email threads (not individual messages), documents and sheets with tabs (not pages or cells)
 - **Multipart YAML format** - Each file has a YAML header with provenance metadata, followed by plain text content (Markdown, CSV, TSV). Multi-section resources (threads, tabs) use concatenated YAML+content blocks
-- **Clone/Pull pattern** - Like git: `clone` creates a local file, `pull` updates it. The file extension encodes the resource type, so `gax pull *.gax` always works
+- **Clone/Pull pattern** - Like git: `clone` creates a local file, `pull` updates it. The file extension encodes the resource type, so `gax pull *.gax.md` always works
 - **Plan/Apply pattern** - Bulk operations (labels, filters, mail triage) go through a two-phase workflow: `plan` generates a changeset for review, `apply` executes it. No `-y` prompts needed
 - **Bi-directional sync** - Sheets and Docs support `push` for edits. Labels, filters, and mail lists use declarative plan/apply
 
@@ -52,20 +52,20 @@ COMMANDS
     gax cal calendars
         List available calendars.
     gax cal checkout [CALENDAR]
-        Checkout events as individual .cal.gax files into a folder.
-        -o, --output: Output folder (default: calendar.cal.gax.d)
+        Checkout events as individual .cal.gax.md files into a folder.
+        -o, --output: Output folder (default: calendar.cal.gax.md.d)
         --days, -d: Number of days (default: 7)
         --from: Start date (YYYY-MM-DD)
         --to: End date (YYYY-MM-DD)
     gax cal clone [CALENDAR]
-        Clone events to a .cal.gax file.
-        -o, --output: Output file (default: calendar.cal.gax)
+        Clone events to a .cal.gax.md file.
+        -o, --output: Output file (default: calendar.cal.gax.md)
         --days, -d: Number of days (default: 7)
         --from: Start date (YYYY-MM-DD)
         --to: End date (YYYY-MM-DD)
         -v, --verbose: Include event descriptions
     gax cal event clone [ID_OR_URL]
-        Clone an event to a local .cal.gax file.
+        Clone an event to a local .cal.gax.md file.
         --cal, -c: Calendar ID (default: primary)
         -o, --output: Output file path
     gax cal event delete [FILE_PATH]
@@ -112,22 +112,22 @@ COMMANDS
   doc:
     gax doc checkout [URL]
         Checkout all tabs to individual files in a folder.
-        -o, --output: Output folder (default: <title>.doc.gax.d)
+        -o, --output: Output folder (default: <title>.doc.gax.md.d)
     gax doc clone [URL]
-        Clone a Google Doc to a local .doc.gax file.
-        --output, -o: Output file (default: <title>.doc.gax)
+        Clone a Google Doc to a local .doc.gax.md file.
+        --output, -o: Output file (default: <title>.doc.gax.md)
         --with-comments: Include document comments as separate sections
     gax doc pull [FILE]
         Pull latest content from Google Docs to local file.
         --with-comments: Include document comments as separate sections
     gax doc tab clone [URL] [TAB_NAME]
-        Clone a single tab to a .tab.gax file.
-        --output, -o: Output file (default: <tab>.tab.gax)
+        Clone a single tab to a .tab.gax.md file.
+        --output, -o: Output file (default: <tab>.tab.gax.md)
     gax doc tab diff [FILE]
         Show diff between local file and remote tab.
     gax doc tab import [URL] [FILE]
         Import a markdown file as a new tab in a document.
-        --output, -o: Output tracking file (default: <filename>.tab.gax)
+        --output, -o: Output tracking file (default: <filename>.tab.gax.md)
     gax doc tab list [URL]
         List tabs in a document (TSV output).
     gax doc tab pull [FILE]
@@ -139,13 +139,13 @@ COMMANDS
   draft:
     gax draft clone [DRAFT_ID_OR_URL]
         Clone an existing draft from Gmail.
-        --output, -o: Output file (default: <subject>.draft.gax)
+        --output, -o: Output file (default: <subject>.draft.gax.md)
     gax draft list
         List Gmail drafts (TSV output).
         --limit: Maximum results (default: 100)
     gax draft new
         Create a new local draft file.
-        --output, -o: Output file (default: <subject>.draft.gax)
+        --output, -o: Output file (default: <subject>.draft.gax.md)
         --to: Recipient email address
         --subject: Email subject
     gax draft pull [FILE]
@@ -169,8 +169,8 @@ COMMANDS
     gax form apply [PLAN_FILE]
         Apply form changes from a plan file.
     gax form clone [URL]
-        Clone a Google Form to a local .form.gax file.
-        --output, -o: Output file (default: <title>.form.gax)
+        Clone a Google Form to a local .form.gax.md file.
+        --output, -o: Output file (default: <title>.form.gax.md)
         --format, -f: Content format: md (readable, default) or yaml (round-trip safe)
     gax form plan [FILE]
         Generate a plan from edited form file.
@@ -180,19 +180,19 @@ COMMANDS
 
   mail:
     gax mail clone [THREAD_ID_OR_URL]
-        Clone a single email thread to a local .mail.gax file.
+        Clone a single email thread to a local .mail.gax.md file.
         --output, -o: Output file
     gax mail pull [PATH]
-        Pull latest messages for .mail.gax file(s).
+        Pull latest messages for .mail.gax.md file(s).
     gax mail reply [FILE_OR_URL]
         Create a reply draft from a thread.
-        --output, -o: Output file (default: Re_<subject>.draft.gax)
+        --output, -o: Output file (default: Re_<subject>.draft.gax.md)
 
   mail-filter:
     gax mail-filter apply [PLAN_FILE]
         Apply filter changes from plan file.
     gax mail-filter clone
-        Clone Gmail filters to a .gax file.
+        Clone Gmail filters to a .gax.md file.
         -o, --output: Output file (default: mail-filters.gax)
     gax mail-filter list
         List Gmail filters (TSV output).
@@ -206,7 +206,7 @@ COMMANDS
     gax mail-label apply [PLAN_FILE]
         Apply label changes from plan file.
     gax mail-label clone
-        Clone Gmail labels to a .gax file.
+        Clone Gmail labels to a .gax.md file.
         -o, --output: Output file (default: mail-labels.gax)
         --all: Include system labels (read-only)
     gax mail-label list
@@ -229,34 +229,34 @@ COMMANDS
         --limit: Maximum threads (default: 50)
     gax mailbox fetch
         Fetch full threads matching query into a folder.
-        -o, --output: Output folder (default: mailbox.gax.d)
+        -o, --output: Output folder (default: mailbox.gax.md.d)
         -q, --query: Search query (default: in:inbox)
         --limit: Maximum threads (default: 50)
     gax mailbox plan [FILE]
         Generate plan from edited list file.
         -o, --output: Output file (default: mailbox.plan.yaml)
     gax mailbox pull [FILE]
-        Update a .gax file by re-fetching from Gmail.
+        Update a .gax.md file by re-fetching from Gmail.
 
   pull:
     gax pull [FILES]
-        Pull/update .gax file(s) or .gax.d folder(s) from their sources.
+        Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
         -v, --verbose: Verbose output
 
   sheet:
     gax sheet checkout [URL]
         Checkout all tabs to individual files in a folder.
-        -o, --output: Output folder (default: <title>.sheet.gax.d)
+        -o, --output: Output folder (default: <title>.sheet.gax.md.d)
         -f, --format: Output format: md, csv, tsv, psv, json, jsonl
     gax sheet clone [URL]
-        Clone all tabs from a spreadsheet to a multipart .sheet.gax file.
-        --output, -o: Output file (default: <title>.sheet.gax)
+        Clone all tabs from a spreadsheet to a multipart .sheet.gax.md file.
+        --output, -o: Output file (default: <title>.sheet.gax.md)
         -f, --format: Output format: md, csv, tsv, psv, json, jsonl
     gax sheet pull [FILE]
         Pull latest data for all tabs in a multipart file.
     gax sheet tab clone [URL] [TAB_NAME]
-        Clone a single tab to a .sheet.gax file.
-        --output, -o: Output file (default: <tab>.sheet.gax)
+        Clone a single tab to a .sheet.gax.md file.
+        --output, -o: Output file (default: <tab>.sheet.gax.md)
         -f, --format: Output format: md, csv, tsv, psv, json, jsonl
     gax sheet tab list [URL]
         List tabs in a spreadsheet (TSV output).
@@ -268,16 +268,16 @@ COMMANDS
         -y, --yes: Skip confirmation prompt
 
 FILES
-    .sheet.gax         Spreadsheet data (single or multipart)
-    .doc.gax           Document (all tabs, multipart)
-    .tab.gax           Single document tab
-    .mail.gax          Email thread
-    .draft.gax         Email draft
-    .cal.gax           Calendar event
-    .form.gax          Google Form definition
-    .gax               Mail list (TSV with YAML header)
-    .label.mail.gax    Gmail labels state
-    .filter.mail.gax   Gmail filters state
+    .sheet.gax.md         Spreadsheet data (single or multipart)
+    .doc.gax.md           Document (all tabs, multipart)
+    .tab.gax.md           Single document tab
+    .mail.gax.md          Email thread
+    .draft.gax.md         Email draft
+    .cal.gax.md           Calendar event
+    .form.gax.md          Google Form definition
+    .gax.md               Mail list (TSV with YAML header)
+    .label.mail.gax.md    Gmail labels state
+    .filter.mail.gax.md   Gmail filters state
 
     ~/.config/gax/credentials.json    OAuth credentials
     ~/.config/gax/token.json          Access token
@@ -289,7 +289,7 @@ SEE ALSO
 
 ## File Format
 
-Every `.gax` file is self-describing: a YAML header contains the resource type and source URL, followed by the content. This allows `gax pull FILE` to update any file without additional arguments.
+Every `.gax.md` file is self-describing: a YAML header contains the resource type and source URL, followed by the content. This allows `gax pull FILE` to update any file without additional arguments.
 
 ### Extension Convention
 
@@ -297,18 +297,18 @@ The file extension mirrors the command path:
 
 | Command | Extension | Notes |
 |---------|-----------|-------|
-| `gax mail` | `.mail.gax` | Individual thread |
-| `gax draft` | `.draft.gax` | Email draft |
-| `gax mailbox` | `.mailbox.gax` | Thread collection |
+| `gax mail` | `.mail.gax.md` | Individual thread |
+| `gax draft` | `.draft.gax.md` | Email draft |
+| `gax mailbox` | `.mailbox.gax.md` | Thread collection |
 | `gax mail-label` | `mail-labels.gax` | Gmail labels |
 | `gax mail-filter` | `mail-filters.gax` | Gmail filters |
-| `gax sheet` | `.sheet.gax` | Multipart spreadsheet |
-| `gax sheet tab` | `.tab.sheet.gax` | Individual tab |
-| `gax doc` | `.doc.gax` | Multipart document |
-| `gax doc tab` | `.tab.gax` | Individual doc tab |
-| `gax cal` | `.cal.gax` | Calendar event |
-| `gax form` | `.form.gax` | Google Form |
-| `gax contacts` | `.contacts.gax` or `.jsonl` | Contact list |
+| `gax sheet` | `.sheet.gax.md` | Multipart spreadsheet |
+| `gax sheet tab` | `.tab.sheet.gax.md` | Individual tab |
+| `gax doc` | `.doc.gax.md` | Multipart document |
+| `gax doc tab` | `.tab.gax.md` | Individual doc tab |
+| `gax cal` | `.cal.gax.md` | Calendar event |
+| `gax form` | `.form.gax.md` | Google Form |
+| `gax contacts` | `.contacts.gax.md` or `.jsonl` | Contact list |
 
 ### Single-Section Files
 
@@ -354,23 +354,23 @@ Date: 2026-03-22 11:30
 Thanks for the update!
 ```
 
-### Checkout Folders (`.gax.d` directories)
+### Checkout Folders (`.gax.md.d` directories)
 
 Checkout commands create folders with individual resource files plus shared metadata:
 
 ```
-Budget.sheet.gax.d/
-  .gax.yaml                  # Folder metadata (spreadsheet_id, url, format)
-  Summary.tab.sheet.gax      # Individual tab (full YAML header + content)
-  Expenses.tab.sheet.gax     # Individual tab (full YAML header + content)
+Budget.sheet.gax.md.d/
+  .gax.md.yaml                  # Folder metadata (spreadsheet_id, url, format)
+  Summary.tab.sheet.gax.md      # Individual tab (full YAML header + content)
+  Expenses.tab.sheet.gax.md     # Individual tab (full YAML header + content)
 ```
 
-Each file in a `.gax.d` folder is:
+Each file in a `.gax.md.d` folder is:
 - **Self-describing** - Contains full YAML headers for independent pulling
-- **Pullable** - Can be updated with `gax pull *.tab.sheet.gax`
-- **Named by command** - Extension matches the command path (e.g., `gax sheet tab` → `.tab.sheet.gax`)
+- **Pullable** - Can be updated with `gax pull *.tab.sheet.gax.md`
+- **Named by command** - Extension matches the command path (e.g., `gax sheet tab` → `.tab.sheet.gax.md`)
 
-The `.gax.yaml` file contains shared metadata (spreadsheet URL, format, etc.) for the entire checkout.
+The `.gax.md.yaml` file contains shared metadata (spreadsheet URL, format, etc.) for the entire checkout.
 
 ## License
 

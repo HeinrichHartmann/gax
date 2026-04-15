@@ -201,20 +201,29 @@ def _get_or_create_label(service, label_name: str, label_name_to_id: dict) -> st
     if "/" in label_name:
         parts = label_name.split("/")
         for i in range(len(parts) - 1):
-            parent = "/".join(parts[:i + 1])
+            parent = "/".join(parts[: i + 1])
             if parent not in label_name_to_id:
-                result = service.users().labels().create(
-                    userId="me",
-                    body={"name": parent, "labelListVisibility": "labelShow"}
-                ).execute()
+                result = (
+                    service.users()
+                    .labels()
+                    .create(
+                        userId="me",
+                        body={"name": parent, "labelListVisibility": "labelShow"},
+                    )
+                    .execute()
+                )
                 label_name_to_id[parent] = result["id"]
                 click.echo(f"Created label: {parent}")
 
     # Create the label
-    result = service.users().labels().create(
-        userId="me",
-        body={"name": label_name, "labelListVisibility": "labelShow"}
-    ).execute()
+    result = (
+        service.users()
+        .labels()
+        .create(
+            userId="me", body={"name": label_name, "labelListVisibility": "labelShow"}
+        )
+        .execute()
+    )
     label_name_to_id[label_name] = result["id"]
     click.echo(f"Created label: {label_name}")
     return result["id"]
@@ -229,7 +238,9 @@ def filter_list():
 
         # Get label mappings
         labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
+        label_id_to_name = {
+            lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])
+        }
 
         # Get filters
         result = service.users().settings().filters().list(userId="me").execute()
@@ -269,7 +280,9 @@ def filter_list():
                 actions.append(f"fwd:{action['forward']}")
             actions_str = ",".join(actions)
 
-            click.echo(f"{fid}\t{from_addr}\t{to_addr}\t{subject}\t{query}\t{labels_str}\t{actions_str}")
+            click.echo(
+                f"{fid}\t{from_addr}\t{to_addr}\t{subject}\t{query}\t{labels_str}\t{actions_str}"
+            )
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -279,12 +292,15 @@ def filter_list():
 def filter_pull_to_file(path) -> int:
     """Pull filters and write to file. Returns filter count."""
     from pathlib import Path
+
     creds = get_authenticated_credentials()
     service = build("gmail", "v1", credentials=creds)
 
     # Get label mappings
     labels_result = service.users().labels().list(userId="me").execute()
-    label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
+    label_id_to_name = {
+        lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])
+    }
 
     # Get filters
     result = service.users().settings().filters().list(userId="me").execute()
@@ -311,17 +327,26 @@ def filter_pull_to_file(path) -> int:
 
     with open(Path(path), "w") as f:
         f.write("---\n")
-        yaml.dump(header, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        yaml.dump(
+            header, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+        )
         f.write("---\n")
-        yaml.dump(filters, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        yaml.dump(
+            filters, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+        )
 
     return len(filters)
 
 
 @filter_group.command("clone")
-@click.option("-o", "--output", default="mail-filters.gax", help="Output file (default: mail-filters.gax)")
+@click.option(
+    "-o",
+    "--output",
+    default="mail-filters.gax.md",
+    help="Output file (default: mail-filters.gax.md)",
+)
 def filter_clone(output: str):
-    """Clone Gmail filters to a .gax file.
+    """Clone Gmail filters to a .gax.md file.
 
     Creates a state file with all filters and their settings.
     Edit this file and use 'plan' to preview changes, 'apply' to execute.
@@ -329,12 +354,15 @@ def filter_clone(output: str):
     \b
     Example:
         gax mail-filter clone
-        gax mail-filter clone -o myfilters.gax
+        gax mail-filter clone -o myfilters.gax.md
     """
     from pathlib import Path
+
     try:
         if Path(output).exists():
-            click.echo(f"Error: {output} already exists. Use 'pull' to update.", err=True)
+            click.echo(
+                f"Error: {output} already exists. Use 'pull' to update.", err=True
+            )
             sys.exit(1)
         count = filter_pull_to_file(output)
         click.echo(f"Cloned {count} filters to {output}")
@@ -427,44 +455,53 @@ def filter_plan(file: str, output: str):
 
         # Get label mappings for action comparison
         labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
+        label_id_to_name = {
+            lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])
+        }
 
         # Check for creates and updates
         for h, desired in desired_by_hash.items():
             if h not in current_by_hash:
                 # New filter
-                plan["create"].append({
-                    "name": desired.get("name", ""),
-                    "criteria": desired.get("criteria", {}),
-                    "action": desired.get("action", {}),
-                })
+                plan["create"].append(
+                    {
+                        "name": desired.get("name", ""),
+                        "criteria": desired.get("criteria", {}),
+                        "action": desired.get("action", {}),
+                    }
+                )
             else:
                 # Check if action changed
                 current = current_by_hash[h]
                 current_action = _api_to_yaml_action(
-                    current["api_filter"].get("action", {}),
-                    label_id_to_name
+                    current["api_filter"].get("action", {}), label_id_to_name
                 )
                 desired_action = desired.get("action", {})
 
                 if current_action != desired_action:
-                    plan["update"].append({
-                        "id": current["id"],
-                        "name": desired.get("name", ""),
-                        "criteria": desired.get("criteria", {}),
-                        "action": desired_action,
-                    })
+                    plan["update"].append(
+                        {
+                            "id": current["id"],
+                            "name": desired.get("name", ""),
+                            "criteria": desired.get("criteria", {}),
+                            "action": desired_action,
+                        }
+                    )
 
         # Check for deletes
         for h, current in current_by_hash.items():
             if h not in desired_by_hash:
-                plan["delete"].append({
-                    "id": current["id"],
-                    "criteria": current["criteria"],
-                })
+                plan["delete"].append(
+                    {
+                        "id": current["id"],
+                        "criteria": current["criteria"],
+                    }
+                )
 
         # Remove empty lists
-        plan = {k: v for k, v in plan.items() if v or k in ("type", "source", "generated")}
+        plan = {
+            k: v for k, v in plan.items() if v or k in ("type", "source", "generated")
+        }
 
         # Show summary
         has_changes = any(k in plan for k in ("create", "update", "delete"))
@@ -489,7 +526,9 @@ def filter_plan(file: str, output: str):
 
         # Write plan
         with open(output, "w") as f:
-            yaml.dump(plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            yaml.dump(
+                plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+            )
 
         click.echo(f"Wrote plan to {output}")
 
@@ -500,7 +539,7 @@ def filter_plan(file: str, output: str):
 
 @filter_group.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
-@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def filter_apply(plan_file: str, yes: bool):
     """Apply filter changes from plan file."""
     try:
@@ -537,7 +576,9 @@ def filter_apply(plan_file: str, yes: bool):
 
         # Get label mappings
         labels_result = service.users().labels().list(userId="me").execute()
-        label_name_to_id = {lbl["name"]: lbl["id"] for lbl in labels_result.get("labels", [])}
+        label_name_to_id = {
+            lbl["name"]: lbl["id"] for lbl in labels_result.get("labels", [])
+        }
 
         # Total operations: deletes + updates (delete+create) + creates
         total_ops = len(to_delete) + len(to_update) * 2 + len(to_create)
@@ -545,7 +586,9 @@ def filter_apply(plan_file: str, yes: bool):
         with operation("Applying filter changes", total=total_ops) as op:
             # 1. Delete (including updates - delete first, recreate later)
             for item in to_delete + to_update:
-                name = item.get("name") or _generate_filter_name(item.get("criteria", {}))
+                name = item.get("name") or _generate_filter_name(
+                    item.get("criteria", {})
+                )
                 logger.info(f"Deleting: {name}")
                 service.users().settings().filters().delete(
                     userId="me", id=item["id"]
@@ -554,12 +597,16 @@ def filter_apply(plan_file: str, yes: bool):
 
             # 2. Create (including recreate for updates)
             for item in to_create + to_update:
-                name = item.get("name") or _generate_filter_name(item.get("criteria", {}))
+                name = item.get("name") or _generate_filter_name(
+                    item.get("criteria", {})
+                )
                 action = "Creating" if item in to_create else "Recreating"
                 logger.info(f"{action}: {name}")
                 body = {
                     "criteria": _yaml_to_api_criteria(item.get("criteria", {})),
-                    "action": _yaml_to_api_action(item.get("action", {}), label_name_to_id, service),
+                    "action": _yaml_to_api_action(
+                        item.get("action", {}), label_name_to_id, service
+                    ),
                 }
                 service.users().settings().filters().create(
                     userId="me", body=body

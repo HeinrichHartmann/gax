@@ -29,11 +29,12 @@ from .gdrive import file as gdrive_file
 def main():
     """gax - Google Access CLI"""
     from . import ui
+
     ui.setup_logging()
 
 
 def _detect_file_type(file_path: Path) -> str | None:
-    """Detect .gax file type from YAML header or extension.
+    """Detect .gax.md file type from YAML header or extension.
 
     Supports:
     - Multipart format (---/---/---) with type in first section header
@@ -94,22 +95,22 @@ def _detect_file_type(file_path: Path) -> str | None:
 
     # Fallback to extension
     name = file_path.name.lower()
-    if name.endswith(".doc.gax") or name.endswith(".tab.gax"):
+    if name.endswith(".doc.gax.md") or name.endswith(".tab.gax.md"):
         return "gax/doc"
-    if name.endswith(".sheet.gax"):
+    if name.endswith(".sheet.gax.md"):
         return "gax/sheet"
-    if name.endswith(".mail.gax"):
+    if name.endswith(".mail.gax.md"):
         return "gax/mail"
-    if name.endswith(".draft.gax"):
+    if name.endswith(".draft.gax.md"):
         return "gax/draft"
-    if name.endswith(".cal.gax"):
+    if name.endswith(".cal.gax.md"):
         return "gax/cal"
-    if name.endswith(".form.gax"):
+    if name.endswith(".form.gax.md"):
         return "gax/form"
-    if ".contacts." in name or name.endswith(".contacts.gax"):
+    if ".contacts." in name or name.endswith(".contacts.gax.md"):
         return "gax/contacts"
-    # Mailbox/list files often don't have specific extension, just .gax
-    if name.endswith(".gax") or name.endswith(".mailbox.gax"):
+    # Mailbox/list files often don't have specific extension, just .gax.md
+    if name.endswith(".gax.md") or name.endswith(".mailbox.gax.md"):
         # Could be a mailbox file - check for query: field as last resort
         try:
             if "query:" in content:
@@ -171,30 +172,39 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
 
             # Run checkout to scratch dir
             from .gsheet.client import GSheetClient
+
             client = GSheetClient()
             info = client.get_spreadsheet_info(spreadsheet_id)
-            tabs = info['tabs']
+            tabs = info["tabs"]
 
             scratch_path.mkdir(parents=True, exist_ok=True)
 
             # Write metadata
             new_metadata = {
-                'type': 'gax/sheet-checkout',
-                'spreadsheet_id': spreadsheet_id,
-                'url': url,
-                'title': info['title'],
-                'format': fmt,
-                'checked_out': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "type": "gax/sheet-checkout",
+                "spreadsheet_id": spreadsheet_id,
+                "url": url,
+                "title": info["title"],
+                "format": fmt,
+                "checked_out": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
             }
-            with open(scratch_path / '.gax.yaml', 'w') as f:
-                yaml.dump(new_metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            with open(scratch_path / ".gax.yaml", "w") as f:
+                yaml.dump(
+                    new_metadata,
+                    f,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                )
 
             # Create tab files
             for tab_info in tabs:
-                tab_name = tab_info['title']
+                tab_name = tab_info["title"]
                 safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
                 safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-                file_name = f"{safe_tab_name}.tab.sheet.gax"
+                file_name = f"{safe_tab_name}.tab.sheet.gax.md"
 
                 df = client.read(spreadsheet_id, tab_name)
                 formatter = get_format(fmt)
@@ -217,6 +227,7 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
 
             # Run checkout to scratch dir
             from .gdoc import pull_doc, format_section
+
             sections = pull_doc(document_id, url)
 
             scratch_path.mkdir(parents=True, exist_ok=True)
@@ -227,10 +238,18 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
                 "document_id": document_id,
                 "url": url,
                 "title": sections[0].title if sections else metadata.get("title", ""),
-                "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "checked_out": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
             }
             with open(scratch_path / ".gax.yaml", "w") as f:
-                yaml.dump(new_metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                yaml.dump(
+                    new_metadata,
+                    f,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                )
 
             # Create tab files
             for section in sections:
@@ -239,7 +258,7 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
                 tab_name = section.section_title
                 safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
                 safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-                file_name = f"{safe_tab_name}.tab.gax"
+                file_name = f"{safe_tab_name}.tab.gax.md"
 
                 content = format_section(section)
                 (scratch_path / file_name).write_text(content, encoding="utf-8")
@@ -253,10 +272,14 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
         def filter_timestamps(lines: list[str]) -> list[str]:
             """Remove timestamp lines from YAML headers."""
             import re
+
             filtered = []
             for line in lines:
                 # Skip lines that are just timestamps
-                if re.match(r'^\s*(pulled|checked_out|time):\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$', line):
+                if re.match(
+                    r"^\s*(pulled|checked_out|time):\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$",
+                    line,
+                ):
                     continue
                 filtered.append(line)
             return filtered
@@ -269,8 +292,8 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
             import difflib
 
             try:
-                content1 = file1.read_text(encoding='utf-8').splitlines(keepends=True)
-                content2 = file2.read_text(encoding='utf-8').splitlines(keepends=True)
+                content1 = file1.read_text(encoding="utf-8").splitlines(keepends=True)
+                content2 = file2.read_text(encoding="utf-8").splitlines(keepends=True)
 
                 # Filter timestamps
                 filtered1 = filter_timestamps(content1)
@@ -281,9 +304,17 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
                     return None
 
                 # Count changes
-                diff = list(difflib.unified_diff(filtered1, filtered2, lineterm=''))
-                added = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
-                removed = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
+                diff = list(difflib.unified_diff(filtered1, filtered2, lineterm=""))
+                added = sum(
+                    1
+                    for line in diff
+                    if line.startswith("+") and not line.startswith("+++")
+                )
+                removed = sum(
+                    1
+                    for line in diff
+                    if line.startswith("-") and not line.startswith("---")
+                )
 
                 return (added, removed)
             except Exception:
@@ -365,11 +396,13 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
         return False, str(e)
 
 
-def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) -> tuple[bool, str]:
-    """Push a single .gax file. Returns (success, message).
+def _push_file(
+    file_path: Path, yes: bool = False, with_formulas: bool = False
+) -> tuple[bool, str]:
+    """Push a single .gax.md file. Returns (success, message).
 
     Args:
-        file_path: Path to the .gax file
+        file_path: Path to the .gax.md file
         yes: Skip confirmation prompts
         with_formulas: For sheets, interpret formulas
 
@@ -415,7 +448,9 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
 
                 local_section = sections[0]
                 source_url = local_section.headers.get("source", "")
-                tab_name = local_section.headers.get("tab", local_section.headers.get("section_title", ""))
+                tab_name = local_section.headers.get(
+                    "tab", local_section.headers.get("section_title", "")
+                )
 
                 if not source_url:
                     return False, "No source URL found"
@@ -428,16 +463,22 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
                 local_lines = local_section.content.splitlines(keepends=True)
                 remote_lines = remote_section.content.splitlines(keepends=True)
 
-                diff = list(difflib.unified_diff(
-                    remote_lines, local_lines,
-                    fromfile="remote", tofile="local", lineterm="",
-                ))
+                diff = list(
+                    difflib.unified_diff(
+                        remote_lines,
+                        local_lines,
+                        fromfile="remote",
+                        tofile="local",
+                        lineterm="",
+                    )
+                )
 
                 if not diff:
                     return True, "no changes"
 
                 # Check for unsupported features before confirming
                 from .md2docs import parse_markdown, check_unsupported
+
                 push_warnings = check_unsupported(parse_markdown(local_section.content))
 
                 if not yes:
@@ -452,14 +493,25 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
                     if not click.confirm("Push these changes?"):
                         return False, "cancelled"
 
-                content_to_push = native_md.inline_images_from_store(local_section.content)
+                content_to_push = native_md.inline_images_from_store(
+                    local_section.content
+                )
                 update_tab_content(document_id, tab_name, content_to_push)
                 return True, "pushed"
             else:
-                return False, "Multipart doc push not supported. Use 'gax doc tab push' for individual tabs."
+                return (
+                    False,
+                    "Multipart doc push not supported. Use 'gax doc tab push' for individual tabs.",
+                )
 
         elif file_type == "gax/draft":
-            from .draft import parse_draft, get_draft, create_draft, update_draft, format_draft
+            from .draft import (
+                parse_draft,
+                get_draft,
+                create_draft,
+                update_draft,
+                format_draft,
+            )
             import difflib
 
             content = file_path.read_text(encoding="utf-8")
@@ -482,7 +534,9 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
                 # Update local file with draft_id
                 config.draft_id = result["id"]
                 config.message_id = result.get("message", {}).get("id", "")
-                config.source = f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
+                config.source = (
+                    f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
+                )
                 config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 new_content = format_draft(config, body)
@@ -501,16 +555,23 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
                 local_lines = body.splitlines(keepends=True)
                 remote_lines = remote_body.splitlines(keepends=True)
 
-                diff = list(difflib.unified_diff(
-                    remote_lines, local_lines,
-                    fromfile="remote", tofile="local", lineterm="",
-                ))
+                diff = list(
+                    difflib.unified_diff(
+                        remote_lines,
+                        local_lines,
+                        fromfile="remote",
+                        tofile="local",
+                        lineterm="",
+                    )
+                )
 
                 header_changes = []
                 if config.to != remote_config.to:
                     header_changes.append(f"to: {remote_config.to} -> {config.to}")
                 if config.subject != remote_config.subject:
-                    header_changes.append(f"subject: {remote_config.subject} -> {config.subject}")
+                    header_changes.append(
+                        f"subject: {remote_config.subject} -> {config.subject}"
+                    )
 
                 if not diff and not header_changes:
                     return True, "no changes"
@@ -563,8 +624,12 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
 
                 # Update local file with new ID
                 local_event.id = result["id"]
-                local_event.source = f"https://calendar.google.com/calendar/event?eid={result['id']}"
-                local_event.synced = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                local_event.source = (
+                    f"https://calendar.google.com/calendar/event?eid={result['id']}"
+                )
+                local_event.synced = (
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                )
 
                 new_content = event_to_yaml(local_event)
                 file_path.write_text(new_content, encoding="utf-8")
@@ -576,18 +641,18 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
             from .gdrive import read_tracking_file, update_file, create_tracking_file
 
             tracking_data = read_tracking_file(file_path)
-            file_id = tracking_data.get('file_id')
+            file_id = tracking_data.get("file_id")
 
             if not file_id:
                 return False, "No file_id in tracking file"
 
-            # Find the actual file (tracking file without .gax suffix)
-            actual_file = file_path.with_suffix('')
+            # Find the actual file (tracking file without .gax.md suffix)
+            actual_file = file_path.with_suffix("")
             if not actual_file.exists():
-                # Try removing the .gax to find base file
+                # Try removing the .gax.md to find base file
                 name = file_path.name
-                if name.endswith('.gax'):
-                    base_name = name[:-4]  # Remove .gax
+                if name.endswith(".gax.md"):
+                    base_name = name[:-7]  # Remove .gax.md
                     actual_file = file_path.parent / base_name
                     if not actual_file.exists():
                         return False, f"Cannot find actual file for {file_path}"
@@ -604,7 +669,10 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
             return True, f"pushed to {metadata.get('webViewLink', file_id)}"
 
         elif file_type == "gax/sheet":
-            return False, "Multipart sheet push not supported. Use 'gax push <folder>.sheet.gax.d' or 'gax sheet tab push' for individual tabs."
+            return (
+                False,
+                "Multipart sheet push not supported. Use 'gax push <folder>.sheet.gax.md.d' or 'gax sheet tab push' for individual tabs.",
+            )
 
         else:
             return False, f"Push not supported for type: {file_type}"
@@ -613,7 +681,9 @@ def _push_file(file_path: Path, yes: bool = False, with_formulas: bool = False) 
         return False, str(e)
 
 
-def _push_folder(folder_path: Path, yes: bool = False, with_formulas: bool = False) -> tuple[bool, str]:
+def _push_folder(
+    folder_path: Path, yes: bool = False, with_formulas: bool = False
+) -> tuple[bool, str]:
     """Push a .gax.d folder. Returns (success, message).
 
     Args:
@@ -646,14 +716,15 @@ def _push_folder(folder_path: Path, yes: bool = False, with_formulas: bool = Fal
             from .gsheet.folder_push import push_folder
 
             success_result, message = push_folder(
-                folder_path,
-                with_formulas=with_formulas,
-                auto_approve=yes
+                folder_path, with_formulas=with_formulas, auto_approve=yes
             )
             return success_result, message
 
         elif checkout_type == "gax/doc-checkout":
-            return False, "Doc folder push not yet supported. Use 'gax doc tab push' for individual tabs."
+            return (
+                False,
+                "Doc folder push not yet supported. Use 'gax doc tab push' for individual tabs.",
+            )
 
         else:
             return False, f"Push not supported for checkout type: {checkout_type}"
@@ -663,7 +734,7 @@ def _push_folder(folder_path: Path, yes: bool = False, with_formulas: bool = Fal
 
 
 def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
-    """Pull a single .gax file. Returns (success, message)."""
+    """Pull a single .gax.md file. Returns (success, message)."""
     file_type = _detect_file_type(file_path)
 
     if not file_type:
@@ -673,11 +744,13 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
         # Handle labels and filters first (YAML-only, not multipart)
         if file_type == "gax/labels":
             from .label import label_pull_to_file
+
             count = label_pull_to_file(file_path)
             return True, f"{count} labels"
 
         if file_type == "gax/filters":
             from .filter import filter_pull_to_file
+
             count = filter_pull_to_file(file_path)
             return True, f"{count} filters"
         if file_type == "gax/doc":
@@ -716,7 +789,9 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             if not thread_id:
                 return False, "No thread_id found"
             new_sections = pull_thread(thread_id)
-            new_content = format_multipart([_mail_section_to_multipart(s) for s in new_sections])
+            new_content = format_multipart(
+                [_mail_section_to_multipart(s) for s in new_sections]
+            )
             file_path.write_text(new_content, encoding="utf-8")
             return True, f"{len(new_sections)} messages"
 
@@ -743,8 +818,12 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             creds = get_authenticated_credentials()
             service = build("gmail", "v1", credentials=creds)
             labels_result = service.users().labels().list(userId="me").execute()
-            label_id_to_name = {lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])}
-            thread_data = _relabel_fetch_threads(service, header["query"], header["limit"], label_id_to_name)
+            label_id_to_name = {
+                lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])
+            }
+            thread_data = _relabel_fetch_threads(
+                service, header["query"], header["limit"], label_id_to_name
+            )
             _write_gax_file(file_path, header["query"], header["limit"], thread_data)
             return True, f"{len(thread_data)} threads"
 
@@ -759,7 +838,11 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
                 return False, "No event ID found"
             creds = get_authenticated_credentials()
             service = build("calendar", "v3", credentials=creds)
-            api_event = service.events().get(calendarId=local_event.calendar, eventId=local_event.id).execute()
+            api_event = (
+                service.events()
+                .get(calendarId=local_event.calendar, eventId=local_event.id)
+                .execute()
+            )
             updated_event = api_event_to_dataclass(api_event, local_event.calendar, "")
             new_content = event_to_yaml(updated_event)
             file_path.write_text(new_content, encoding="utf-8")
@@ -772,8 +855,11 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             time_min, time_max, calendar, verbose = _parse_cal_list_file(file_path)
             _header = _yaml.safe_load(file_path.read_text().split("---", 2)[1])
             count = _clone_events_to_file(
-                file_path, time_min=time_min, time_max=time_max,
-                calendar=calendar, verbose=verbose,
+                file_path,
+                time_min=time_min,
+                time_max=time_max,
+                calendar=calendar,
+                verbose=verbose,
                 days=_header.get("days"),
                 date_from=str(_header["from"]) if "from" in _header else None,
                 date_to=str(_header["to"]) if "to" in _header else None,
@@ -781,7 +867,13 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             return True, f"{count} events"
 
         elif file_type == "gax/form":
-            from .form import parse_form_file, get_form, form_to_yaml, form_to_markdown, extract_form_id
+            from .form import (
+                parse_form_file,
+                get_form,
+                form_to_yaml,
+                form_to_markdown,
+                extract_form_id,
+            )
 
             header = parse_form_file(file_path)
             form_id = header.get("id")
@@ -791,7 +883,9 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
                     form_id = extract_form_id(source)
                 else:
                     return False, "No form ID found"
-            source_url = header.get("source", f"https://docs.google.com/forms/d/{form_id}/edit")
+            source_url = header.get(
+                "source", f"https://docs.google.com/forms/d/{form_id}/edit"
+            )
             content_type = header.get("content-type", "text/markdown")
             form_data = get_form(form_id)
             if content_type == "application/yaml":
@@ -800,7 +894,9 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
                 content = form_to_markdown(form_data, source_url)
             file_path.write_text(content, encoding="utf-8")
             items = form_data.get("items", [])
-            questions = sum(1 for i in items if "questionItem" in i or "questionGroupItem" in i)
+            questions = sum(
+                1 for i in items if "questionItem" in i or "questionGroupItem" in i
+            )
             return True, f"{questions} questions"
 
         elif file_type == "gax/contacts":
@@ -830,27 +926,27 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
 @click.argument("files", nargs=-1, required=True)
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
 def unified_pull(files: tuple[str, ...], verbose: bool):
-    """Pull/update .gax file(s) or .gax.d folder(s) from their sources.
+    """Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
 
     Automatically detects file type from YAML header and calls
-    the appropriate pull command. For .gax.d folders, performs
+    the appropriate pull command. For .gax.md.d folders, performs
     a checkout to a scratch directory, shows diff, and prompts
     for confirmation.
 
     \b
     Examples:
-        gax pull file.doc.gax           # Pull a single doc
-        gax pull *.gax                   # Pull all .gax files
-        gax pull inbox.gax notes.doc.gax # Pull multiple files
-        gax pull folder.doc.gax.d/       # Pull a checkout folder
+        gax pull file.doc.gax.md           # Pull a single doc
+        gax pull *.gax.md                   # Pull all .gax.md files
+        gax pull inbox.gax.md notes.doc.gax.md # Pull multiple files
+        gax pull folder.doc.gax.md.d/       # Pull a checkout folder
     """
     # Expand globs and '.'
     all_paths: list[Path] = []
     for pattern in files:
         if pattern == ".":
-            # Current directory - find all .gax files and .gax.d folders
-            all_paths.extend(Path(".").glob("*.gax"))
-            all_paths.extend(Path(".").glob("*.gax.d"))
+            # Current directory - find all .gax.md files and .gax.md.d folders
+            all_paths.extend(Path(".").glob("*.gax.md"))
+            all_paths.extend(Path(".").glob("*.gax.md.d"))
         elif "*" in pattern or "?" in pattern:
             # Glob pattern
             all_paths.extend(Path(p) for p in glob.glob(pattern))
@@ -858,7 +954,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
             all_paths.append(Path(pattern))
 
     if not all_paths:
-        click.echo("No .gax files or .gax.d folders found.", err=True)
+        click.echo("No .gax.md files or .gax.md.d folders found.", err=True)
         sys.exit(1)
 
     import logging
@@ -877,8 +973,8 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
 
             # Check if it's a folder
             if path.is_dir():
-                if not path.name.endswith(".gax.d"):
-                    results.append((path, False, "not a .gax.d folder"))
+                if not path.name.endswith(".gax.md.d"):
+                    results.append((path, False, "not a .gax.md.d folder"))
                     op.advance()
                     continue
 
@@ -886,15 +982,19 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
                 ok, message = _pull_folder(path, verbose)
                 results.append((path, ok, message))
             else:
-                # Check if this is a file with a .gax tracking file (Drive file)
-                if not path.name.endswith('.gax'):
-                    tracking_path = path.with_suffix(path.suffix + '.gax')
+                # Check if this is a file with a .gax.md tracking file (Drive file)
+                if not path.name.endswith(".gax.md"):
+                    tracking_path = path.with_suffix(path.suffix + ".gax.md")
                     if tracking_path.exists():
-                        from .gdrive import download_file, read_tracking_file, create_tracking_file
+                        from .gdrive import (
+                            download_file,
+                            read_tracking_file,
+                            create_tracking_file,
+                        )
 
                         try:
                             tracking_data = read_tracking_file(tracking_path)
-                            file_id = tracking_data.get('file_id')
+                            file_id = tracking_data.get("file_id")
 
                             if file_id:
                                 logger.info(f"Pulling Drive file {path}")
@@ -908,7 +1008,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
                             op.advance()
                             continue
 
-                # Pull regular .gax file
+                # Pull regular .gax.md file
                 file_type = _detect_file_type(path)
                 type_str = f"({file_type})" if file_type else "(unknown)"
                 logger.info(f"Pulling {path} {type_str}")
@@ -944,26 +1044,26 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
 @click.option("--with-formulas", is_flag=True, help="Interpret formulas (sheets only)")
 def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
-    """Push local .gax file(s) or .gax.d folder(s) to their sources.
+    """Push local .gax.md file(s) or .gax.md.d folder(s) to their sources.
 
     Automatically detects file type from YAML header and calls
     the appropriate push command. Shows diff/confirmation unless -y is passed.
 
     \b
     Supported types:
-        .sheet.gax       Single sheet tab
-        .sheet.gax.d/    Sheet checkout folder
-        .tab.gax         Single doc tab
-        .draft.gax       Gmail draft
-        .cal.gax         Calendar event
-        <file>.gax       Drive file tracking
+        .sheet.gax.md       Single sheet tab
+        .sheet.gax.md.d/    Sheet checkout folder
+        .tab.gax.md         Single doc tab
+        .draft.gax.md       Gmail draft
+        .cal.gax.md         Calendar event
+        <file>.gax.md       Drive file tracking
 
     \b
     Examples:
-        gax push file.sheet.gax          # Push a single sheet tab
-        gax push *.draft.gax             # Push all drafts
-        gax push Budget.sheet.gax.d/     # Push a checkout folder
-        gax push event.cal.gax -y        # Push without confirmation
+        gax push file.sheet.gax.md          # Push a single sheet tab
+        gax push *.draft.gax.md             # Push all drafts
+        gax push Budget.sheet.gax.md.d/     # Push a checkout folder
+        gax push event.cal.gax.md -y        # Push without confirmation
     """
     # Expand globs
     all_paths: list[Path] = []
@@ -974,7 +1074,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
             all_paths.append(Path(pattern))
 
     if not all_paths:
-        click.echo("No .gax files or .gax.d folders found.", err=True)
+        click.echo("No .gax.md files or .gax.md.d folders found.", err=True)
         sys.exit(1)
 
     success_count = 0
@@ -985,8 +1085,10 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
 
         # Check if it's a folder
         if path.is_dir():
-            if not path.name.endswith(".gax.d"):
-                click.echo(f"Skipping directory: {path} (not a .gax.d folder)", err=True)
+            if not path.name.endswith(".gax.md.d"):
+                click.echo(
+                    f"Skipping directory: {path} (not a .gax.md.d folder)", err=True
+                )
                 continue
 
             # Push folder
@@ -1000,20 +1102,26 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
                 if message != "cancelled":
                     click.echo(f"Error: {path}: {message}", err=True)
         else:
-            # Check if this is a non-.gax file with a .gax tracking file (Drive file)
-            if not path.name.endswith('.gax'):
-                tracking_path = path.with_suffix(path.suffix + '.gax')
+            # Check if this is a non-.gax.md file with a .gax.md tracking file (Drive file)
+            if not path.name.endswith(".gax.md"):
+                tracking_path = path.with_suffix(path.suffix + ".gax.md")
                 if tracking_path.exists():
                     # This is a tracked Drive file - push using the tracking file
-                    from .gdrive import read_tracking_file, update_file, create_tracking_file
+                    from .gdrive import (
+                        read_tracking_file,
+                        update_file,
+                        create_tracking_file,
+                    )
 
                     try:
                         tracking_data = read_tracking_file(tracking_path)
-                        file_id = tracking_data.get('file_id')
+                        file_id = tracking_data.get("file_id")
 
                         if file_id:
                             if not yes:
-                                click.echo(f"Update Drive file: {tracking_data.get('name')}")
+                                click.echo(
+                                    f"Update Drive file: {tracking_data.get('name')}"
+                                )
                                 click.echo(f"From local file: {path}")
                                 if not click.confirm("Proceed?"):
                                     click.echo("Cancelled.")
@@ -1029,7 +1137,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
                         click.echo(f"Error pushing Drive file {path}: {e}", err=True)
                         continue
 
-            # Push regular .gax file
+            # Push regular .gax.md file
             file_type = _detect_file_type(path)
             type_str = f"({file_type})" if file_type else "(unknown)"
 
@@ -1052,7 +1160,14 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
 @main.command()
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file")
-@click.option("-f", "--format", "fmt", type=click.Choice(["md", "yaml"]), default="md", help="Output format (for forms)")
+@click.option(
+    "-f",
+    "--format",
+    "fmt",
+    type=click.Choice(["md", "yaml"]),
+    default="md",
+    help="Output format (for forms)",
+)
 @click.pass_context
 def clone(ctx, url: str, output: Path | None, fmt: str):
     """Clone a Google resource from URL.
@@ -1081,7 +1196,11 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
 
     # Calendar events
     elif re.search(r"calendar\.google\.com/calendar/", url):
-        ctx.invoke(cal_cli.commands["event"].commands["clone"], id_or_url=url, output_path=output)
+        ctx.invoke(
+            cal_cli.commands["event"].commands["clone"],
+            id_or_url=url,
+            output_path=output,
+        )
 
     else:
         click.echo(f"Unrecognized URL: {url}", err=True)
@@ -1132,7 +1251,9 @@ def checkout(ctx, url: str, output: Path | None, fmt: str):
         sys.exit(1)
 
 
-def _collect_commands(cmd: click.Command, prefix: str = "", override_name: str | None = None) -> list[tuple[str, str, list, list]]:
+def _collect_commands(
+    cmd: click.Command, prefix: str = "", override_name: str | None = None
+) -> list[tuple[str, str, list, list]]:
     """Collect all commands as (full_name, help, arguments, options) tuples."""
     results = []
     # Use override_name if provided (for renamed commands), otherwise use cmd.name
@@ -1204,26 +1325,28 @@ def man(ctx):
             for opt, opt_help in options:
                 lines.append(f"        {opt}: {opt_help}")
 
-    lines.extend([
-        "",
-        "FILES",
-        "    .sheet.gax         Spreadsheet data (single or multipart)",
-        "    .doc.gax           Document (all tabs, multipart)",
-        "    .tab.gax           Single document tab",
-        "    .mail.gax          Email thread",
-        "    .draft.gax         Email draft",
-        "    .cal.gax           Calendar event",
-        "    .form.gax          Google Form definition",
-        "    .gax               Mail list (TSV with YAML header)",
-        "    .label.mail.gax    Gmail labels state",
-        "    .filter.mail.gax   Gmail filters state",
-        "",
-        "    ~/.config/gax/credentials.json    OAuth credentials",
-        "    ~/.config/gax/token.json          Access token",
-        "",
-        "SEE ALSO",
-        "    gax <command> --help",
-    ])
+    lines.extend(
+        [
+            "",
+            "FILES",
+            "    .sheet.gax.md         Spreadsheet data (single or multipart)",
+            "    .doc.gax.md           Document (all tabs, multipart)",
+            "    .tab.gax.md           Single document tab",
+            "    .mail.gax.md          Email thread",
+            "    .draft.gax.md         Email draft",
+            "    .cal.gax.md           Calendar event",
+            "    .form.gax.md          Google Form definition",
+            "    .gax.md               Mail list (TSV with YAML header)",
+            "    .label.mail.gax.md    Gmail labels state",
+            "    .filter.mail.gax.md   Gmail filters state",
+            "",
+            "    ~/.config/gax/credentials.json    OAuth credentials",
+            "    ~/.config/gax/token.json          Access token",
+            "",
+            "SEE ALSO",
+            "    gax <command> --help",
+        ]
+    )
 
     click.echo("\n".join(lines))
 
@@ -1313,13 +1436,17 @@ def sheet():
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (default: <title>.sheet.gax)",
+    help="Output file (default: <title>.sheet.gax.md)",
 )
 @click.option(
-    "-f", "--format", "fmt", default="md", help="Output format: md, csv, tsv, psv, json, jsonl"
+    "-f",
+    "--format",
+    "fmt",
+    default="md",
+    help="Output format: md, csv, tsv, psv, json, jsonl",
 )
 def sheet_clone(url: str, output: Path | None, fmt: str):
-    """Clone all tabs from a spreadsheet to a multipart .sheet.gax file."""
+    """Clone all tabs from a spreadsheet to a multipart .sheet.gax.md file."""
     try:
         spreadsheet_id = _extract_spreadsheet_id(url)
         click.echo(f"Fetching spreadsheet: {spreadsheet_id}")
@@ -1331,7 +1458,7 @@ def sheet_clone(url: str, output: Path | None, fmt: str):
         else:
             safe_name = re.sub(r'[<>:"/\\|?*]', "-", title)
             safe_name = re.sub(r"\s+", "_", safe_name)
-            file_path = Path(f"{safe_name}.sheet.gax")
+            file_path = Path(f"{safe_name}.sheet.gax.md")
 
         if file_path.exists():
             click.echo(f"Error: File already exists: {file_path}", err=True)
@@ -1354,6 +1481,7 @@ def sheet_clone(url: str, output: Path | None, fmt: str):
 def sheet_pull(file: Path):
     """Pull latest data for all tabs in a multipart file or checkout folder."""
     from .ui import success as ui_success
+
     try:
         if file.is_dir():
             ok, message = _pull_folder(file)
@@ -1373,17 +1501,22 @@ def sheet_pull(file: Path):
 @sheet.command("checkout")
 @click.argument("url")
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(path_type=Path),
-    help="Output folder (default: <title>.sheet.gax.d)"
+    help="Output folder (default: <title>.sheet.gax.md.d)",
 )
 @click.option(
-    "-f", "--format", "fmt", default="md", help="Output format: md, csv, tsv, psv, json, jsonl"
+    "-f",
+    "--format",
+    "fmt",
+    default="md",
+    help="Output format: md, csv, tsv, psv, json, jsonl",
 )
 def sheet_checkout(url: str, output: Path | None, fmt: str):
     """Checkout all tabs to individual files in a folder.
 
-    Creates a folder with individual .sheet.gax files for each tab.
+    Creates a folder with individual .tab.sheet.gax.md files for each tab.
     Incremental: skips existing files.
 
     \b
@@ -1397,8 +1530,8 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
         client = GSheetClient()
         info = client.get_spreadsheet_info(spreadsheet_id)
 
-        title = info['title']
-        tabs = info['tabs']
+        title = info["title"]
+        tabs = info["tabs"]
 
         # Determine output folder
         if output:
@@ -1406,24 +1539,31 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
         else:
             safe_name = re.sub(r'[<>:"/\\|?*]', "-", title)
             safe_name = re.sub(r"\s+", "_", safe_name)
-            folder = Path(f"{safe_name}.sheet.gax.d")
+            folder = Path(f"{safe_name}.sheet.gax.md.d")
 
         # Create folder
         folder.mkdir(parents=True, exist_ok=True)
 
         # Write .gax.yaml metadata file
         import yaml
+
         metadata = {
-            'type': 'gax/sheet-checkout',
-            'spreadsheet_id': spreadsheet_id,
-            'url': url,
-            'title': title,
-            'format': fmt,
-            'checked_out': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "type": "gax/sheet-checkout",
+            "spreadsheet_id": spreadsheet_id,
+            "url": url,
+            "title": title,
+            "format": fmt,
+            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        metadata_path = folder / '.gax.yaml'
-        with open(metadata_path, 'w') as f:
-            yaml.dump(metadata, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        metadata_path = folder / ".gax.yaml"
+        with open(metadata_path, "w") as f:
+            yaml.dump(
+                metadata,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
 
         import logging
         from .ui import operation, success as ui_success
@@ -1437,12 +1577,12 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
 
         with operation("Checking out tabs", total=len(tabs)) as op:
             for tab_info in tabs:
-                tab_name = tab_info['title']
+                tab_name = tab_info["title"]
 
                 # Generate filename
                 safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
                 safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-                file_path = folder / f"{safe_tab_name}.tab.sheet.gax"
+                file_path = folder / f"{safe_tab_name}.tab.sheet.gax.md"
 
                 # Skip if exists
                 if file_path.exists():
@@ -1487,7 +1627,9 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
 
 @sheet.command("push")
 @click.argument("folder", type=click.Path(exists=True, path_type=Path))
-@click.option("--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))")
+@click.option(
+    "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
+)
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
 def sheet_push(folder: Path, with_formulas: bool, yes: bool):
     """Push all tabs in a checkout folder to Google Sheets.
@@ -1496,14 +1638,16 @@ def sheet_push(folder: Path, with_formulas: bool, yes: bool):
 
     \b
     Examples:
-        gax sheet push Budget.sheet.gax.d
-        gax sheet push Budget.sheet.gax.d -y
-        gax sheet push Budget.sheet.gax.d --with-formulas
+        gax sheet push Budget.sheet.gax.md.d
+        gax sheet push Budget.sheet.gax.md.d -y
+        gax sheet push Budget.sheet.gax.md.d --with-formulas
     """
     from .gsheet.folder_push import push_folder
 
     try:
-        success, message = push_folder(folder, with_formulas=with_formulas, auto_approve=yes)
+        success, message = push_folder(
+            folder, with_formulas=with_formulas, auto_approve=yes
+        )
         if success:
             click.echo(message)
         else:
@@ -1520,24 +1664,30 @@ def sheet_plan(folder):
     """Show what changes would be pushed to Google Sheets.
 
     Similar to 'terraform plan' - previews changes without applying them.
-    If no folder is specified, looks for a .sheet.gax.d folder in the current directory.
+    If no folder is specified, looks for a .sheet.gax.md.d folder in the current directory.
 
     \b
     Examples:
         gax sheet plan
-        gax sheet plan Budget.sheet.gax.d
+        gax sheet plan Budget.sheet.gax.md.d
     """
     from .gsheet.folder_push import create_push_plan
 
     try:
-        # If no folder specified, find .sheet.gax.d in current directory
+        # If no folder specified, find .sheet.gax.md.d in current directory
         if folder is None:
-            candidates = list(Path.cwd().glob("*.sheet.gax.d"))
+            candidates = list(Path.cwd().glob("*.sheet.gax.md.d"))
             if len(candidates) == 0:
-                click.echo("Error: No .sheet.gax.d folder found in current directory", err=True)
+                click.echo(
+                    "Error: No .sheet.gax.md.d folder found in current directory",
+                    err=True,
+                )
                 sys.exit(1)
             elif len(candidates) > 1:
-                click.echo("Error: Multiple .sheet.gax.d folders found. Please specify one:", err=True)
+                click.echo(
+                    "Error: Multiple .sheet.gax.md.d folders found. Please specify one:",
+                    err=True,
+                )
                 for c in candidates:
                     click.echo(f"  {c.name}")
                 sys.exit(1)
@@ -1548,7 +1698,9 @@ def sheet_plan(folder):
         click.echo("\n" + plan.format_summary())
 
         if plan.has_changes:
-            click.echo("\nRun 'gax sheet apply' to push these changes, or 'gax sheet push <folder>' with confirmation.")
+            click.echo(
+                "\nRun 'gax sheet apply' to push these changes, or 'gax sheet push <folder>' with confirmation."
+            )
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -1557,31 +1709,39 @@ def sheet_plan(folder):
 
 @sheet.command("apply")
 @click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
-@click.option("--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))")
-@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+@click.option(
+    "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
+)
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def sheet_apply(folder, with_formulas: bool, yes: bool):
     """Apply planned changes by pushing to Google Sheets.
 
     Similar to 'terraform apply' - shows plan and applies changes with confirmation.
-    If no folder is specified, looks for a .sheet.gax.d folder in the current directory.
+    If no folder is specified, looks for a .sheet.gax.md.d folder in the current directory.
 
     \b
     Examples:
         gax sheet apply
-        gax sheet apply Budget.sheet.gax.d
-        gax sheet apply Budget.sheet.gax.d --with-formulas
+        gax sheet apply Budget.sheet.gax.md.d
+        gax sheet apply Budget.sheet.gax.md.d --with-formulas
     """
     from .gsheet.folder_push import create_push_plan, apply_push_plan
 
     try:
-        # If no folder specified, find .sheet.gax.d in current directory
+        # If no folder specified, find .sheet.gax.md.d in current directory
         if folder is None:
-            candidates = list(Path.cwd().glob("*.sheet.gax.d"))
+            candidates = list(Path.cwd().glob("*.sheet.gax.md.d"))
             if len(candidates) == 0:
-                click.echo("Error: No .sheet.gax.d folder found in current directory", err=True)
+                click.echo(
+                    "Error: No .sheet.gax.md.d folder found in current directory",
+                    err=True,
+                )
                 sys.exit(1)
             elif len(candidates) > 1:
-                click.echo("Error: Multiple .sheet.gax.d folders found. Please specify one:", err=True)
+                click.echo(
+                    "Error: Multiple .sheet.gax.md.d folders found. Please specify one:",
+                    err=True,
+                )
                 for c in candidates:
                     click.echo(f"  {c.name}")
                 sys.exit(1)
@@ -1641,13 +1801,17 @@ def tab_list(url: str):
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (default: <tab>.sheet.gax)",
+    help="Output file (default: <tab>.sheet.gax.md)",
 )
 @click.option(
-    "-f", "--format", "fmt", default="md", help="Output format: md, csv, tsv, psv, json, jsonl"
+    "-f",
+    "--format",
+    "fmt",
+    default="md",
+    help="Output format: md, csv, tsv, psv, json, jsonl",
 )
 def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
-    """Clone a single tab to a .sheet.gax file."""
+    """Clone a single tab to a .sheet.gax.md file."""
     try:
         spreadsheet_id = _extract_spreadsheet_id(url)
         click.echo(f"Fetching: {tab_name}")
@@ -1672,7 +1836,7 @@ def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
         else:
             safe_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
             safe_name = re.sub(r"\s+", "_", safe_name)
-            file_path = Path(f"{safe_name}.sheet.gax")
+            file_path = Path(f"{safe_name}.sheet.gax.md")
 
         if file_path.exists():
             click.echo(f"Error: File already exists: {file_path}", err=True)
@@ -1711,6 +1875,7 @@ def tab_push(file: Path, with_formulas: bool, yes: bool):
         # Preview: count rows in local file
         from .frontmatter import parse_file
         from .formats import get_format
+
         config, data = parse_file(file)
         fmt = get_format(config.format)
         df = fmt.read(data)
@@ -1733,7 +1898,9 @@ main.add_command(doc)
 main.add_command(mail_group, name="mail")  # Flattened from mail.thread (ADR 020)
 main.add_command(mailbox)  # Flattened from mail.list (ADR 020)
 main.add_command(mail_label, name="mail-label")  # Flattened from mail.label (ADR 020)
-main.add_command(mail_filter, name="mail-filter")  # Flattened from mail.filter (ADR 020)
+main.add_command(
+    mail_filter, name="mail-filter"
+)  # Flattened from mail.filter (ADR 020)
 main.add_command(cal_cli, name="cal")
 main.add_command(form)
 main.add_command(draft)  # Flattened from mail.draft (ADR 020)

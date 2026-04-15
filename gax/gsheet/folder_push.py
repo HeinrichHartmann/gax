@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class TabChange(NamedTuple):
     """Represents changes to a single tab"""
+
     tab_name: str
     file_path: Path
     local_rows: int
@@ -27,6 +28,7 @@ class TabChange(NamedTuple):
 
 class PushPlan(NamedTuple):
     """Plan for pushing folder changes to Google Sheets"""
+
     folder_path: Path
     spreadsheet_id: str
     url: str
@@ -47,9 +49,13 @@ class PushPlan(NamedTuple):
 
         for change in self.changes:
             if change.is_new:
-                lines.append(f"  + {change.tab_name} (new tab, {change.local_rows} rows)")
+                lines.append(
+                    f"  + {change.tab_name} (new tab, {change.local_rows} rows)"
+                )
             elif change.is_deleted:
-                lines.append(f"  - {change.tab_name} (deleted, {change.remote_rows} rows)")
+                lines.append(
+                    f"  - {change.tab_name} (deleted, {change.remote_rows} rows)"
+                )
             else:
                 lines.append(
                     f"  M {change.tab_name} "
@@ -62,7 +68,9 @@ class PushPlan(NamedTuple):
         return "\n".join(lines)
 
 
-def _compare_dataframes(local_df: pd.DataFrame, remote_df: pd.DataFrame) -> tuple[int, int]:
+def _compare_dataframes(
+    local_df: pd.DataFrame, remote_df: pd.DataFrame
+) -> tuple[int, int]:
     """Compare two dataframes and return (added_lines, removed_lines)"""
     import difflib
 
@@ -82,21 +90,27 @@ def _compare_dataframes(local_df: pd.DataFrame, remote_df: pd.DataFrame) -> tupl
         remote_lines.append(",".join(str(v) for v in row.values))
 
     # Compute diff
-    diff = list(difflib.unified_diff(remote_lines, local_lines, lineterm=''))
-    added = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
-    removed = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
+    diff = list(difflib.unified_diff(remote_lines, local_lines, lineterm=""))
+    added = sum(
+        1 for line in diff if line.startswith("+") and not line.startswith("+++")
+    )
+    removed = sum(
+        1 for line in diff if line.startswith("-") and not line.startswith("---")
+    )
 
     return (added, removed)
 
 
-def create_push_plan(folder_path: Path, client: Optional[GSheetClient] = None) -> PushPlan:
+def create_push_plan(
+    folder_path: Path, client: Optional[GSheetClient] = None
+) -> PushPlan:
     """Create a plan for pushing folder changes to Google Sheets.
 
     Analyzes local tab files and compares them with remote Google Sheets data
     to determine what changes would be pushed.
 
     Args:
-        folder_path: Path to .sheet.gax.d folder
+        folder_path: Path to .sheet.gax.md.d folder
         client: Optional GSheetClient instance
 
     Returns:
@@ -126,13 +140,13 @@ def create_push_plan(folder_path: Path, client: Optional[GSheetClient] = None) -
         raise ValueError("Missing spreadsheet_id or url in .gax.yaml")
 
     # Find all tab files
-    tab_files = sorted(folder_path.glob("*.tab.sheet.gax"))
+    tab_files = sorted(folder_path.glob("*.tab.sheet.gax.md"))
     if not tab_files:
-        raise ValueError(f"No .tab.sheet.gax files found in {folder_path}")
+        raise ValueError(f"No .tab.sheet.gax.md files found in {folder_path}")
 
     # Get remote tabs to detect deletions
     info = client.get_spreadsheet_info(spreadsheet_id)
-    remote_tabs = {tab['title'] for tab in info['tabs']}
+    remote_tabs = {tab["title"] for tab in info["tabs"]}
 
     changes = []
     local_tabs = set()
@@ -149,15 +163,17 @@ def create_push_plan(folder_path: Path, client: Optional[GSheetClient] = None) -
             remote_df = client.read(spreadsheet_id, config.tab)
         except Exception:
             # Tab doesn't exist remotely (new tab)
-            changes.append(TabChange(
-                tab_name=config.tab,
-                file_path=tab_file,
-                local_rows=len(local_df),
-                remote_rows=0,
-                added_lines=len(local_df) + 1,  # +1 for header
-                removed_lines=0,
-                is_new=True
-            ))
+            changes.append(
+                TabChange(
+                    tab_name=config.tab,
+                    file_path=tab_file,
+                    local_rows=len(local_df),
+                    remote_rows=0,
+                    added_lines=len(local_df) + 1,  # +1 for header
+                    removed_lines=0,
+                    is_new=True,
+                )
+            )
             continue
 
         # Compare dataframes
@@ -165,14 +181,16 @@ def create_push_plan(folder_path: Path, client: Optional[GSheetClient] = None) -
 
         # Only include if there are actual changes
         if added > 0 or removed > 0:
-            changes.append(TabChange(
-                tab_name=config.tab,
-                file_path=tab_file,
-                local_rows=len(local_df),
-                remote_rows=len(remote_df),
-                added_lines=added,
-                removed_lines=removed
-            ))
+            changes.append(
+                TabChange(
+                    tab_name=config.tab,
+                    file_path=tab_file,
+                    local_rows=len(local_df),
+                    remote_rows=len(remote_df),
+                    added_lines=added,
+                    removed_lines=removed,
+                )
+            )
 
     # Detect deleted tabs (exist remotely but not locally)
     deleted_tabs = remote_tabs - local_tabs
@@ -183,21 +201,20 @@ def create_push_plan(folder_path: Path, client: Optional[GSheetClient] = None) -
         except Exception:
             remote_rows = 0
 
-        changes.append(TabChange(
-            tab_name=tab_name,
-            file_path=Path(""),  # No local file
-            local_rows=0,
-            remote_rows=remote_rows,
-            added_lines=0,
-            removed_lines=remote_rows + 1,  # +1 for header
-            is_deleted=True
-        ))
+        changes.append(
+            TabChange(
+                tab_name=tab_name,
+                file_path=Path(""),  # No local file
+                local_rows=0,
+                remote_rows=remote_rows,
+                added_lines=0,
+                removed_lines=remote_rows + 1,  # +1 for header
+                is_deleted=True,
+            )
+        )
 
     return PushPlan(
-        folder_path=folder_path,
-        spreadsheet_id=spreadsheet_id,
-        url=url,
-        changes=changes
+        folder_path=folder_path, spreadsheet_id=spreadsheet_id, url=url, changes=changes
     )
 
 
@@ -244,7 +261,7 @@ def apply_push_plan(
                     config.tab,
                     local_df,
                     with_formulas=with_formulas,
-                    create_if_missing=change.is_new
+                    create_if_missing=change.is_new,
                 )
                 total_rows += rows
 
@@ -257,14 +274,14 @@ def push_folder(
     folder_path: Path,
     client: Optional[GSheetClient] = None,
     with_formulas: bool = False,
-    auto_approve: bool = False
+    auto_approve: bool = False,
 ) -> tuple:
     """Push all tabs in a folder to Google Sheets with confirmation.
 
     This is a convenience function that combines create_push_plan and apply_push_plan.
 
     Args:
-        folder_path: Path to .sheet.gax.d folder
+        folder_path: Path to .sheet.gax.md.d folder
         client: Optional GSheetClient instance
         with_formulas: Whether to interpret formulas
         auto_approve: Skip confirmation prompt

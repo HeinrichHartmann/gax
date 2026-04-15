@@ -135,6 +135,7 @@ def setup_logging():
 
 # Explicit output functions (always print)
 
+
 def echo(msg: str) -> None:
     """Standard output."""
     console.print(msg)

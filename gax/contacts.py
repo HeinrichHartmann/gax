@@ -40,9 +40,7 @@ def get_contact_groups(*, service=None) -> dict[str, str]:
 
     while True:
         result = (
-            service.contactGroups()
-            .list(pageSize=1000, pageToken=page_token)
-            .execute()
+            service.contactGroups().list(pageSize=1000, pageToken=page_token).execute()
         )
         for group in result.get("contactGroups", []):
             # Skip system groups like "myContacts", "starred"
@@ -113,7 +111,9 @@ def normalize_contact(api_contact: dict, groups: dict[str, str]) -> dict:
     # Extract labels from memberships (user-defined groups only)
     labels = []
     for m in memberships:
-        group_ref = m.get("contactGroupMembership", {}).get("contactGroupResourceName", "")
+        group_ref = m.get("contactGroupMembership", {}).get(
+            "contactGroupResourceName", ""
+        )
         if group_ref in groups:
             labels.append(groups[group_ref])
 
@@ -141,7 +141,9 @@ def contacts_to_jsonl(contacts: list[dict], groups: dict[str, str]) -> str:
     normalized = []
     with operation("Normalizing contacts", total=len(contacts)) as op:
         for c in contacts:
-            logger.info(f"Processing: {c.get('names', [{}])[0].get('displayName', '(unnamed)')}")
+            logger.info(
+                f"Processing: {c.get('names', [{}])[0].get('displayName', '(unnamed)')}"
+            )
             normalized.append(normalize_contact(c, groups))
             op.advance()
     # Sort by name for consistent output
@@ -154,7 +156,9 @@ def contacts_to_markdown(contacts: list[dict], groups: dict[str, str]) -> str:
     normalized = []
     with operation("Normalizing contacts", total=len(contacts)) as op:
         for c in contacts:
-            logger.info(f"Processing: {c.get('names', [{}])[0].get('displayName', '(unnamed)')}")
+            logger.info(
+                f"Processing: {c.get('names', [{}])[0].get('displayName', '(unnamed)')}"
+            )
             normalized.append(normalize_contact(c, groups))
             op.advance()
     # Sort by name
@@ -241,7 +245,7 @@ def parse_contacts_jsonl(file_path: Path) -> list[dict]:
     if content.startswith("---"):
         end = content.find("\n---\n", 4)
         if end != -1:
-            content = content[end + 5:]
+            content = content[end + 5 :]
 
     contacts = []
     for line in content.strip().split("\n"):
@@ -391,13 +395,28 @@ def contact_differs(local: dict, remote: dict) -> bool:
     """Check if local contact differs from remote."""
     # Compare relevant fields
     fields = [
-        "name", "givenName", "familyName", "email", "phone",
-        "organization", "title", "department", "address",
-        "birthday", "notes", "nickname", "website", "labels"
+        "name",
+        "givenName",
+        "familyName",
+        "email",
+        "phone",
+        "organization",
+        "title",
+        "department",
+        "address",
+        "birthday",
+        "notes",
+        "nickname",
+        "website",
+        "labels",
     ]
     for field in fields:
-        local_val = local.get(field, "" if field not in ("email", "phone", "labels") else [])
-        remote_val = remote.get(field, "" if field not in ("email", "phone", "labels") else [])
+        local_val = local.get(
+            field, "" if field not in ("email", "phone", "labels") else []
+        )
+        remote_val = remote.get(
+            field, "" if field not in ("email", "phone", "labels") else []
+        )
         # Normalize lists for comparison
         if isinstance(local_val, list) and isinstance(remote_val, list):
             if sorted(local_val) != sorted(remote_val):
@@ -411,13 +430,28 @@ def get_contact_diff(local: dict, remote: dict) -> dict:
     """Get fields that differ between local and remote."""
     diff = {}
     fields = [
-        "name", "givenName", "familyName", "email", "phone",
-        "organization", "title", "department", "address",
-        "birthday", "notes", "nickname", "website", "labels"
+        "name",
+        "givenName",
+        "familyName",
+        "email",
+        "phone",
+        "organization",
+        "title",
+        "department",
+        "address",
+        "birthday",
+        "notes",
+        "nickname",
+        "website",
+        "labels",
     ]
     for field in fields:
-        local_val = local.get(field, "" if field not in ("email", "phone", "labels") else [])
-        remote_val = remote.get(field, "" if field not in ("email", "phone", "labels") else [])
+        local_val = local.get(
+            field, "" if field not in ("email", "phone", "labels") else []
+        )
+        remote_val = remote.get(
+            field, "" if field not in ("email", "phone", "labels") else []
+        )
         if isinstance(local_val, list) and isinstance(remote_val, list):
             if sorted(local_val) != sorted(remote_val):
                 diff[field] = {"from": remote_val, "to": local_val}
@@ -432,10 +466,12 @@ def local_to_api_contact(contact: dict, groups_by_name: dict[str, str]) -> dict:
 
     # Names
     if contact.get("name") or contact.get("givenName") or contact.get("familyName"):
-        api_contact["names"] = [{
-            "givenName": contact.get("givenName", ""),
-            "familyName": contact.get("familyName", ""),
-        }]
+        api_contact["names"] = [
+            {
+                "givenName": contact.get("givenName", ""),
+                "familyName": contact.get("familyName", ""),
+            }
+        ]
 
     # Email addresses
     if contact.get("email"):
@@ -447,11 +483,13 @@ def local_to_api_contact(contact: dict, groups_by_name: dict[str, str]) -> dict:
 
     # Organization
     if contact.get("organization") or contact.get("title") or contact.get("department"):
-        api_contact["organizations"] = [{
-            "name": contact.get("organization", ""),
-            "title": contact.get("title", ""),
-            "department": contact.get("department", ""),
-        }]
+        api_contact["organizations"] = [
+            {
+                "name": contact.get("organization", ""),
+                "title": contact.get("title", ""),
+                "department": contact.get("department", ""),
+            }
+        ]
 
     # Address
     if contact.get("address"):
@@ -494,11 +532,13 @@ def local_to_api_contact(contact: dict, groups_by_name: dict[str, str]) -> dict:
         memberships = []
         for label in contact["labels"]:
             if label in groups_by_name:
-                memberships.append({
-                    "contactGroupMembership": {
-                        "contactGroupResourceName": groups_by_name[label]
+                memberships.append(
+                    {
+                        "contactGroupMembership": {
+                            "contactGroupResourceName": groups_by_name[label]
+                        }
                     }
-                })
+                )
         if memberships:
             api_contact["memberships"] = memberships
 
@@ -530,32 +570,38 @@ def generate_plan(
 
     # Creates
     for contact in creates:
-        plan["changes"].append({
-            "action": "create",
-            "contact": contact,
-        })
+        plan["changes"].append(
+            {
+                "action": "create",
+                "contact": contact,
+            }
+        )
 
     # Updates
     for contact in updates:
         resource_name = contact["resourceName"]
         remote = remote_by_id.get(resource_name, {})
         diff = get_contact_diff(contact, remote)
-        plan["changes"].append({
-            "action": "update",
-            "resourceName": resource_name,
-            "name": contact.get("name", ""),
-            "diff": diff,
-            "contact": contact,
-        })
+        plan["changes"].append(
+            {
+                "action": "update",
+                "resourceName": resource_name,
+                "name": contact.get("name", ""),
+                "diff": diff,
+                "contact": contact,
+            }
+        )
 
     # Deletes
     for resource_name in deletes:
         remote = remote_by_id.get(resource_name, {})
-        plan["changes"].append({
-            "action": "delete",
-            "resourceName": resource_name,
-            "name": remote.get("name", ""),
-        })
+        plan["changes"].append(
+            {
+                "action": "delete",
+                "resourceName": resource_name,
+                "name": remote.get("name", ""),
+            }
+        )
 
     return plan
 
@@ -576,14 +622,14 @@ def format_plan_summary(plan: dict) -> str:
             contact = change["contact"]
             name = contact.get("name", "(unnamed)")
             emails = ", ".join(contact.get("email", []))
-            lines.append(f"  + Create: \"{name}\" <{emails}>")
+            lines.append(f'  + Create: "{name}" <{emails}>')
         elif action == "update":
             name = change.get("name", "(unnamed)")
             diff_fields = list(change.get("diff", {}).keys())
-            lines.append(f"  ~ Update: \"{name}\" - {', '.join(diff_fields)} changed")
+            lines.append(f'  ~ Update: "{name}" - {", ".join(diff_fields)} changed')
         elif action == "delete":
             name = change.get("name", "(unnamed)")
-            lines.append(f"  - Delete: \"{name}\"")
+            lines.append(f'  - Delete: "{name}"')
 
     return "\n".join(lines)
 
@@ -591,7 +637,8 @@ def format_plan_summary(plan: dict) -> str:
 @contacts.command("plan")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(path_type=Path),
     help="Output plan file (default: <file>.plan.yaml)",
 )
@@ -622,9 +669,11 @@ def plan(file: Path, output: Path | None):
         click.echo("")
         click.echo(format_plan_summary(change_plan))
 
-        if change_plan["summary"]["create"] == 0 and \
-           change_plan["summary"]["update"] == 0 and \
-           change_plan["summary"]["delete"] == 0:
+        if (
+            change_plan["summary"]["create"] == 0
+            and change_plan["summary"]["update"] == 0
+            and change_plan["summary"]["delete"] == 0
+        ):
             click.echo("\nNo changes to apply.")
             return
 
@@ -643,7 +692,7 @@ def plan(file: Path, output: Path | None):
 
 @contacts.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True, path_type=Path))
-@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def apply(plan_file: Path, yes: bool):
     """Apply a contacts plan to Google.
 
@@ -700,10 +749,14 @@ def apply(plan_file: Path, yes: bool):
                         api_contact = local_to_api_contact(contact, groups_by_name)
 
                         # Get current etag for update
-                        current = service.people().get(
-                            resourceName=resource_name,
-                            personFields=ALL_PERSON_FIELDS,
-                        ).execute()
+                        current = (
+                            service.people()
+                            .get(
+                                resourceName=resource_name,
+                                personFields=ALL_PERSON_FIELDS,
+                            )
+                            .execute()
+                        )
                         etag = current.get("etag", "")
 
                         # Build update mask from diff
@@ -750,7 +803,9 @@ def apply(plan_file: Path, yes: bool):
                         click.echo(f"  - Deleted: {name}")
 
                 except Exception as e:
-                    errors.append(f"{action} {change.get('name', change.get('resourceName', '?'))}: {e}")
+                    errors.append(
+                        f"{action} {change.get('name', change.get('resourceName', '?'))}: {e}"
+                    )
 
                 op.advance()
 

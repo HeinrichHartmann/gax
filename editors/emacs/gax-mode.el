@@ -129,16 +129,16 @@ Returns the MIME type string or nil if not found."
 (add-hook 'gax-mode-hook #'gax--setup-body-mode)
 
 ;; Auto-mode registration
-(add-to-list 'auto-mode-alist '("\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.mail\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.sheet\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.doc\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.draft\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.cal\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.tab\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.form\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.label\\.mail\\.gax\\'" . gax-mode))
-(add-to-list 'auto-mode-alist '("\\.filter\\.mail\\.gax\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.mail\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.sheet\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.doc\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.draft\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.cal\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.tab\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.form\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.label\\.mail\\.gax\\.md\\'" . gax-mode))
+(add-to-list 'auto-mode-alist '("\\.filter\\.mail\\.gax\\.md\\'" . gax-mode))
 
 (provide 'gax-mode)
 ;;; gax-mode.el ends here

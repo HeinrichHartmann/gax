@@ -1,6 +1,6 @@
 """Gmail draft management for gax.
 
-Implements push/pull for email drafts as markdown files (.draft.gax).
+Implements push/pull for email drafts as markdown files (.draft.gax.md).
 See ADR 006 for design details.
 """
 
@@ -42,7 +42,7 @@ class DraftConfig:
 
 
 def parse_draft(content: str) -> tuple[DraftConfig, str]:
-    """Parse a .draft.gax file into config and body.
+    """Parse a .draft.gax.md file into config and body.
 
     Returns:
         Tuple of (DraftConfig, body_content)
@@ -71,7 +71,7 @@ def parse_draft(content: str) -> tuple[DraftConfig, str]:
 
 
 def format_draft(config: DraftConfig, body: str) -> str:
-    """Format a draft config and body as .draft.gax content."""
+    """Format a draft config and body as .draft.gax.md content."""
     headers: dict[str, Any] = {"type": "gax/draft"}
 
     # Add headers in consistent order
@@ -163,7 +163,9 @@ def create_draft(config: DraftConfig, body: str, *, service=None) -> dict:
     )
 
 
-def update_draft(draft_id: str, config: DraftConfig, body: str, *, service=None) -> dict:
+def update_draft(
+    draft_id: str, config: DraftConfig, body: str, *, service=None
+) -> dict:
     """Update an existing draft in Gmail.
 
     Returns:
@@ -250,7 +252,9 @@ def _extract_body(payload: dict) -> str:
             if part.get("mimeType") == "text/plain":
                 if "data" in part.get("body", {}):
                     data = part["body"]["data"]
-                    return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+                    return base64.urlsafe_b64decode(data).decode(
+                        "utf-8", errors="replace"
+                    )
         # Fallback: recurse into parts
         for part in parts:
             result = _extract_body(part)
@@ -372,20 +376,20 @@ def draft():
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (default: <subject>.draft.gax)",
+    help="Output file (default: <subject>.draft.gax.md)",
 )
 @click.option("--to", "to_addr", default="", help="Recipient email address")
 @click.option("--subject", default="", help="Email subject")
 def draft_new(output: Optional[Path], to_addr: str, subject: str):
     """Create a new local draft file.
 
-    Creates a .draft.gax file that can be edited and pushed to Gmail.
+    Creates a .draft.gax.md file that can be edited and pushed to Gmail.
 
     Examples:
 
         gax mail draft new
         gax mail draft new --to alice@example.com --subject "Hello"
-        gax mail draft new -o my_draft.draft.gax
+        gax mail draft new -o my_draft.draft.gax.md
     """
     # Prompt for required fields if not provided
     if not to_addr:
@@ -409,7 +413,7 @@ def draft_new(output: Optional[Path], to_addr: str, subject: str):
         # Generate filename from subject
         safe_subject = re.sub(r'[<>:"/\\|?*]', "-", subject)
         safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-        file_path = Path(f"{safe_subject}.draft.gax")
+        file_path = Path(f"{safe_subject}.draft.gax.md")
 
     if file_path.exists():
         error(f"File already exists: {file_path}")
@@ -426,7 +430,7 @@ def draft_new(output: Optional[Path], to_addr: str, subject: str):
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (default: <subject>.draft.gax)",
+    help="Output file (default: <subject>.draft.gax.md)",
 )
 def draft_clone(draft_id_or_url: str, output: Optional[Path]):
     """Clone an existing draft from Gmail.
@@ -435,7 +439,7 @@ def draft_clone(draft_id_or_url: str, output: Optional[Path]):
 
         gax mail draft clone r-1234567890123456789
         gax mail draft clone "https://mail.google.com/mail/u/0/#drafts/..."
-        gax mail draft clone r-1234567890 -o my_draft.draft.gax
+        gax mail draft clone r-1234567890 -o my_draft.draft.gax.md
     """
     try:
         draft_id = extract_draft_id(draft_id_or_url)
@@ -450,7 +454,7 @@ def draft_clone(draft_id_or_url: str, output: Optional[Path]):
             # Generate filename from subject
             safe_subject = re.sub(r'[<>:"/\\|?*]', "-", config.subject or "untitled")
             safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-            file_path = Path(f"{safe_subject}.draft.gax")
+            file_path = Path(f"{safe_subject}.draft.gax.md")
 
         if file_path.exists():
             error(f"File already exists: {file_path}")
@@ -516,8 +520,8 @@ def draft_push(file: Path, yes: bool):
 
     Examples:
 
-        gax mail draft push my_draft.draft.gax
-        gax mail draft push my_draft.draft.gax -y
+        gax mail draft push my_draft.draft.gax.md
+        gax mail draft push my_draft.draft.gax.md -y
     """
     try:
         content = file.read_text(encoding="utf-8")
@@ -542,7 +546,9 @@ def draft_push(file: Path, yes: bool):
             # Update local file with draft_id
             config.draft_id = result["id"]
             config.message_id = result.get("message", {}).get("id", "")
-            config.source = f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
+            config.source = (
+                f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
+            )
             config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             new_content = format_draft(config, body)
@@ -558,7 +564,9 @@ def draft_push(file: Path, yes: bool):
             except Exception as e:
                 if "404" in str(e) or "not found" in str(e).lower():
                     error(f"Draft {config.draft_id} no longer exists in Gmail.")
-                    error("Clear draft_id in the file and push again to create a new draft.")
+                    error(
+                        "Clear draft_id in the file and push again to create a new draft."
+                    )
                     sys.exit(1)
                 raise
 
@@ -631,11 +639,11 @@ def draft_push(file: Path, yes: bool):
 def draft_pull(file: Path):
     """Pull latest content from Gmail draft.
 
-    Updates the local .draft.gax file with the remote draft content.
+    Updates the local .draft.gax.md file with the remote draft content.
 
     Example:
 
-        gax mail draft pull my_draft.draft.gax
+        gax mail draft pull my_draft.draft.gax.md
     """
     try:
         content = file.read_text(encoding="utf-8")

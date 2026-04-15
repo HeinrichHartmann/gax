@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 import yaml
@@ -73,11 +73,13 @@ def list_calendars(*, service=None) -> list[dict]:
     calendars = []
 
     for cal in result.get("items", []):
-        calendars.append({
-            "id": cal["id"],
-            "name": cal.get("summary", cal["id"]),
-            "primary": cal.get("primary", False),
-        })
+        calendars.append(
+            {
+                "id": cal["id"],
+                "name": cal.get("summary", cal["id"]),
+                "primary": cal.get("primary", False),
+            }
+        )
 
     return calendars
 
@@ -112,15 +114,19 @@ def list_events(
     page_token = None
 
     while True:
-        result = service.events().list(
-            calendarId=calendar_id,
-            timeMin=time_min.isoformat(),
-            timeMax=time_max.isoformat(),
-            singleEvents=True,
-            orderBy="startTime",
-            maxResults=2500,
-            pageToken=page_token,
-        ).execute()
+        result = (
+            service.events()
+            .list(
+                calendarId=calendar_id,
+                timeMin=time_min.isoformat(),
+                timeMax=time_max.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=2500,
+                pageToken=page_token,
+            )
+            .execute()
+        )
 
         for event in result.get("items", []):
             event["_calendar_name"] = cal_name
@@ -148,10 +154,14 @@ def get_event(event_id: str, calendar_id: str = "primary", *, service=None) -> d
     if service is None:
         service = get_calendar_service()
 
-    return service.events().get(
-        calendarId=calendar_id,
-        eventId=event_id,
-    ).execute()
+    return (
+        service.events()
+        .get(
+            calendarId=calendar_id,
+            eventId=event_id,
+        )
+        .execute()
+    )
 
 
 def create_event(event: CalendarEvent, *, service=None) -> dict:
@@ -169,10 +179,14 @@ def create_event(event: CalendarEvent, *, service=None) -> dict:
 
     body = _event_to_api_body(event)
 
-    return service.events().insert(
-        calendarId=event.calendar or "primary",
-        body=body,
-    ).execute()
+    return (
+        service.events()
+        .insert(
+            calendarId=event.calendar or "primary",
+            body=body,
+        )
+        .execute()
+    )
 
 
 def update_event(event: CalendarEvent, *, service=None) -> dict:
@@ -190,11 +204,15 @@ def update_event(event: CalendarEvent, *, service=None) -> dict:
 
     body = _event_to_api_body(event)
 
-    return service.events().update(
-        calendarId=event.calendar or "primary",
-        eventId=event.id,
-        body=body,
-    ).execute()
+    return (
+        service.events()
+        .update(
+            calendarId=event.calendar or "primary",
+            eventId=event.id,
+            body=body,
+        )
+        .execute()
+    )
 
 
 def delete_event(
@@ -219,9 +237,9 @@ def delete_event(
     ).execute()
 
 
-def _event_to_api_body(event: CalendarEvent) -> dict:
+def _event_to_api_body(event: CalendarEvent) -> dict[str, Any]:
     """Convert CalendarEvent to API request body."""
-    body = {
+    body: dict[str, Any] = {
         "summary": event.title,
         "status": event.status,
     }
@@ -437,7 +455,7 @@ def format_events_tsv(events: list[dict], include_desc: bool = False) -> str:
 
 
 # =============================================================================
-# Event file format (.cal.gax)
+# Event file format (.cal.gax.md)
 # =============================================================================
 
 
@@ -478,7 +496,11 @@ def event_to_yaml(event: CalendarEvent) -> str:
     if event.description:
         data["description"] = event.description
 
-    return "---\n" + yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False) + "---\n"
+    return (
+        "---\n"
+        + yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        + "---\n"
+    )
 
 
 def yaml_to_event(content: str) -> CalendarEvent:
@@ -545,7 +567,9 @@ def api_event_to_dataclass(
         for ep in entry_points:
             if ep.get("entryPointType") == "video":
                 conference = Conference(
-                    type=conf_data.get("conferenceSolution", {}).get("key", {}).get("type", ""),
+                    type=conf_data.get("conferenceSolution", {})
+                    .get("key", {})
+                    .get("type", ""),
                     uri=ep.get("uri", ""),
                 )
                 break
@@ -599,6 +623,7 @@ def extract_event_id(url_or_id: str) -> tuple[str, str]:
         if match:
             # eid is base64 encoded
             import base64
+
             try:
                 decoded = base64.urlsafe_b64decode(match.group(1) + "==").decode()
                 # Format is "eventId calendarId"
@@ -655,7 +680,9 @@ def _resolve_calendar_id(calendar: str | None) -> str:
         idx = int(calendar) - 1
         if 0 <= idx < len(calendars):
             return calendars[idx]["id"]
-        click.echo(f"Calendar index out of range: {calendar} (have {len(calendars)})", err=True)
+        click.echo(
+            f"Calendar index out of range: {calendar} (have {len(calendars)})", err=True
+        )
         raise SystemExit(1)
 
     # Try name or ID match
@@ -690,11 +717,17 @@ def _resolve_time_range(
 
     if has_range:
         if date_from is not None:
-            t_min = datetime.combine(_parse_date(date_from), datetime.min.time(), tzinfo=timezone.utc)
+            t_min = datetime.combine(
+                _parse_date(date_from), datetime.min.time(), tzinfo=timezone.utc
+            )
         else:
             t_min = datetime.now(timezone.utc)
         if date_to is not None:
-            t_max = datetime.combine(_parse_date(date_to) + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+            t_max = datetime.combine(
+                _parse_date(date_to) + timedelta(days=1),
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            )
         else:
             t_max = t_min + timedelta(days=7)
         return t_min, t_max
@@ -706,17 +739,28 @@ def _resolve_time_range(
 
 @cal_cli.command(name="list")
 @click.argument("calendar", required=False)
-@click.option("--days", "-d", default=None, type=int, help="Number of days to show (default: 7)")
+@click.option(
+    "--days", "-d", default=None, type=int, help="Number of days to show (default: 7)"
+)
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
 @click.option(
-    "--format", "-f", "fmt",
+    "--format",
+    "-f",
+    "fmt",
     type=click.Choice(["md", "tsv"]),
     default="md",
-    help="Output format (default: md)"
+    help="Output format (default: md)",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-def list_cmd(calendar: str | None, days: int | None, date_from: str | None, date_to: str | None, fmt: str, verbose: bool):
+def list_cmd(
+    calendar: str | None,
+    days: int | None,
+    date_from: str | None,
+    date_to: str | None,
+    fmt: str,
+    verbose: bool,
+):
     """List events from a calendar.
 
     CALENDAR is a calendar name, ID, or numeric index (from 'gax cal calendars').
@@ -743,13 +787,27 @@ def list_cmd(calendar: str | None, days: int | None, date_from: str | None, date
 
 @cal_cli.command(name="clone")
 @click.argument("calendar", required=False)
-@click.option("-o", "--output", default="calendar.cal.gax", help="Output file (default: calendar.cal.gax)")
-@click.option("--days", "-d", default=None, type=int, help="Number of days (default: 7)")
+@click.option(
+    "-o",
+    "--output",
+    default="calendar.cal.gax.md",
+    help="Output file (default: calendar.cal.gax.md)",
+)
+@click.option(
+    "--days", "-d", default=None, type=int, help="Number of days (default: 7)"
+)
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-def clone_cmd(calendar: str | None, output: str, days: int | None, date_from: str | None, date_to: str | None, verbose: bool):
-    """Clone events to a .cal.gax file.
+def clone_cmd(
+    calendar: str | None,
+    output: str,
+    days: int | None,
+    date_from: str | None,
+    date_to: str | None,
+    verbose: bool,
+):
+    """Clone events to a .cal.gax.md file.
 
     Creates a file with all events that can be updated with 'gax cal pull'.
     CALENDAR defaults to primary calendar.
@@ -757,8 +815,8 @@ def clone_cmd(calendar: str | None, output: str, days: int | None, date_from: st
     \b
     Examples:
         gax cal clone
-        gax cal clone Work -o week.cal.gax -d 7
-        gax cal clone --from 2026-03-01 --to 2026-03-31 -o march.cal.gax
+        gax cal clone Work -o week.cal.gax.md -d 7
+        gax cal clone --from 2026-03-01 --to 2026-03-31 -o march.cal.gax.md
     """
     from pathlib import Path
 
@@ -766,13 +824,20 @@ def clone_cmd(calendar: str | None, output: str, days: int | None, date_from: st
 
     path = Path(output)
     if path.exists():
-        click.echo(f"Error: {output} already exists. Use 'gax cal pull' to update.", err=True)
+        click.echo(
+            f"Error: {output} already exists. Use 'gax cal pull' to update.", err=True
+        )
         raise SystemExit(1)
 
     count = _clone_events_to_file(
-        path, time_min=time_min, time_max=time_max,
-        calendar=calendar, verbose=verbose,
-        days=days, date_from=date_from, date_to=date_to,
+        path,
+        time_min=time_min,
+        time_max=time_max,
+        calendar=calendar,
+        verbose=verbose,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
     )
     success(f"Cloned {count} events to {output}")
 
@@ -784,7 +849,7 @@ def pull_cmd(file: str):
 
     \b
     Example:
-        gax cal pull week.cal.gax
+        gax cal pull week.cal.gax.md
     """
     from pathlib import Path
 
@@ -792,10 +857,14 @@ def pull_cmd(file: str):
     time_min, time_max, calendar, verbose = _parse_cal_list_file(path)
     # Recover original header values for re-serialization
     import yaml as _yaml
+
     _header = _yaml.safe_load(path.read_text().split("---", 2)[1])
     count = _clone_events_to_file(
-        path, time_min=time_min, time_max=time_max,
-        calendar=calendar, verbose=verbose,
+        path,
+        time_min=time_min,
+        time_max=time_max,
+        calendar=calendar,
+        verbose=verbose,
         days=_header.get("days"),
         date_from=str(_header["from"]) if "from" in _header else None,
         date_to=str(_header["to"]) if "to" in _header else None,
@@ -805,12 +874,26 @@ def pull_cmd(file: str):
 
 @cal_cli.command(name="checkout")
 @click.argument("calendar", required=False)
-@click.option("-o", "--output", default="calendar.cal.gax.d", type=click.Path(path_type=Path), help="Output folder (default: calendar.cal.gax.d)")
-@click.option("--days", "-d", default=None, type=int, help="Number of days (default: 7)")
+@click.option(
+    "-o",
+    "--output",
+    default="calendar.cal.gax.md.d",
+    type=click.Path(path_type=Path),
+    help="Output folder (default: calendar.cal.gax.md.d)",
+)
+@click.option(
+    "--days", "-d", default=None, type=int, help="Number of days (default: 7)"
+)
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
-def checkout_cmd(calendar: str | None, output: Path, days: int | None, date_from: str | None, date_to: str | None):
-    """Checkout events as individual .cal.gax files into a folder.
+def checkout_cmd(
+    calendar: str | None,
+    output: Path,
+    days: int | None,
+    date_from: str | None,
+    date_to: str | None,
+):
+    """Checkout events as individual .cal.gax.md files into a folder.
 
     Each event becomes a separate file that can be edited and pushed.
     CALENDAR defaults to primary calendar.
@@ -824,7 +907,7 @@ def checkout_cmd(calendar: str | None, output: Path, days: int | None, date_from
 
     \b
     Workflow:
-        1. checkout -> create folder with .cal.gax files
+        1. checkout -> create folder with .cal.gax.md files
         2. edit files as needed
         3. gax push <file> to update calendar
     """
@@ -844,7 +927,7 @@ def checkout_cmd(calendar: str | None, output: Path, days: int | None, date_from
 
     # Get existing event IDs in output folder
     existing_ids = set()
-    for f in output.glob("*.cal.gax"):
+    for f in output.glob("*.cal.gax.md"):
         try:
             content = f.read_text()
             if "id:" in content:
@@ -878,7 +961,7 @@ def checkout_cmd(calendar: str | None, output: Path, days: int | None, date_from
                 safe_title = re.sub(r"\s+", "_", safe_title)
                 start = event.get("start", {})
                 date_str = start.get("dateTime", start.get("date", ""))[:10]
-                filename = f"{date_str}_{safe_title}.cal.gax"
+                filename = f"{date_str}_{safe_title}.cal.gax.md"
 
                 logger.info(f"Writing {filename}")
 
@@ -886,7 +969,9 @@ def checkout_cmd(calendar: str | None, output: Path, days: int | None, date_from
 
                 # Avoid overwriting
                 if file_path.exists():
-                    file_path = output / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax"
+                    file_path = (
+                        output / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax.md"
+                    )
 
                 content = event_to_yaml(event_data)
                 file_path.write_text(content)
@@ -939,9 +1024,12 @@ def _clone_events_to_file(
 
     # Write file with frontmatter
     import yaml
+
     with open(path, "w") as f:
         f.write("---\n")
-        yaml.dump(header, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        yaml.dump(
+            header, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+        )
         f.write("---\n")
         f.write(tsv_body)
 
@@ -986,10 +1074,12 @@ def event_group():
 
 @event_group.command(name="clone")
 @click.argument("id_or_url")
-@click.option("--cal", "-c", "calendar", default="primary", help="Calendar ID (default: primary)")
+@click.option(
+    "--cal", "-c", "calendar", default="primary", help="Calendar ID (default: primary)"
+)
 @click.option("-o", "--output", "output_path", help="Output file path")
 def event_clone_cmd(id_or_url: str, calendar: str, output_path: str | None):
-    """Clone an event to a local .cal.gax file."""
+    """Clone an event to a local .cal.gax.md file."""
     event_id, cal_id = extract_event_id(id_or_url)
     if calendar != "primary":
         cal_id = calendar
@@ -1010,11 +1100,13 @@ def event_clone_cmd(id_or_url: str, calendar: str, output_path: str | None):
     if not output_path:
         safe_title = re.sub(r"[^\w\s-]", "", event.title)[:30].strip()
         safe_title = re.sub(r"\s+", "_", safe_title)
-        output_path = f"{safe_title}.cal.gax"
+        output_path = f"{safe_title}.cal.gax.md"
 
     # Check for existing file
     if Path(output_path).exists():
-        click.echo(f"Error: {output_path} already exists. Use 'pull' to update.", err=True)
+        click.echo(
+            f"Error: {output_path} already exists. Use 'pull' to update.", err=True
+        )
         sys.exit(1)
 
     # Write file
@@ -1025,7 +1117,9 @@ def event_clone_cmd(id_or_url: str, calendar: str, output_path: str | None):
 
 
 @event_group.command(name="new")
-@click.option("--cal", "-c", "calendar", default="primary", help="Calendar ID (default: primary)")
+@click.option(
+    "--cal", "-c", "calendar", default="primary", help="Calendar ID (default: primary)"
+)
 @click.option("-o", "--output", "output_path", help="Output file path")
 def event_new_cmd(calendar: str, output_path: str | None):
     """Create a new event file (edit and push to create upstream)."""
@@ -1048,7 +1142,7 @@ def event_new_cmd(calendar: str, output_path: str | None):
 
     # Generate output path
     if not output_path:
-        output_path = "new_event.cal.gax"
+        output_path = "new_event.cal.gax.md"
 
     # Write file
     content = event_to_yaml(event)
@@ -1121,8 +1215,12 @@ def event_push_cmd(file_path: str, yes: bool):
 
         # Update local file with new ID
         local_event.id = result["id"]
-        local_event.source = f"https://calendar.google.com/calendar/event?eid={result['id']}"
-        local_event.synced = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        local_event.source = (
+            f"https://calendar.google.com/calendar/event?eid={result['id']}"
+        )
+        local_event.synced = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
 
         new_content = event_to_yaml(local_event)
         path.write_text(new_content)

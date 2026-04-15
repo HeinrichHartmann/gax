@@ -23,7 +23,9 @@ class TestCheckUnsupported:
         assert warnings[0].reason == "workaround"
 
     def test_both_warnings_deduplicated(self):
-        nodes = parse_markdown("- Top\n    - Nested\n    - Another nested\n\n```\ncode\n```\n\n```\nmore code\n```\n")
+        nodes = parse_markdown(
+            "- Top\n    - Nested\n    - Another nested\n\n```\ncode\n```\n\n```\nmore code\n```\n"
+        )
         warnings = check_unsupported(nodes)
         features = [w.feature for w in warnings]
         assert features == ["nested lists", "code blocks"]

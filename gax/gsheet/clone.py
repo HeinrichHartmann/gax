@@ -32,6 +32,7 @@ def clone_all(
         data = formatter.write(df)
 
         from ..formats import get_content_type
+
         section = Section(
             headers={
                 "type": "gax/sheet",

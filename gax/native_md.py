@@ -28,7 +28,7 @@ def extract_images_to_store(markdown: str) -> str:
     """
     # Pattern to match data URLs in markdown images: ![alt](data:image/...)
     # Also matches standalone data URLs
-    pattern = r'data:image/([a-zA-Z0-9+]+);base64,([A-Za-z0-9+/=]+)'
+    pattern = r"data:image/([a-zA-Z0-9+]+);base64,([A-Za-z0-9+/=]+)"
 
     def replace_image(match: re.Match) -> str:
         image_type = match.group(1)
@@ -48,6 +48,7 @@ def extract_images_to_store(markdown: str) -> str:
 
         # Generate a name based on content hash prefix
         from .store import compute_hash
+
         content_hash = compute_hash(image_data)
         name = f"image-{content_hash[7:15]}.{ext}"  # sha256-XXXXXXXX -> XXXXXXXX
 
@@ -105,11 +106,11 @@ def inline_images_from_store(markdown: str) -> str:
                 mime_type = meta["mime_type"]
             else:
                 # Guess from file magic
-                if data[:8] == b'\x89PNG\r\n\x1a\n':
+                if data[:8] == b"\x89PNG\r\n\x1a\n":
                     mime_type = "image/png"
-                elif data[:2] == b'\xff\xd8':
+                elif data[:2] == b"\xff\xd8":
                     mime_type = "image/jpeg"
-                elif data[:6] in (b'GIF87a', b'GIF89a'):
+                elif data[:6] in (b"GIF87a", b"GIF89a"):
                     mime_type = "image/gif"
                 else:
                     mime_type = "application/octet-stream"
@@ -143,10 +144,11 @@ def export_doc_markdown(
         creds = get_authenticated_credentials()
         drive_service = build("drive", "v3", credentials=creds)
 
-    result = drive_service.files().export(
-        fileId=document_id,
-        mimeType="text/markdown"
-    ).execute(num_retries=num_retries)
+    result = (
+        drive_service.files()
+        .export(fileId=document_id, mimeType="text/markdown")
+        .execute(num_retries=num_retries)
+    )
 
     markdown = result.decode("utf-8")
 
@@ -154,10 +156,10 @@ def export_doc_markdown(
         markdown = extract_images_to_store(markdown)
 
     # Normalize: Drive API exports bullet lists as "* item", standardize to "- item"
-    markdown = re.sub(r'^\* ', '- ', markdown, flags=re.MULTILINE)
+    markdown = re.sub(r"^\* ", "- ", markdown, flags=re.MULTILINE)
 
     # Normalize: Remove trailing whitespace from all lines
-    markdown = re.sub(r'[ \t]+$', '', markdown, flags=re.MULTILINE)
+    markdown = re.sub(r"[ \t]+$", "", markdown, flags=re.MULTILINE)
 
     # Normalize: Unescape Drive API over-escaped characters.
     # Google's markdown export backslash-escapes these characters:
@@ -167,24 +169,20 @@ def export_doc_markdown(
     # blockquote style instead) and strips inline backticks, so there are no
     # contexts where these escapes are legitimate.
     # Verified 2026-04-14 against Drive API v3 markdown export.
-    markdown = re.sub(r'\\([->#~`_.=<\[\]*])', r'\1', markdown)
+    markdown = re.sub(r"\\([->#~`_.=<\[\]*])", r"\1", markdown)
 
     # Normalize: Google wraps h6 content in italic markers; strip them
-    markdown = re.sub(r'^(######) \*(.+)\*$', r'\1 \2', markdown, flags=re.MULTILINE)
+    markdown = re.sub(r"^(######) \*(.+)\*$", r"\1 \2", markdown, flags=re.MULTILINE)
 
     # Normalize: Ensure trailing newline
-    if not markdown.endswith('\n'):
-        markdown += '\n'
+    if not markdown.endswith("\n"):
+        markdown += "\n"
 
     return markdown
 
 
 def create_doc_from_markdown(
-    name: str,
-    markdown: str,
-    *,
-    parent_folder_id: str | None = None,
-    drive_service=None
+    name: str, markdown: str, *, parent_folder_id: str | None = None, drive_service=None
 ) -> str:
     """Create a new Google Doc from Markdown content.
 
@@ -208,23 +206,21 @@ def create_doc_from_markdown(
     if parent_folder_id:
         metadata["parents"] = [parent_folder_id]
 
-    media = MediaInMemoryUpload(
-        markdown.encode("utf-8"),
-        mimetype="text/markdown"
-    )
+    media = MediaInMemoryUpload(markdown.encode("utf-8"), mimetype="text/markdown")
 
-    result = drive_service.files().create(
-        body=metadata,
-        media_body=media,
-    ).execute()
+    result = (
+        drive_service.files()
+        .create(
+            body=metadata,
+            media_body=media,
+        )
+        .execute()
+    )
 
     return result["id"]
 
 
-def split_doc_by_tabs(
-    markdown: str,
-    tab_titles: list[str]
-) -> dict[str, str]:
+def split_doc_by_tabs(markdown: str, tab_titles: list[str]) -> dict[str, str]:
     """Split exported markdown by tab titles.
 
     The native Drive API export concatenates all tabs. Each tab starts
@@ -250,7 +246,7 @@ def split_doc_by_tabs(
         if text.startswith("**") and text.endswith("**"):
             text = text[2:-2]
         # Unescape markdown special characters
-        text = re.sub(r'\\(.)', r'\1', text)
+        text = re.sub(r"\\(.)", r"\1", text)
         return text
 
     for line in lines:
@@ -280,7 +276,9 @@ def split_doc_by_tabs(
     return result
 
 
-def get_doc_tabs(document_id: str, *, docs_service=None, num_retries: int = 0) -> list[dict]:
+def get_doc_tabs(
+    document_id: str, *, docs_service=None, num_retries: int = 0
+) -> list[dict]:
     """Get list of tabs in a document.
 
     Args:
@@ -295,19 +293,22 @@ def get_doc_tabs(document_id: str, *, docs_service=None, num_retries: int = 0) -
         creds = get_authenticated_credentials()
         docs_service = build("docs", "v1", credentials=creds)
 
-    doc = docs_service.documents().get(
-        documentId=document_id,
-        includeTabsContent=True
-    ).execute(num_retries=num_retries)
+    doc = (
+        docs_service.documents()
+        .get(documentId=document_id, includeTabsContent=True)
+        .execute(num_retries=num_retries)
+    )
 
     tabs = []
     for i, tab in enumerate(doc.get("tabs", [])):
         props = tab.get("tabProperties", {})
-        tabs.append({
-            "id": props.get("tabId", ""),
-            "title": props.get("title", f"Tab {i}"),
-            "index": i,
-        })
+        tabs.append(
+            {
+                "id": props.get("tabId", ""),
+                "title": props.get("title", f"Tab {i}"),
+                "index": i,
+            }
+        )
 
     return tabs
 
@@ -335,16 +336,16 @@ def export_tab_markdown(
         Markdown content for the specified tab
     """
     # Get tab titles
-    tabs = get_doc_tabs(document_id, docs_service=docs_service,
-                        num_retries=num_retries)
+    tabs = get_doc_tabs(document_id, docs_service=docs_service, num_retries=num_retries)
     tab_titles = [t["title"] for t in tabs]
 
     if tab_title not in tab_titles:
         raise ValueError(f"Tab not found: {tab_title}")
 
     # Export full doc
-    full_md = export_doc_markdown(document_id, drive_service=drive_service,
-                                  num_retries=num_retries)
+    full_md = export_doc_markdown(
+        document_id, drive_service=drive_service, num_retries=num_retries
+    )
 
     # Split by tabs
     tab_contents = split_doc_by_tabs(full_md, tab_titles)

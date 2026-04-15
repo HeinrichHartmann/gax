@@ -319,6 +319,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
 
 # Old mail container group removed - thread is now the mail group (ADR 020)
 
+
 @click.group()
 def thread():
     """Individual email thread operations (clone, pull, reply)"""
@@ -351,13 +352,13 @@ def _is_thread_id(value: str) -> bool:
     help="Output file",
 )
 def clone(thread_id_or_url: str, output: Optional[Path]):
-    """Clone a single email thread to a local .mail.gax file.
+    """Clone a single email thread to a local .mail.gax.md file.
 
     \b
     Examples:
         gax mail thread clone 19d0bed1cddbab6d
         gax mail thread clone "https://mail.google.com/..."
-        gax mail thread clone 19d0bed1cddbab6d -o thread.mail.gax
+        gax mail thread clone 19d0bed1cddbab6d -o thread.mail.gax.md
 
     For bulk cloning, use: gax mail list checkout FOLDER -q QUERY
     """
@@ -367,7 +368,10 @@ def clone(thread_id_or_url: str, output: Optional[Path]):
                 f"Error: '{thread_id_or_url}' is not a valid thread ID or URL",
                 err=True,
             )
-            click.echo("For bulk cloning, use: gax mail list checkout FOLDER -q QUERY", err=True)
+            click.echo(
+                "For bulk cloning, use: gax mail list checkout FOLDER -q QUERY",
+                err=True,
+            )
             sys.exit(1)
 
         thread_id = extract_thread_id(thread_id_or_url)
@@ -382,7 +386,7 @@ def clone(thread_id_or_url: str, output: Optional[Path]):
             # Generate filename from subject
             safe_subject = re.sub(r'[<>:"/\\|?*]', "-", sections[0].title)
             safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-            file_path = Path(f"{safe_subject}_{thread_id}.mail.gax")
+            file_path = Path(f"{safe_subject}_{thread_id}.mail.gax.md")
 
         if file_path.exists():
             click.echo(f"Error: File already exists: {file_path}", err=True)
@@ -405,7 +409,7 @@ def clone(thread_id_or_url: str, output: Optional[Path]):
 
 
 def _pull_single_file(file_path: Path) -> tuple[int, int]:
-    """Pull updates for a single .mail.gax file. Returns (old_count, new_count)."""
+    """Pull updates for a single .mail.gax.md file. Returns (old_count, new_count)."""
     content = file_path.read_text(encoding="utf-8")
 
     # Extract thread_id from file
@@ -430,13 +434,13 @@ def _pull_single_file(file_path: Path) -> tuple[int, int]:
 @thread.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 def pull(path: Path):
-    """Pull latest messages for .mail.gax file(s).
+    """Pull latest messages for .mail.gax.md file(s).
 
     Single file:
 
-        gax mail thread pull thread.mail.gax
+        gax mail thread pull thread.mail.gax.md
 
-    Folder (updates all .mail.gax files):
+    Folder (updates all .mail.gax.md files):
 
         gax mail thread pull Inbox/
     """
@@ -450,10 +454,10 @@ def pull(path: Path):
                 click.echo(f"New messages: {new_count - old_count}")
 
         elif path.is_dir():
-            # Folder mode: update all .mail.gax files
-            files = list(path.glob("*.mail.gax"))
+            # Folder mode: update all .mail.gax.md files
+            files = list(path.glob("*.mail.gax.md"))
             if not files:
-                click.echo(f"No .mail.gax files found in {path}")
+                click.echo(f"No .mail.gax.md files found in {path}")
                 return
 
             click.echo(f"Updating {len(files)} files in {path}/")
@@ -487,7 +491,7 @@ def pull(path: Path):
 
 
 def _make_filename(date_str: str, from_addr: str, subject: str, _thread_id: str) -> str:
-    """Create filename: date-from-subject.mail.gax"""
+    """Create filename: date-from-subject.mail.gax.md"""
     # Extract date (YYYY-MM-DD)
     try:
         from email.utils import parsedate_to_datetime
@@ -515,7 +519,7 @@ def _make_filename(date_str: str, from_addr: str, subject: str, _thread_id: str)
     subject_part = re.sub(r'[<>:"/\\|?*]', "-", subject)
     subject_part = re.sub(r"\s+", "_", subject_part)[:40]
 
-    return f"{date_part}-{from_part}-{subject_part}.mail.gax"
+    return f"{date_part}-{from_part}-{subject_part}.mail.gax.md"
 
 
 def _get_existing_thread_ids(folder: Path) -> set[str]:
@@ -524,7 +528,7 @@ def _get_existing_thread_ids(folder: Path) -> set[str]:
         return set()
 
     thread_ids = set()
-    for f in folder.glob("*.mail.gax"):
+    for f in folder.glob("*.mail.gax.md"):
         # Try to extract thread_id from file content
         try:
             content = f.read_text(encoding="utf-8")
@@ -657,26 +661,26 @@ def _list_threads(query: str, limit: int):
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    help="Output file (default: Re_<subject>.draft.gax)",
+    help="Output file (default: Re_<subject>.draft.gax.md)",
 )
 def reply(file_or_url: str, output: Optional[Path]):
     """Create a reply draft from a thread.
 
-    Takes a .mail.gax file or Gmail thread URL and creates a .draft.gax file
+    Takes a .mail.gax.md file or Gmail thread URL and creates a .draft.gax.md file
     with the reply metadata pre-filled.
 
     Examples:
 
-        gax mail thread reply Project_Update.mail.gax
+        gax mail thread reply Project_Update.mail.gax.md
         gax mail thread reply "https://mail.google.com/mail/u/0/#inbox/abc123"
-        gax mail thread reply thread.mail.gax -o my_reply.draft.gax
+        gax mail thread reply thread.mail.gax.md -o my_reply.draft.gax.md
     """
     try:
         # Determine if input is a file or URL
         file_path = Path(file_or_url)
 
-        if file_path.exists() and file_path.suffix == ".gax":
-            # Parse .mail.gax file
+        if file_path.exists() and file_path.name.endswith(".gax.md"):
+            # Parse .mail.gax.md file
             content = file_path.read_text(encoding="utf-8")
             sections = multipart.parse_multipart(content)
 
@@ -690,7 +694,7 @@ def reply(file_or_url: str, output: Optional[Path]):
             subject = last_section.headers.get("title", "")
             from_addr = last_section.headers.get("from", "")
 
-            # For in_reply_to, we'd need message_id which isn't stored in .mail.gax
+            # For in_reply_to, we'd need message_id which isn't stored in .mail.gax.md
             # Use thread_id for threading
             in_reply_to = ""
 
@@ -732,7 +736,7 @@ def reply(file_or_url: str, output: Optional[Path]):
         else:
             safe_subject = re.sub(r'[<>:"/\\|?*]', "-", subject)
             safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-            out_path = Path(f"{safe_subject}.draft.gax")
+            out_path = Path(f"{safe_subject}.draft.gax.md")
 
         if out_path.exists():
             click.echo(f"Error: File already exists: {out_path}", err=True)
@@ -759,7 +763,9 @@ def reply(file_or_url: str, output: Optional[Path]):
 
 
 @click.group(invoke_without_command=True)
-@click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
+@click.option(
+    "-q", "--query", default="in:inbox", help="Search query (default: in:inbox)"
+)
 @click.option("--limit", default=20, help="Maximum results (default: 20)")
 @click.pass_context
 def mailbox(ctx, query: str, limit: int):
@@ -882,6 +888,7 @@ def _get_thread_for_relabel(thread_id: str, service, label_id_to_name: dict) -> 
     # Parse date
     try:
         from email.utils import parsedate_to_datetime
+
         dt = parsedate_to_datetime(date_str)
         date_short = dt.strftime("%Y-%m-%d")
     except (ValueError, TypeError):
@@ -906,7 +913,9 @@ def _tsv_quote(value: str) -> str:
     return value
 
 
-def _relabel_fetch_threads(service, query: str, limit: int, label_id_to_name: dict) -> list[dict]:
+def _relabel_fetch_threads(
+    service, query: str, limit: int, label_id_to_name: dict
+) -> list[dict]:
     """Fetch threads for relabeling."""
     threads = []
     page_token = None
@@ -947,14 +956,16 @@ def _relabel_fetch_threads(service, query: str, limit: int, label_id_to_name: di
 
 
 def _write_gax_file(path: Path, query: str, limit: int, thread_data: list[dict]):
-    """Write threads to .gax file with YAML header and TSV content."""
+    """Write threads to .gax.md file with YAML header and TSV content."""
     # Build TSV content first to get content-length
     tsv_lines = ["id\tfrom\tsubject\tdate\tsys\tcat\tlabels"]
     for t in thread_data:
         from_q = _tsv_quote(t["from"])
         subject_q = _tsv_quote(t["subject"])
         labels_str = ",".join(t["labels"]) if t["labels"] else ""
-        tsv_lines.append(f"{t['id']}\t{from_q}\t{subject_q}\t{t['date']}\t{t['sys']}\t{t['cat']}\t{labels_str}")
+        tsv_lines.append(
+            f"{t['id']}\t{from_q}\t{subject_q}\t{t['date']}\t{t['sys']}\t{t['cat']}\t{labels_str}"
+        )
     tsv_content = "\n".join(tsv_lines) + "\n"
     content_length = len(tsv_content.encode("utf-8"))
 
@@ -962,7 +973,9 @@ def _write_gax_file(path: Path, query: str, limit: int, thread_data: list[dict])
         # YAML header
         f.write("---\n")
         f.write("type: gax/list\n")
-        f.write(f"pulled: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
+        f.write(
+            f"pulled: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+        )
         f.write(f"query: {query}\n")
         f.write(f"limit: {limit}\n")
         f.write("columns:\n")
@@ -977,7 +990,7 @@ def _write_gax_file(path: Path, query: str, limit: int, thread_data: list[dict])
 
 
 def _parse_gax_header(path: Path) -> dict:
-    """Parse YAML header from .gax file to get query and limit."""
+    """Parse YAML header from .gax.md file to get query and limit."""
     header = {"query": None, "limit": 50}
     with open(path) as f:
         content = f.read()
@@ -1005,7 +1018,7 @@ def _parse_gax_header(path: Path) -> dict:
 
 
 def _parse_gax_content(path: Path) -> str:
-    """Extract TSV content from .gax file (skip YAML header)."""
+    """Extract TSV content from .gax.md file (skip YAML header)."""
     with open(path) as f:
         content = f.read()
 
@@ -1017,17 +1030,25 @@ def _parse_gax_content(path: Path) -> str:
     if header_end == -1:
         return content
 
-    return content[header_end + 5:]  # Skip \n---\n
+    return content[header_end + 5 :]  # Skip \n---\n
 
 
 @mailbox.command("fetch")
-@click.option("-o", "--output", default="mailbox.gax.d", type=click.Path(path_type=Path), help="Output folder (default: mailbox.gax.d)")
-@click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
+@click.option(
+    "-o",
+    "--output",
+    default="mailbox.gax.md.d",
+    type=click.Path(path_type=Path),
+    help="Output folder (default: mailbox.gax.md.d)",
+)
+@click.option(
+    "-q", "--query", default="in:inbox", help="Search query (default: in:inbox)"
+)
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
 def mailbox_fetch(output: Path, query: str, limit: int):
     """Fetch full threads matching query into a folder.
 
-    Searches Gmail and retrieves each matching thread as a full .mail.gax file.
+    Searches Gmail and retrieves each matching thread as a full .mail.gax.md file.
     Incremental: skips existing threads.
 
     \b
@@ -1109,7 +1130,7 @@ def mailbox_fetch(output: Path, query: str, limit: int):
                 # Avoid overwriting
                 if file_path.exists():
                     base = file_path.stem
-                    file_path = output / f"{base}_{thread_id}.mail.gax"
+                    file_path = output / f"{base}_{thread_id}.mail.gax.md"
 
                 file_path.write_text(content, encoding="utf-8")
                 cloned += 1
@@ -1126,13 +1147,20 @@ def mailbox_fetch(output: Path, query: str, limit: int):
 
 
 @mailbox.command("clone")
-@click.option("-o", "--output", default="mailbox.gax", help="Output file (default: mailbox.gax)")
-@click.option("-q", "--query", default="in:inbox", help="Search query (default: in:inbox)")
+@click.option(
+    "-o",
+    "--output",
+    default="mailbox.gax.md",
+    help="Output file (default: mailbox.gax.md)",
+)
+@click.option(
+    "-q", "--query", default="in:inbox", help="Search query (default: in:inbox)"
+)
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
 def mailbox_clone(output: str, query: str, limit: int):
     """Clone threads from Gmail for bulk labeling.
 
-    Creates a .gax file with current state. Use 'pull' to update,
+    Creates a .gax.md file with current state. Use 'pull' to update,
     'plan' to compute changes, 'apply' to execute.
 
     \b
@@ -1144,13 +1172,13 @@ def mailbox_clone(output: str, query: str, limit: int):
     \b
     Examples:
         gax mailbox clone
-        gax mailbox clone -o inbox.gax -q "in:inbox"
-        gax mailbox clone -o spam.gax -q "in:spam" --limit 100
+        gax mailbox clone -o inbox.gax.md -q "in:inbox"
+        gax mailbox clone -o spam.gax.md -q "in:spam" --limit 100
 
     \b
     Workflow:
-        1. clone  -> create .gax file with current state
-        2. pull   -> update .gax file (re-fetch)
+        1. clone  -> create .gax.md file with current state
+        2. pull   -> update .gax.md file (re-fetch)
         3. edit   -> change sys/cat/labels to desired state
         4. plan   -> compute diff
         5. apply  -> execute changes
@@ -1186,13 +1214,13 @@ def mailbox_clone(output: str, query: str, limit: int):
 @mailbox.command("pull")
 @click.argument("file", type=click.Path(exists=True))
 def relabel_pull(file: str):
-    """Update a .gax file by re-fetching from Gmail.
+    """Update a .gax.md file by re-fetching from Gmail.
 
     Reads the query from the file header and fetches fresh data.
 
     \b
     Example:
-        gax mail list pull inbox.gax
+        gax mail list pull inbox.gax.md
     """
     path = Path(file)
 
@@ -1241,7 +1269,7 @@ def _parse_tsv_line(line: str) -> list[str]:
                 i += 2
                 continue
             in_quotes = not in_quotes
-        elif c == '\t' and not in_quotes:
+        elif c == "\t" and not in_quotes:
             fields.append(current)
             current = ""
         else:
@@ -1254,7 +1282,12 @@ def _parse_tsv_line(line: str) -> list[str]:
 
 @mailbox.command("plan")
 @click.argument("file", type=click.Path(exists=True))
-@click.option("-o", "--output", default="mailbox.plan.yaml", help="Output file (default: mailbox.plan.yaml)")
+@click.option(
+    "-o",
+    "--output",
+    default="mailbox.plan.yaml",
+    help="Output file (default: mailbox.plan.yaml)",
+)
 def mailbox_plan(file: str, output: str):
     """Generate plan from edited list file.
 
@@ -1269,7 +1302,7 @@ def mailbox_plan(file: str, output: str):
 
     Example:
 
-        gax mail list plan inbox.gax
+        gax mail list plan inbox.gax.md
     """
     import yaml
 
@@ -1287,13 +1320,13 @@ def mailbox_plan(file: str, output: str):
 
         # Read TSV content (skip YAML header if present)
         tsv_content = _parse_gax_content(Path(file))
-        lines = tsv_content.split('\n')
+        lines = tsv_content.split("\n")
 
         # Parse header and data
         data_lines = []
         header = None
         for line in lines:
-            line = line.rstrip('\n')
+            line = line.rstrip("\n")
             if not line.strip():
                 continue
             if header is None:
@@ -1331,7 +1364,9 @@ def mailbox_plan(file: str, output: str):
             thread_id = fields[id_idx].strip()
             desired_sys = fields[sys_idx].strip()
             desired_cat = fields[cat_idx].strip() if len(fields) > cat_idx else ""
-            desired_labels_str = fields[labels_idx].strip() if len(fields) > labels_idx else ""
+            desired_labels_str = (
+                fields[labels_idx].strip() if len(fields) > labels_idx else ""
+            )
 
             if not thread_id:
                 continue
@@ -1350,13 +1385,18 @@ def mailbox_plan(file: str, output: str):
             # Parse desired user labels
             desired_labels = set()
             if desired_labels_str:
-                desired_labels = {lbl.strip() for lbl in desired_labels_str.split(",") if lbl.strip()}
+                desired_labels = {
+                    lbl.strip() for lbl in desired_labels_str.split(",") if lbl.strip()
+                }
 
             # Get current labels from Gmail
             try:
-                thread = service.users().threads().get(
-                    userId="me", id=thread_id, format="minimal"
-                ).execute()
+                thread = (
+                    service.users()
+                    .threads()
+                    .get(userId="me", id=thread_id, format="minimal")
+                    .execute()
+                )
             except Exception as e:
                 errors.append(f"Cannot fetch thread {thread_id}: {e}")
                 continue
@@ -1455,12 +1495,16 @@ def mailbox_plan(file: str, output: str):
 
         path = Path(output)
         with open(path, "w") as f:
-            yaml.dump(plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            yaml.dump(
+                plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False
+            )
 
         # Summary
         sys_add_count = sum(1 for c in changes if c.get("add_sys"))
         sys_remove_count = sum(1 for c in changes if c.get("remove_sys"))
-        cat_change_count = sum(1 for c in changes if c.get("add_cat") or c.get("remove_cat"))
+        cat_change_count = sum(
+            1 for c in changes if c.get("add_cat") or c.get("remove_cat")
+        )
         add_count = sum(1 for c in changes if c.get("add"))
         remove_count = sum(1 for c in changes if c.get("remove"))
 
@@ -1481,7 +1525,7 @@ def mailbox_plan(file: str, output: str):
 
 @mailbox.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
-@click.option('-y', '--yes', is_flag=True, help='Skip confirmation')
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def relabel_apply(plan_file: str, yes: bool):
     """Apply label changes from plan.
 
@@ -1509,8 +1553,7 @@ def relabel_apply(plan_file: str, yes: bool):
         # Get label name -> id mapping
         labels_result = service.users().labels().list(userId="me").execute()
         label_map = {
-            label["name"]: label["id"]
-            for label in labels_result.get("labels", [])
+            label["name"]: label["id"] for label in labels_result.get("labels", [])
         }
 
         # Find user labels that need to be created
@@ -1564,21 +1607,25 @@ def relabel_apply(plan_file: str, yes: bool):
                         if "/" in label_name:
                             parts = label_name.split("/")
                             for i in range(len(parts)):
-                                partial = "/".join(parts[:i+1])
+                                partial = "/".join(parts[: i + 1])
                                 if partial not in label_map:
                                     logger.info(f"Creating: {partial}")
-                                    result = service.users().labels().create(
-                                        userId="me",
-                                        body={"name": partial}
-                                    ).execute()
+                                    result = (
+                                        service.users()
+                                        .labels()
+                                        .create(userId="me", body={"name": partial})
+                                        .execute()
+                                    )
                                     label_map[partial] = result["id"]
                         else:
                             if label_name not in label_map:
                                 logger.info(f"Creating: {label_name}")
-                                result = service.users().labels().create(
-                                    userId="me",
-                                    body={"name": label_name}
-                                ).execute()
+                                result = (
+                                    service.users()
+                                    .labels()
+                                    .create(userId="me", body={"name": label_name})
+                                    .execute()
+                                )
                                 label_map[label_name] = result["id"]
                     except Exception as e:
                         if "Label name exists" not in str(e):
