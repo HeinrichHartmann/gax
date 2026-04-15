@@ -318,3 +318,136 @@ class TestDiffToMutations:
 
         bold_updates = [m for m in mutations if "updateTextStyle" in m and m["updateTextStyle"].get("textStyle", {}).get("bold")]
         assert len(bold_updates) >= 1
+
+
+# =============================================================================
+# Table update tests
+# =============================================================================
+
+
+def _make_doc_table_json(rows_text):
+    """Build a minimal Google Doc table JSON from a list of list of strings."""
+    idx = 100  # arbitrary start
+    table_rows = []
+    for row in rows_text:
+        cells = []
+        for cell_text in row:
+            para_start = idx
+            para_end = idx + len(cell_text) + 1  # +1 for newline
+            cells.append({
+                "content": [{
+                    "paragraph": {
+                        "elements": [{"textRun": {"content": cell_text + "\n"}}],
+                        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    },
+                    "startIndex": para_start,
+                    "endIndex": para_end,
+                }]
+            })
+            idx = para_end + 1
+        table_rows.append({"tableCells": cells})
+    return {
+        "table": {"tableRows": table_rows},
+        "startIndex": 100,
+        "endIndex": idx,
+    }
+
+
+class TestTableUpdates:
+    def _make_table_alignment(self, base_node, doc_table_json):
+        doc_elem = DocElement(
+            type="table",
+            text="[table]",
+            start_index=doc_table_json["startIndex"],
+            end_index=doc_table_json["endIndex"],
+            raw=doc_table_json,
+        )
+        return [AlignedNode(
+            node=base_node,
+            doc_elements=[doc_elem],
+            start_index=doc_elem.start_index,
+            end_index=doc_elem.end_index,
+        )]
+
+    def test_cell_text_update(self):
+        base = parse_markdown("| A | B |\n|---|---|\n| old | keep |\n")
+        edited = parse_markdown("| A | B |\n|---|---|\n| new | keep |\n")
+
+        base_table = [n for n in base if _node_type(n) == "table"][0]
+        doc_json = _make_doc_table_json([["A", "B"], ["old", "keep"]])
+        alignment = self._make_table_alignment(base_table, doc_json)
+
+        ops = ast_diff(base, edited)
+        mutations = diff_to_mutations(ops, alignment, "tab1")
+
+        # Should delete old + insert new for the changed cell
+        types = [list(m.keys())[0] for m in mutations]
+        assert "deleteContentRange" in types
+        assert "insertText" in types
+
+        # "keep" cell should NOT be touched
+        insert_texts = [m["insertText"]["text"] for m in mutations if "insertText" in m]
+        assert "new" in insert_texts
+        assert "keep" not in insert_texts
+
+    def test_cell_formatting_update(self):
+        base = parse_markdown("| plain |\n|---|\n| text |\n")
+        edited = parse_markdown("| plain |\n|---|\n| **text** |\n")
+
+        base_table = [n for n in base if _node_type(n) == "table"][0]
+        doc_json = _make_doc_table_json([["plain"], ["text"]])
+        alignment = self._make_table_alignment(base_table, doc_json)
+
+        ops = ast_diff(base, edited)
+        mutations = diff_to_mutations(ops, alignment, "tab1")
+
+        bold = [m for m in mutations if "updateTextStyle" in m
+                and m["updateTextStyle"].get("textStyle", {}).get("bold")]
+        assert len(bold) >= 1
+
+    def test_unchanged_table_no_ops(self):
+        md = "| A | B |\n|---|---|\n| 1 | 2 |\n"
+        base = parse_markdown(md)
+        edited = parse_markdown(md)
+
+        ops = ast_diff(base, edited)
+        assert ops == []
+
+    def test_row_count_change_raises(self):
+        import pytest
+
+        base = parse_markdown("| A |\n|---|\n| 1 |\n")
+        edited = parse_markdown("| A |\n|---|\n| 1 |\n| 2 |\n")
+
+        base_table = [n for n in base if _node_type(n) == "table"][0]
+        doc_json = _make_doc_table_json([["A"], ["1"]])
+        alignment = self._make_table_alignment(base_table, doc_json)
+
+        ops = ast_diff(base, edited)
+        with pytest.raises(ValueError, match="row count changed"):
+            diff_to_mutations(ops, alignment, "tab1")
+
+    def test_multi_paragraph_cell_raises(self):
+        import pytest
+
+        base = parse_markdown("| A |\n|---|\n| old |\n")
+        edited = parse_markdown("| A |\n|---|\n| new |\n")
+
+        base_table = [n for n in base if _node_type(n) == "table"][0]
+
+        # Build a doc JSON where the data cell has 2 paragraphs
+        doc_json = _make_doc_table_json([["A"], ["old"]])
+        # Manually add a second paragraph to cell[1][0]
+        cell = doc_json["table"]["tableRows"][1]["tableCells"][0]
+        cell["content"].append({
+            "paragraph": {
+                "elements": [{"textRun": {"content": "extra line\n"}}],
+            },
+            "startIndex": 200,
+            "endIndex": 211,
+        })
+
+        alignment = self._make_table_alignment(base_table, doc_json)
+        ops = ast_diff(base, edited)
+        with pytest.raises(ValueError, match="multi-paragraph"):
+            diff_to_mutations(ops, alignment, "tab1")

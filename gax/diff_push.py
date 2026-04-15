@@ -288,6 +288,13 @@ class EditOp:
 
 def _node_key(node: Node) -> str:
     """Produce a hashable key for sequence matching."""
+    if isinstance(node, Table):
+        # Include cell content so cell edits are detected
+        cell_texts = []
+        for row in node.rows:
+            for cell in row:
+                cell_texts.append("".join(s.text for s in cell))
+        return f"table:{','.join(cell_texts)}"
     return f"{_node_type(node)}:{_node_text(node)}"
 
 
@@ -348,6 +355,16 @@ def _formatting_differs(a: Node, b: Node) -> bool:
         return _spans_differ(a.children, b.children)
     if isinstance(a, (Paragraph, ListItem)) and isinstance(b, (Paragraph, ListItem)):
         return _spans_differ(a.children, b.children)
+    if isinstance(a, Table) and isinstance(b, Table):
+        if len(a.rows) != len(b.rows):
+            return True
+        for ar, br in zip(a.rows, b.rows):
+            if len(ar) != len(br):
+                return True
+            for ac, bc in zip(ar, br):
+                if _spans_differ(ac, bc):
+                    return True
+        return False
     return False
 
 
@@ -397,6 +414,10 @@ def diff_to_mutations(
             elif isinstance(base, ListItem) and isinstance(edit, ListItem):
                 requests.extend(
                     _update_paragraph_requests(aligned, edit, tab_id)
+                )
+            elif isinstance(base, Table) and isinstance(edit, Table):
+                requests.extend(
+                    _update_table_requests(aligned, base, edit, tab_id)
                 )
             else:
                 raise ValueError(
@@ -559,6 +580,153 @@ def _update_paragraph_requests(
                 }
             })
         offset = span_end
+
+    return requests
+
+
+def _cell_plain(spans: list[Text]) -> str:
+    """Plain text for a cell's span list."""
+    return "".join(s.text for s in spans)
+
+
+def _update_table_requests(
+    aligned: AlignedNode,
+    base_table: Table,
+    edit_table: Table,
+    tab_id: str,
+) -> list[dict]:
+    """Generate requests to patch changed cells in a same-shape table.
+
+    Walks both tables cell by cell. For cells that differ, deletes the
+    old content and inserts the new content with formatting.
+
+    Raises ValueError if table dimensions changed or cells have
+    multi-paragraph content that markdown can't represent.
+    """
+    base_rows = base_table.rows
+    edit_rows = edit_table.rows
+
+    if len(base_rows) != len(edit_rows):
+        raise ValueError(
+            f"Table row count changed ({len(base_rows)} → {len(edit_rows)}). "
+            "Patch cannot add/remove table rows."
+        )
+
+    for ri, (br, er) in enumerate(zip(base_rows, edit_rows)):
+        if len(br) != len(er):
+            raise ValueError(
+                f"Table column count changed in row {ri} ({len(br)} → {len(er)}). "
+                "Patch cannot add/remove table columns."
+            )
+
+    # Get the raw Google Doc table JSON from the aligned element
+    doc_elem = aligned.doc_elements[0]
+    if "table" not in doc_elem.raw:
+        raise ValueError("Aligned element is not a table")
+
+    doc_table = doc_elem.raw["table"]
+    doc_rows = doc_table.get("tableRows", [])
+
+    requests = []
+
+    for ri, (base_row, edit_row) in enumerate(zip(base_rows, edit_rows)):
+        if ri >= len(doc_rows):
+            break
+        doc_row = doc_rows[ri]
+        doc_cells = doc_row.get("tableCells", [])
+
+        for ci, (base_spans, edit_spans) in enumerate(zip(base_row, edit_row)):
+            if ci >= len(doc_cells):
+                break
+
+            # Check if cell content changed
+            base_text = _cell_plain(base_spans)
+            edit_text = _cell_plain(edit_spans)
+
+            if base_text == edit_text and not _spans_differ(base_spans, edit_spans):
+                continue  # cell unchanged
+
+            # Get cell's paragraph indices from the doc JSON
+            cell_content = doc_cells[ci].get("content", [])
+
+            if len(cell_content) > 1:
+                # Multi-paragraph cell — bail
+                raise ValueError(
+                    f"Cell [{ri},{ci}] has {len(cell_content)} paragraphs. "
+                    "Patch cannot edit multi-paragraph table cells."
+                )
+
+            if not cell_content:
+                continue
+
+            para = cell_content[0]
+            if "paragraph" not in para:
+                continue
+
+            cell_start = para.get("startIndex")
+            cell_end = para.get("endIndex")
+            if cell_start is None or cell_end is None:
+                continue
+
+            # Delete old content (preserve trailing newline)
+            content_end = cell_end - 1
+            if content_end > cell_start:
+                requests.append({
+                    "deleteContentRange": {
+                        "range": {
+                            "startIndex": cell_start,
+                            "endIndex": content_end,
+                            "tabId": tab_id,
+                        }
+                    }
+                })
+
+            # Insert new text
+            if edit_text:
+                requests.append({
+                    "insertText": {
+                        "text": edit_text,
+                        "location": {"index": cell_start, "tabId": tab_id},
+                    }
+                })
+
+            # Apply inline formatting
+            offset = cell_start
+            for span in edit_spans:
+                span_end = offset + _utf16_len(span.text)
+                if span.bold:
+                    requests.append({
+                        "updateTextStyle": {
+                            "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
+                            "textStyle": {"bold": True},
+                            "fields": "bold",
+                        }
+                    })
+                if span.italic:
+                    requests.append({
+                        "updateTextStyle": {
+                            "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
+                            "textStyle": {"italic": True},
+                            "fields": "italic",
+                        }
+                    })
+                if span.strikethrough:
+                    requests.append({
+                        "updateTextStyle": {
+                            "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
+                            "textStyle": {"strikethrough": True},
+                            "fields": "strikethrough",
+                        }
+                    })
+                if span.url:
+                    requests.append({
+                        "updateTextStyle": {
+                            "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
+                            "textStyle": {"link": {"url": span.url}},
+                            "fields": "link",
+                        }
+                    })
+                offset = span_end
 
     return requests
 
