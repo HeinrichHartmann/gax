@@ -21,6 +21,7 @@ from googleapiclient.discovery import build
 from .auth import get_authenticated_credentials
 from . import multipart
 from .ui import operation, success, error
+from . import docs as doc
 
 logger = logging.getLogger(__name__)
 
@@ -365,6 +366,7 @@ def extract_draft_id(url_or_id: str) -> str:
 # =============================================================================
 
 
+@doc.section("resource")
 @click.group()
 def draft():
     """Draft operations"""

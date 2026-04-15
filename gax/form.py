@@ -15,7 +15,8 @@ import yaml
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
-from .ui import operation, success, unstable
+from . import docs as doc
+from .ui import operation, success
 
 logger = logging.getLogger(__name__)
 
@@ -507,7 +508,8 @@ def _generate_delete_request(index: int) -> dict:
 # =============================================================================
 
 
-@unstable
+@doc.section("resource")
+@doc.maturity("unstable")
 @click.group()
 def form():
     """Google Forms operations"""

@@ -17,6 +17,7 @@ from googleapiclient.discovery import build
 from .auth import get_authenticated_credentials
 from . import multipart
 from . import native_md
+from . import docs
 from .ui import operation, success, error
 
 logger = logging.getLogger(__name__)
@@ -325,6 +326,7 @@ def format_comments_section(
 # =============================================================================
 
 
+@docs.section("resource")
 @click.group()
 def doc():
     """Google Docs operations"""

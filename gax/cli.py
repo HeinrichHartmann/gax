@@ -13,6 +13,7 @@ from .multipart import Section, format_section, format_multipart, parse_multipar
 from .frontmatter import SheetConfig, format_content, parse_content
 from .formats import get_format
 from . import auth
+from . import docs
 from .gdoc import doc
 from .mail import thread as mail_group, mailbox
 from .label import label as mail_label
@@ -922,6 +923,7 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
         return False, str(e)
 
 
+@docs.section("main")
 @main.command("pull")
 @click.argument("files", nargs=-1, required=True)
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
@@ -1039,6 +1041,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
             ui_success(summary)
 
 
+@docs.section("main")
 @main.command("push")
 @click.argument("files", nargs=-1, required=True)
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
@@ -1157,6 +1160,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
         click.echo(f"Done: {success_count}/{len(all_paths)} pushed")
 
 
+@docs.section("main")
 @main.command()
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file")
@@ -1208,6 +1212,7 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
         sys.exit(1)
 
 
+@docs.section("main")
 @main.command()
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output folder")
@@ -1296,27 +1301,29 @@ def man(ctx, md: bool):
     """Print the complete manual (auto-generated from commands)."""
     root = ctx.find_root().command
 
-    # Collect command groups organized into sections
-    _main_cmds = ["clone", "checkout", "pull", "push"]
-    _utility_cmds = {"auth", "bug", "man"}
-    all_cmd_names = root.list_commands(ctx)
+    # Collect commands and group by doc_section attribute
+    _section_order = {"main": 0, "resource": 1, "utility": 2}
+    _section_titles = {"main": "Main", "resource": "Resources", "utility": "Utility"}
 
-    sections: list[tuple[str, dict[str, tuple[bool, list]]]] = []
-    for section_title, cmd_names in [
-        ("Main", [n for n in _main_cmds if n in all_cmd_names]),
-        ("Resources", sorted(n for n in all_cmd_names if n not in _main_cmds and n not in _utility_cmds)),
-        ("Utility", sorted(n for n in _utility_cmds if n in all_cmd_names and n != "man")),
-    ]:
-        groups: dict[str, tuple[bool, list]] = {}
-        for cmd_name in cmd_names:
-            cmd = root.get_command(ctx, cmd_name)
-            if cmd:
-                commands = _collect_commands(cmd, override_name=cmd_name)
-                if commands:
-                    is_unstable = getattr(cmd, "unstable", False)
-                    groups[cmd_name] = (is_unstable, commands)
-        if groups:
-            sections.append((section_title, groups))
+    buckets: dict[str, dict[str, tuple[str | None, list]]] = {}
+    for cmd_name in root.list_commands(ctx):
+        if cmd_name == "man":
+            continue
+        cmd = root.get_command(ctx, cmd_name)
+        if not cmd:
+            continue
+        commands = _collect_commands(cmd, override_name=cmd_name)
+        if not commands:
+            continue
+
+        section_key = getattr(cmd, "doc_section", "resource")
+        maturity = getattr(cmd, "doc_maturity", None)
+        buckets.setdefault(section_key, {})[cmd_name] = (maturity, commands)
+
+    sections: list[tuple[str, dict[str, tuple[str | None, list]]]] = []
+    for key in sorted(buckets, key=lambda k: _section_order.get(k, 99)):
+        title = _section_titles.get(key, key.title())
+        sections.append((title, buckets[key]))
 
     if md:
         click.echo(_format_man_md(sections))
@@ -1324,15 +1331,15 @@ def man(ctx, md: bool):
         click.echo(_format_man_plain(sections))
 
 
-def _format_man_plain(sections: list[tuple[str, dict[str, tuple[bool, list]]]]) -> str:
+def _format_man_plain(sections: list[tuple[str, dict[str, tuple[str | None, list]]]]) -> str:
     """Format manual as plain text."""
     lines = ["GAX(1)", "", "NAME", "    gax - Google Access CLI", ""]
     lines.append("COMMANDS")
 
     for section_title, groups in sections:
         lines.append(f"\n  {section_title}:")
-        for group_name, (is_unstable, commands) in groups.items():
-            label = f"{group_name} [unstable]" if is_unstable else group_name
+        for group_name, (maturity, commands) in groups.items():
+            label = f"{group_name} [{maturity}]" if maturity else group_name
             lines.append(f"\n    {label}:")
             for full_name, help_text, arguments, options in commands:
                 args_str = " ".join(arguments)
@@ -1349,7 +1356,7 @@ def _format_man_plain(sections: list[tuple[str, dict[str, tuple[bool, list]]]]) 
     return "\n".join(lines)
 
 
-def _format_man_md(sections: list[tuple[str, dict[str, tuple[bool, list]]]]) -> str:
+def _format_man_md(sections: list[tuple[str, dict[str, tuple[str | None, list]]]]) -> str:
     """Format manual as Markdown (suitable for pandoc conversion to man page)."""
     lines = [
         "---",
@@ -1379,9 +1386,9 @@ def _format_man_md(sections: list[tuple[str, dict[str, tuple[bool, list]]]]) -> 
         lines.append("")
         lines.append(f"## {section_title}")
 
-        for group_name, (is_unstable, commands) in groups.items():
+        for group_name, (maturity, commands) in groups.items():
             lines.append("")
-            label = f"{group_name} [unstable]" if is_unstable else group_name
+            label = f"{group_name} [{maturity}]" if maturity else group_name
             lines.append(f"### {label}")
             lines.append("")
             for full_name, help_text, arguments, options in commands:
@@ -1454,6 +1461,7 @@ def _file_section_md() -> list[str]:
 # --- Auth commands ---
 
 
+@docs.section("utility")
 @main.group()
 def auth_cmd():
     """Authentication management"""
@@ -1524,6 +1532,7 @@ def _extract_spreadsheet_id(url: str) -> str:
     raise ValueError(f"Could not parse spreadsheet ID from: {url}")
 
 
+@docs.section("resource")
 @main.group()
 def sheet():
     """Google Sheets operations"""
@@ -2047,6 +2056,7 @@ REPO = "HeinrichHartmann/gax"
 ISSUES_URL = f"https://github.com/{REPO}/issues"
 
 
+@docs.section("utility")
 @main.command()
 @click.argument("title", required=False)
 @click.option("--body", "-b", help="Bug description")

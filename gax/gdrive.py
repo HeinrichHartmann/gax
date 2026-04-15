@@ -16,7 +16,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from .auth import get_authenticated_credentials
-from .ui import operation, success, error, unstable
+from . import docs as doc
+from .ui import operation, success, error
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,8 @@ def read_tracking_file(tracking_path: Path) -> dict:
 # =============================================================================
 
 
-@unstable
+@doc.section("resource")
+@doc.maturity("unstable")
 @click.group()
 def file():
     """Google Drive file operations"""
