@@ -7,9 +7,9 @@ import click
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .gsheet import pull as gsheet_pull, push as gsheet_push, clone_all, pull_all
+from .gsheet import pull as gsheet_pull, push as gsheet_push, pull_all
 from .gsheet.client import GSheetClient
-from .multipart import format_multipart, parse_multipart
+from .multipart import Section, format_section, format_multipart, parse_multipart
 from .frontmatter import SheetConfig, format_content, parse_content
 from .formats import get_format
 from . import auth
@@ -1445,13 +1445,42 @@ def sheet():
     default="md",
     help="Output format: md, csv, tsv, psv, json, jsonl",
 )
-def sheet_clone(url: str, output: Path | None, fmt: str):
-    """Clone all tabs from a spreadsheet to a multipart .sheet.gax.md file."""
+@click.option(
+    "-q", "--quiet",
+    is_flag=True,
+    help="Suppress multi-tab status message",
+)
+def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
+    """Clone first tab from a spreadsheet to a .sheet.gax.md file.
+
+    For all tabs, use 'gax sheet checkout'.
+    """
     try:
         spreadsheet_id = _extract_spreadsheet_id(url)
         click.echo(f"Fetching spreadsheet: {spreadsheet_id}")
 
-        title, sections = clone_all(spreadsheet_id, url, fmt)
+        client = GSheetClient()
+        info = client.get_spreadsheet_info(spreadsheet_id)
+        title = info["title"]
+        all_tabs = info["tabs"]
+        first_tab = all_tabs[0]
+
+        # Fetch only the first tab
+        formatter = get_format(fmt)
+        df = client.read(spreadsheet_id, first_tab["title"])
+        data = formatter.write(df)
+
+        from .formats import get_content_type
+        section = Section(
+            headers={
+                "type": "gax/sheet",
+                "title": title,
+                "source": url,
+                "tab": first_tab["title"],
+                "content-type": get_content_type(fmt),
+            },
+            content=data,
+        )
 
         if output:
             file_path = output
@@ -1464,12 +1493,18 @@ def sheet_clone(url: str, output: Path | None, fmt: str):
             click.echo(f"Error: File already exists: {file_path}", err=True)
             sys.exit(1)
 
-        content = format_multipart(sections)
+        content = format_section(section.headers, section.content)
         file_path.write_text(content, encoding="utf-8")
 
-        total_rows = sum(len(s.content.strip().split("\n")) - 1 for s in sections)
+        rows = len(data.strip().split("\n")) - 1
         click.echo(f"Created: {file_path}")
-        click.echo(f"Tabs: {len(sections)}, Total rows: {total_rows}")
+        click.echo(f"Rows: {rows}")
+
+        if not quiet and len(all_tabs) > 1:
+            click.echo(
+                f'  Tab "{first_tab["title"]}" cloned (1 of {len(all_tabs)} tabs).\n'
+                f"  For all tabs: gax sheet checkout {url}"
+            )
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
