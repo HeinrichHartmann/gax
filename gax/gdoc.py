@@ -1087,26 +1087,61 @@ def _add_comments_to_sections(
     is_flag=True,
     help="Include document comments as separate sections",
 )
-def clone(url: str, output: Optional[Path], with_comments: bool):
-    """Clone a Google Doc to a local .doc.gax.md file."""
+@click.option(
+    "-q", "--quiet",
+    is_flag=True,
+    help="Suppress multi-tab status message",
+)
+def clone(url: str, output: Optional[Path], with_comments: bool, quiet: bool):
+    """Clone a Google Doc to a local .doc.gax.md file.
+
+    Clones a single tab. For multi-tab documents, use 'gax doc checkout'.
+    """
     try:
         document_id = extract_doc_id(url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
         click.echo(f"Fetching: {document_id}")
-        sections = pull_doc(document_id, source_url)
+
+        # Fetch tab metadata
+        tabs = native_md.get_doc_tabs(document_id)
+        if not tabs:
+            tabs = [{"id": "", "title": "Document", "index": 0}]
+
+        # Get document title
+        creds = get_authenticated_credentials()
+        docs_service = build("docs", "v1", credentials=creds)
+        doc = docs_service.documents().get(documentId=document_id).execute()
+        doc_title = doc.get("title", "Untitled")
+
+        # Export only the first tab
+        first_tab = tabs[0]
+        full_md = native_md.export_doc_markdown(document_id)
+        tab_titles = [t["title"] for t in tabs]
+        tab_contents = native_md.split_doc_by_tabs(full_md, tab_titles)
+        tab_content = tab_contents.get(first_tab["title"], "")
+
+        time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        section = DocSection(
+            title=doc_title,
+            source=source_url,
+            time=time_str,
+            section=1,
+            section_title=first_tab["title"],
+            content=tab_content,
+        )
 
         if with_comments:
             click.echo("Fetching comments...")
-            sections = _add_comments_to_sections(sections, document_id)
-
-        content = format_multipart(sections)
+            sections = _add_comments_to_sections([section], document_id)
+            content = format_multipart(sections)
+        else:
+            content = format_section(section)
 
         if output:
             file_path = output
         else:
-            # Generate filename from title
-            safe_name = re.sub(r'[<>:"/\\|?*]', "-", sections[0].title)
+            safe_name = re.sub(r'[<>:"/\\|?*]', "-", doc_title)
             safe_name = re.sub(r"\s+", "_", safe_name)
             file_path = Path(f"{safe_name}.doc.gax.md")
 
@@ -1116,8 +1151,12 @@ def clone(url: str, output: Optional[Path], with_comments: bool):
 
         file_path.write_text(content, encoding="utf-8")
         success(f"Created: {file_path}")
-        click.echo(f"Title: {sections[0].title}")
-        click.echo(f"Sections: {len(sections)}")
+
+        if not quiet and len(tabs) > 1:
+            click.echo(
+                f'  Tab "{first_tab["title"]}" cloned (1 of {len(tabs)} tabs).\n'
+                f"  For all tabs: gax doc checkout {url}"
+            )
 
     except Exception as e:
         error(f"Error: {e}")
