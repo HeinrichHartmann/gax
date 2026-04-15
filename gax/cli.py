@@ -1290,65 +1290,165 @@ def _collect_commands(
 
 
 @main.command()
+@click.option("--md", is_flag=True, help="Output as Markdown (for pandoc)")
 @click.pass_context
-def man(ctx):
+def man(ctx, md: bool):
     """Print the complete manual (auto-generated from commands)."""
     root = ctx.find_root().command
 
+    # Collect command groups organized into sections
+    _main_cmds = ["clone", "checkout", "pull", "push"]
+    _utility_cmds = {"auth", "bug", "man"}
+    all_cmd_names = root.list_commands(ctx)
+
+    sections: list[tuple[str, dict[str, tuple[bool, list]]]] = []
+    for section_title, cmd_names in [
+        ("Main", [n for n in _main_cmds if n in all_cmd_names]),
+        ("Resources", sorted(n for n in all_cmd_names if n not in _main_cmds and n not in _utility_cmds)),
+        ("Utility", sorted(n for n in _utility_cmds if n in all_cmd_names and n != "man")),
+    ]:
+        groups: dict[str, tuple[bool, list]] = {}
+        for cmd_name in cmd_names:
+            cmd = root.get_command(ctx, cmd_name)
+            if cmd:
+                commands = _collect_commands(cmd, override_name=cmd_name)
+                if commands:
+                    is_unstable = getattr(cmd, "unstable", False)
+                    groups[cmd_name] = (is_unstable, commands)
+        if groups:
+            sections.append((section_title, groups))
+
+    if md:
+        click.echo(_format_man_md(sections))
+    else:
+        click.echo(_format_man_plain(sections))
+
+
+def _format_man_plain(sections: list[tuple[str, dict[str, tuple[bool, list]]]]) -> str:
+    """Format manual as plain text."""
     lines = ["GAX(1)", "", "NAME", "    gax - Google Access CLI", ""]
-
-    # Group commands by top-level
-    groups: dict[str, list] = {}
-    for cmd_name in sorted(root.list_commands(ctx)):
-        if cmd_name == "man":
-            continue
-        cmd = root.get_command(ctx, cmd_name)
-        if cmd:
-            # Pass cmd_name to preserve registered names (e.g., "mail" not "thread")
-            commands = _collect_commands(cmd, override_name=cmd_name)
-            if commands:
-                groups[cmd_name] = commands
-
     lines.append("COMMANDS")
 
-    for group_name, commands in groups.items():
-        lines.append(f"\n  {group_name}:")
-        for full_name, help_text, arguments, options in commands:
-            # Show command with positional arguments
-            args_str = " ".join(arguments)
-            if args_str:
-                lines.append(f"    gax {full_name} {args_str}")
-            else:
-                lines.append(f"    gax {full_name}")
-            if help_text:
-                lines.append(f"        {help_text}")
-            for opt, opt_help in options:
-                lines.append(f"        {opt}: {opt_help}")
+    for section_title, groups in sections:
+        lines.append(f"\n  {section_title}:")
+        for group_name, (is_unstable, commands) in groups.items():
+            label = f"{group_name} [unstable]" if is_unstable else group_name
+            lines.append(f"\n    {label}:")
+            for full_name, help_text, arguments, options in commands:
+                args_str = " ".join(arguments)
+                if args_str:
+                    lines.append(f"      gax {full_name} {args_str}")
+                else:
+                    lines.append(f"      gax {full_name}")
+                if help_text:
+                    lines.append(f"          {help_text}")
+                for opt, opt_help in options:
+                    lines.append(f"          {opt}: {opt_help}")
 
-    lines.extend(
-        [
-            "",
-            "FILES",
-            "    .sheet.gax.md         Spreadsheet data (single or multipart)",
-            "    .doc.gax.md           Document (all tabs, multipart)",
-            "    .tab.gax.md           Single document tab",
-            "    .mail.gax.md          Email thread",
-            "    .draft.gax.md         Email draft",
-            "    .cal.gax.md           Calendar event",
-            "    .form.gax.md          Google Form definition",
-            "    .gax.md               Mail list (TSV with YAML header)",
-            "    .label.mail.gax.md    Gmail labels state",
-            "    .filter.mail.gax.md   Gmail filters state",
-            "",
-            "    ~/.config/gax/credentials.json    OAuth credentials",
-            "    ~/.config/gax/token.json          Access token",
-            "",
-            "SEE ALSO",
-            "    gax <command> --help",
-        ]
-    )
+    lines.extend(_file_section_plain())
+    return "\n".join(lines)
 
-    click.echo("\n".join(lines))
+
+def _format_man_md(sections: list[tuple[str, dict[str, tuple[bool, list]]]]) -> str:
+    """Format manual as Markdown (suitable for pandoc conversion to man page)."""
+    lines = [
+        "---",
+        'title: GAX',
+        'section: 1',
+        'header: User Manual',
+        'footer: gax',
+        "---",
+        "",
+        "# NAME",
+        "",
+        "gax - Google Access CLI",
+        "",
+        "# SYNOPSIS",
+        "",
+        "**gax** *command* [*options*] [*args*]",
+        "",
+        "# DESCRIPTION",
+        "",
+        "Sync Google Workspace (Sheets, Docs, Gmail, Calendar) to local files "
+        "that are human-readable, machine-readable, and git-friendly.",
+        "",
+        "# COMMANDS",
+    ]
+
+    for section_title, groups in sections:
+        lines.append("")
+        lines.append(f"## {section_title}")
+
+        for group_name, (is_unstable, commands) in groups.items():
+            lines.append("")
+            label = f"{group_name} [unstable]" if is_unstable else group_name
+            lines.append(f"### {label}")
+            lines.append("")
+            for full_name, help_text, arguments, options in commands:
+                args_str = " ".join(arguments)
+                cmd = f"**gax {full_name}**"
+                if args_str:
+                    cmd += f" *{args_str}*"
+                lines.append(cmd)
+                if help_text:
+                    lines.append(f":   {help_text}")
+                for opt, opt_help in options:
+                    lines.append(f"    **{opt}**: {opt_help}")
+                lines.append("")
+
+    lines.extend(_file_section_md())
+    return "\n".join(lines)
+
+
+def _file_section_plain() -> list[str]:
+    return [
+        "",
+        "FILES",
+        "    .sheet.gax.md         Spreadsheet data",
+        "    .doc.gax.md           Document",
+        "    .tab.gax.md           Single document tab",
+        "    .mail.gax.md          Email thread",
+        "    .draft.gax.md         Email draft",
+        "    .cal.gax.md           Calendar event",
+        "    .form.gax.md          Google Form definition",
+        "    .gax.md               Mail list (TSV with YAML header)",
+        "    .label.mail.gax.md    Gmail labels state",
+        "    .filter.mail.gax.md   Gmail filters state",
+        "",
+        "    ~/.config/gax/credentials.json    OAuth credentials",
+        "    ~/.config/gax/token.json          Access token",
+        "",
+        "SEE ALSO",
+        "    gax <command> --help",
+    ]
+
+
+def _file_section_md() -> list[str]:
+    return [
+        "# FILES",
+        "",
+        "| Extension | Description |",
+        "|-----------|-------------|",
+        "| .sheet.gax.md | Spreadsheet data |",
+        "| .doc.gax.md | Document |",
+        "| .tab.gax.md | Single document tab |",
+        "| .mail.gax.md | Email thread |",
+        "| .draft.gax.md | Email draft |",
+        "| .cal.gax.md | Calendar event |",
+        "| .form.gax.md | Google Form definition |",
+        "| .gax.md | Mail list (TSV with YAML header) |",
+        "| .label.mail.gax.md | Gmail labels state |",
+        "| .filter.mail.gax.md | Gmail filters state |",
+        "",
+        "| Path | Description |",
+        "|------|-------------|",
+        "| ~/.config/gax/credentials.json | OAuth credentials |",
+        "| ~/.config/gax/token.json | Access token |",
+        "",
+        "# SEE ALSO",
+        "",
+        "**gax** *command* **--help**",
+    ]
 
 
 # --- Auth commands ---

@@ -164,3 +164,18 @@ def warning(msg: str) -> None:
 def confirm(question: str, default: bool = False) -> bool:
     """Ask yes/no question."""
     return Confirm.ask(question, default=default)
+
+
+def unstable(cmd):
+    """Mark a click command or group as unstable.
+
+    Usage:
+        @unstable
+        @click.group()
+        def mygroup():
+            '''My group help'''
+    """
+    cmd.unstable = True
+    if cmd.help:
+        cmd.help = "[unstable] " + cmd.help
+    return cmd

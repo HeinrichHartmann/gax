@@ -27,6 +27,7 @@ dev = [
     "pytest>=9.0.2",
     "ruff>=0.15.7",
     "pre-commit>=3.7.0",
+    "click-man>=0.5.1",
 ]
 
 [tool.pytest.ini_options]

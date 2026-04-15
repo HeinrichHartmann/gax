@@ -16,7 +16,7 @@ import yaml
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
-from .ui import operation, success, error
+from .ui import operation, success, error, unstable
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +259,7 @@ def parse_contacts_jsonl(file_path: Path) -> list[dict]:
 # --- CLI Commands ---
 
 
+@unstable
 @click.group()
 def contacts():
     """Google Contacts operations."""

@@ -1,4 +1,4 @@
-.PHONY: test test-e2e install lint fmt hooks readme
+.PHONY: test test-e2e install lint fmt hooks readme man
 
 test:
 	pytest tests/ -v -m "not e2e"
@@ -18,6 +18,13 @@ fmt:
 
 hooks:
 	uv run pre-commit install
+
+man: man/gax.1
+
+man/gax.1: gax/*.py
+	@mkdir -p man
+	@uv run gax man --md | pandoc -s -t man -o man/gax.1
+	@echo "Generated man/gax.1"
 
 readme: README.md
 
