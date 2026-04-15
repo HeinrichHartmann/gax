@@ -17,6 +17,7 @@ from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
 from .ui import operation, success
+from . import docs as doc
 
 logger = logging.getLogger(__name__)
 
@@ -643,6 +644,7 @@ def extract_event_id(url_or_id: str) -> tuple[str, str]:
 # =============================================================================
 
 
+@doc.section("resource")
 @click.group(name="cal")
 def cal_cli():
     """Google Calendar sync commands."""

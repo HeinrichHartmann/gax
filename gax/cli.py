@@ -13,6 +13,7 @@ from .multipart import Section, format_section, format_multipart, parse_multipar
 from .frontmatter import SheetConfig, format_content, parse_content
 from .formats import get_format
 from . import auth
+from . import docs
 from .gdoc import doc
 from .mail import thread as mail_group, mailbox
 from .label import label as mail_label
@@ -922,6 +923,7 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
         return False, str(e)
 
 
+@docs.section("main")
 @main.command("pull")
 @click.argument("files", nargs=-1, required=True)
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
@@ -1039,6 +1041,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
             ui_success(summary)
 
 
+@docs.section("main")
 @main.command("push")
 @click.argument("files", nargs=-1, required=True)
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
@@ -1157,6 +1160,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
         click.echo(f"Done: {success_count}/{len(all_paths)} pushed")
 
 
+@docs.section("main")
 @main.command()
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file")
@@ -1208,6 +1212,7 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
         sys.exit(1)
 
 
+@docs.section("main")
 @main.command()
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output folder")
@@ -1290,70 +1295,173 @@ def _collect_commands(
 
 
 @main.command()
+@click.option("--md", is_flag=True, help="Output as Markdown (for pandoc)")
 @click.pass_context
-def man(ctx):
+def man(ctx, md: bool):
     """Print the complete manual (auto-generated from commands)."""
     root = ctx.find_root().command
 
-    lines = ["GAX(1)", "", "NAME", "    gax - Google Access CLI", ""]
+    # Collect commands and group by doc_section attribute
+    _section_order = {"main": 0, "resource": 1, "utility": 2}
+    _section_titles = {"main": "Main", "resource": "Resources", "utility": "Utility"}
 
-    # Group commands by top-level
-    groups: dict[str, list] = {}
-    for cmd_name in sorted(root.list_commands(ctx)):
+    buckets: dict[str, dict[str, tuple[str | None, list]]] = {}
+    for cmd_name in root.list_commands(ctx):
         if cmd_name == "man":
             continue
         cmd = root.get_command(ctx, cmd_name)
-        if cmd:
-            # Pass cmd_name to preserve registered names (e.g., "mail" not "thread")
-            commands = _collect_commands(cmd, override_name=cmd_name)
-            if commands:
-                groups[cmd_name] = commands
+        if not cmd:
+            continue
+        commands = _collect_commands(cmd, override_name=cmd_name)
+        if not commands:
+            continue
 
+        section_key = getattr(cmd, "doc_section", "resource")
+        maturity = getattr(cmd, "doc_maturity", None)
+        buckets.setdefault(section_key, {})[cmd_name] = (maturity, commands)
+
+    sections: list[tuple[str, dict[str, tuple[str | None, list]]]] = []
+    for key in sorted(buckets, key=lambda k: _section_order.get(k, 99)):
+        title = _section_titles.get(key, key.title())
+        sections.append((title, buckets[key]))
+
+    if md:
+        click.echo(_format_man_md(sections))
+    else:
+        click.echo(_format_man_plain(sections))
+
+
+def _format_man_plain(sections: list[tuple[str, dict[str, tuple[str | None, list]]]]) -> str:
+    """Format manual as plain text."""
+    lines = ["GAX(1)", "", "NAME", "    gax - Google Access CLI", ""]
     lines.append("COMMANDS")
 
-    for group_name, commands in groups.items():
-        lines.append(f"\n  {group_name}:")
-        for full_name, help_text, arguments, options in commands:
-            # Show command with positional arguments
-            args_str = " ".join(arguments)
-            if args_str:
-                lines.append(f"    gax {full_name} {args_str}")
-            else:
-                lines.append(f"    gax {full_name}")
-            if help_text:
-                lines.append(f"        {help_text}")
-            for opt, opt_help in options:
-                lines.append(f"        {opt}: {opt_help}")
+    for section_title, groups in sections:
+        lines.append(f"\n  {section_title}:")
+        for group_name, (maturity, commands) in groups.items():
+            label = f"{group_name} [{maturity}]" if maturity else group_name
+            lines.append(f"\n    {label}:")
+            for full_name, help_text, arguments, options in commands:
+                args_str = " ".join(arguments)
+                if args_str:
+                    lines.append(f"      gax {full_name} {args_str}")
+                else:
+                    lines.append(f"      gax {full_name}")
+                if help_text:
+                    lines.append(f"          {help_text}")
+                for opt, opt_help in options:
+                    lines.append(f"          {opt}: {opt_help}")
 
-    lines.extend(
-        [
-            "",
-            "FILES",
-            "    .sheet.gax.md         Spreadsheet data (single or multipart)",
-            "    .doc.gax.md           Document (all tabs, multipart)",
-            "    .tab.gax.md           Single document tab",
-            "    .mail.gax.md          Email thread",
-            "    .draft.gax.md         Email draft",
-            "    .cal.gax.md           Calendar event",
-            "    .form.gax.md          Google Form definition",
-            "    .gax.md               Mail list (TSV with YAML header)",
-            "    .label.mail.gax.md    Gmail labels state",
-            "    .filter.mail.gax.md   Gmail filters state",
-            "",
-            "    ~/.config/gax/credentials.json    OAuth credentials",
-            "    ~/.config/gax/token.json          Access token",
-            "",
-            "SEE ALSO",
-            "    gax <command> --help",
-        ]
-    )
+    lines.extend(_file_section_plain())
+    return "\n".join(lines)
 
-    click.echo("\n".join(lines))
+
+def _format_man_md(sections: list[tuple[str, dict[str, tuple[str | None, list]]]]) -> str:
+    """Format manual as Markdown (suitable for pandoc conversion to man page)."""
+    lines = [
+        "---",
+        'title: GAX',
+        'section: 1',
+        'header: User Manual',
+        'footer: gax',
+        "---",
+        "",
+        "# NAME",
+        "",
+        "gax - Google Access CLI",
+        "",
+        "# SYNOPSIS",
+        "",
+        "**gax** *command* [*options*] [*args*]",
+        "",
+        "# DESCRIPTION",
+        "",
+        "Sync Google Workspace (Sheets, Docs, Gmail, Calendar) to local files "
+        "that are human-readable, machine-readable, and git-friendly.",
+        "",
+        "# COMMANDS",
+    ]
+
+    for section_title, groups in sections:
+        lines.append("")
+        lines.append(f"## {section_title}")
+
+        for group_name, (maturity, commands) in groups.items():
+            lines.append("")
+            label = f"{group_name} [{maturity}]" if maturity else group_name
+            lines.append(f"### {label}")
+            lines.append("")
+            for full_name, help_text, arguments, options in commands:
+                args_str = " ".join(arguments)
+                cmd = f"**gax {full_name}**"
+                if args_str:
+                    cmd += f" *{args_str}*"
+                lines.append(cmd)
+                if help_text:
+                    lines.append(f":   {help_text}")
+                for opt, opt_help in options:
+                    lines.append(f"    **{opt}**: {opt_help}")
+                lines.append("")
+
+    lines.extend(_file_section_md())
+    return "\n".join(lines)
+
+
+def _file_section_plain() -> list[str]:
+    return [
+        "",
+        "FILES",
+        "    .sheet.gax.md         Spreadsheet data",
+        "    .doc.gax.md           Document",
+        "    .tab.gax.md           Single document tab",
+        "    .mail.gax.md          Email thread",
+        "    .draft.gax.md         Email draft",
+        "    .cal.gax.md           Calendar event",
+        "    .form.gax.md          Google Form definition",
+        "    .gax.md               Mail list (TSV with YAML header)",
+        "    .label.mail.gax.md    Gmail labels state",
+        "    .filter.mail.gax.md   Gmail filters state",
+        "",
+        "    ~/.config/gax/credentials.json    OAuth credentials",
+        "    ~/.config/gax/token.json          Access token",
+        "",
+        "SEE ALSO",
+        "    gax <command> --help",
+    ]
+
+
+def _file_section_md() -> list[str]:
+    return [
+        "# FILES",
+        "",
+        "| Extension | Description |",
+        "|-----------|-------------|",
+        "| .sheet.gax.md | Spreadsheet data |",
+        "| .doc.gax.md | Document |",
+        "| .tab.gax.md | Single document tab |",
+        "| .mail.gax.md | Email thread |",
+        "| .draft.gax.md | Email draft |",
+        "| .cal.gax.md | Calendar event |",
+        "| .form.gax.md | Google Form definition |",
+        "| .gax.md | Mail list (TSV with YAML header) |",
+        "| .label.mail.gax.md | Gmail labels state |",
+        "| .filter.mail.gax.md | Gmail filters state |",
+        "",
+        "| Path | Description |",
+        "|------|-------------|",
+        "| ~/.config/gax/credentials.json | OAuth credentials |",
+        "| ~/.config/gax/token.json | Access token |",
+        "",
+        "# SEE ALSO",
+        "",
+        "**gax** *command* **--help**",
+    ]
 
 
 # --- Auth commands ---
 
 
+@docs.section("utility")
 @main.group()
 def auth_cmd():
     """Authentication management"""
@@ -1424,6 +1532,7 @@ def _extract_spreadsheet_id(url: str) -> str:
     raise ValueError(f"Could not parse spreadsheet ID from: {url}")
 
 
+@docs.section("resource")
 @main.group()
 def sheet():
     """Google Sheets operations"""
@@ -1947,6 +2056,7 @@ REPO = "HeinrichHartmann/gax"
 ISSUES_URL = f"https://github.com/{REPO}/issues"
 
 
+@docs.section("utility")
 @main.command()
 @click.argument("title", required=False)
 @click.option("--body", "-b", help="Bug description")

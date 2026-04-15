@@ -20,6 +20,7 @@ from .ui import operation, success, error
 from .store import store_blob
 from . import multipart
 from . import draft as draft_module
+from . import docs as doc
 
 logger = logging.getLogger(__name__)
 # label and filter are now registered in cli.py as top-level commands (ADR 020)
@@ -320,6 +321,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
 # Old mail container group removed - thread is now the mail group (ADR 020)
 
 
+@doc.section("resource")
 @click.group()
 def thread():
     """Individual email thread operations (clone, pull, reply)"""
@@ -762,6 +764,7 @@ def reply(file_or_url: str, output: Optional[Path]):
 # =============================================================================
 
 
+@doc.section("resource")
 @click.group(invoke_without_command=True)
 @click.option(
     "-q", "--query", default="in:inbox", help="Search query (default: in:inbox)"

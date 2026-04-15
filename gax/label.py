@@ -14,6 +14,7 @@ import click
 import yaml
 
 from .auth import get_authenticated_credentials
+from . import docs as doc
 from .ui import operation, success
 from googleapiclient.discovery import build
 
@@ -52,6 +53,8 @@ SYSTEM_LABELS = {
 }
 
 
+@doc.section("resource")
+@doc.maturity("unstable")
 @click.group()
 def label():
     """Gmail label management (declarative)."""
