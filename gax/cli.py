@@ -2098,17 +2098,76 @@ def issue(title: str | None, body: str | None, issue_type: str):
     sys.exit(subprocess.call(cmd))
 
 
+def _get_installed_sha() -> str | None:
+    """Return the git commit SHA of the currently installed gax uv tool, or None."""
+    import glob
+    import json
+
+    pattern = (
+        f"{Path.home()}/.local/share/uv/tools/gax"
+        "/lib/python*/site-packages/gax-*.dist-info/direct_url.json"
+    )
+    matches = glob.glob(pattern)
+    if not matches:
+        return None
+    try:
+        data = json.loads(Path(matches[0]).read_text())
+        return data.get("vcs_info", {}).get("commit_id")
+    except Exception:
+        return None
+
+
+def _fetch_commits_since(sha: str, verbose: bool) -> list[str] | None:
+    """Use gh CLI to fetch commits on main since sha. Returns formatted lines, or None."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("gh"):
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "api",
+                f"repos/{REPO}/commits?sha=main&per_page=100",
+                "--jq",
+                ".[] | .sha + \" \" + (.commit.message | split(\"\\n\")[0])",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+
+        lines = []
+        for line in result.stdout.strip().splitlines():
+            commit_sha, _, message = line.partition(" ")
+            if commit_sha.startswith(sha[:7]) or sha.startswith(commit_sha[:7]):
+                break
+            if verbose:
+                lines.append(f"  {commit_sha[:7]}  {message}")
+            else:
+                lines.append(f"  {commit_sha[:7]}  {message}")
+        return lines if lines else []
+    except Exception:
+        return None
+
+
 @docs.section("utility")
 @main.command()
-def upgrade():
+@click.option("-v", "--verbose", is_flag=True, help="Show full commit messages")
+@click.option("-q", "--quiet", is_flag=True, help="Skip changelog after upgrade")
+def upgrade(verbose: bool, quiet: bool):
     """Upgrade gax to the latest version from GitHub (uv tool install path).
 
-    Runs ``uv tool install --reinstall git+<repo>`` so the tool is rebuilt
-    from the current ``main``, then prints the CHANGELOG so you can see
-    what landed.
+    After upgrading, shows commits merged since your previous install.
+    Requires ``gh`` CLI for the changelog (skipped silently if absent).
+    Press Ctrl+C during changelog fetch to skip it.
     """
     import shutil
     import subprocess
+    from .ui import operation
 
     if not shutil.which("uv"):
         click.echo("Error: 'uv' is not installed.", err=True)
@@ -2118,6 +2177,8 @@ def upgrade():
         )
         sys.exit(1)
 
+    old_sha = _get_installed_sha()
+
     git_url = f"git+https://github.com/{REPO}.git"
     cmd = ["uv", "tool", "install", "--reinstall", git_url]
     click.echo(f"Running: {' '.join(cmd)}")
@@ -2125,24 +2186,29 @@ def upgrade():
     if rc != 0:
         sys.exit(rc)
 
-    # Fetch CHANGELOG from GitHub (the installed package doesn't ship it)
-    changelog_url = f"https://raw.githubusercontent.com/{REPO}/main/CHANGELOG.md"
-    try:
-        import urllib.request
-        with urllib.request.urlopen(changelog_url, timeout=10) as resp:
-            changelog = resp.read().decode("utf-8")
-    except Exception:
-        changelog = None
+    if quiet or not shutil.which("gh"):
+        return
 
-    if changelog:
-        click.echo("\n" + "=" * 60)
-        click.echo("CHANGELOG")
-        click.echo("=" * 60)
-        click.echo(changelog)
+    if not old_sha:
+        click.echo("\nCould not determine previous version; skipping changelog.")
+        return
+
+    click.echo("\nFetching changelog... (Ctrl+C to skip)")
+    try:
+        with operation("Fetching commits from GitHub"):
+            commits = _fetch_commits_since(old_sha, verbose)
+    except KeyboardInterrupt:
+        click.echo("\nChangelog skipped.")
+        return
+
+    if commits is None:
+        click.echo("(gh CLI unavailable or request failed — skipping changelog)")
+    elif not commits:
+        click.echo("Already up to date.")
     else:
-        click.echo(
-            f"\nView changelog at: https://github.com/{REPO}/blob/main/CHANGELOG.md"
-        )
+        click.echo(f"\nChanges since last upgrade ({old_sha[:7]}):")
+        for line in commits:
+            click.echo(line)
 
 
 if __name__ == "__main__":
