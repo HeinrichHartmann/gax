@@ -27,3 +27,5 @@ ENV/
 REVIEW/
 gax/Icon?
 .gax/
+TEST_REPORT.md
+REVIEW.md
