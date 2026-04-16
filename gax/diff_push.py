@@ -1,15 +1,69 @@
 """Diff-based push for Google Docs tabs (experimental).
 
-Instead of replacing all content, this module:
-1. Aligns the markdown AST with the live Google Doc JSON structure
-2. Diffs the base AST (from pull) against the edited AST (local file)
-3. Translates diff operations into minimal Docs API mutations
-4. Applies only the changed elements
+Gated behind ``gax doc tab push --patch``. See ADR 027 for rationale.
 
-This preserves Google Docs formatting, comments, and other elements
-that markdown doesn't represent.
+Strategy
+========
 
-See ADR 027 for design rationale and experimental validation.
+Full-replace push destroys all non-markdown formatting on every push.
+Diff-based push instead computes the minimal set of Docs API mutations
+needed to turn the live document into the edited markdown, so
+collaborator formatting, comments, suggestions, etc. survive.
+
+Pipeline (see the four sections below in source order):
+
+    1. Alignment  — walk the pulled markdown AST and the live doc JSON
+                    in parallel; produce an ``AlignedNode`` per AST node
+                    carrying the Google Doc index range it occupies.
+                    (section: "Alignment")
+
+    2. AST Diff   — ``difflib.SequenceMatcher`` over
+                    ``(node_type, node_text)`` keys of base vs edited
+                    AST, emitting ``EditOp`` (update / insert / delete).
+                    (section: "AST Diff")
+
+    3. Mutations  — translate each ``EditOp`` into Docs API
+                    ``batchUpdate`` requests, using the alignment to
+                    resolve edit positions to doc indices.
+                    (section: "Mutation translator")
+
+    4. Orchestrate — ``diff_push`` / ``preview_diff`` stitch it together
+                    and call the API.
+                    (sections: "Preview", "Top-level orchestrator")
+
+Key invariants / gotchas
+========================
+
+* **UTF-16 indices.** Google Docs addresses content in UTF-16 code
+  units, not Python characters. All index math uses ``_utf16_len``
+  (borrowed from ``md2docs``). Do not substitute ``len(text)``.
+
+* **Paragraph ranges include the trailing newline.** A paragraph's
+  ``[startIndex, endIndex)`` covers its text PLUS its terminal ``\\n``.
+  Deletions that want to preserve paragraph structure must stop at
+  ``endIndex - 1`` so the newline survives. See
+  ``_update_paragraph_requests``.
+
+* **Mutations are applied in reverse index order.** ``diff_to_mutations``
+  sorts requests by ``-startIndex`` so each applied request only shifts
+  indices *below* an already-processed range, leaving the earlier
+  (lower-index) requests' captured indices valid. All requests for a
+  single "update" op share the same start index and rely on stable sort
+  to keep their emit order (delete → insert → restyle). Multiple
+  inserts at the *same* anchor are a known weak spot — they end up in
+  reversed doc order because each insert pushes its predecessor down.
+
+* **No revisionId gating.** We do NOT use ``requiredRevisionId`` on
+  ``batchUpdate``. The concurrency model is: pull base state, diff,
+  push, all in one short window (ms–seconds). If a collaborator edits
+  inside that window the push can clobber their change. This is
+  accepted for the experimental path; see ADR 027.
+
+* **Drive API markdown export is lossy.** It merges consecutive
+  paragraphs (no blank line between them) into one markdown paragraph,
+  flattens nested lists, and renders code blocks as blockquotes.
+  Alignment accommodates the first via accumulation; see ``align``
+  and ``_insert_node_requests`` for the code-block workaround.
 """
 
 import difflib
@@ -247,11 +301,30 @@ def align(doc_elements: list[DocElement], ast_nodes: list[Node]) -> list[Aligned
                 ai += 1
                 continue
 
-        # Type mismatch or accumulation failed — still advance both
-        # (best effort; the diff will detect these as changes)
+        # ======================================================================
+        # UNSAFE PATH — experimental fallback on alignment mismatch.
+        # ----------------------------------------------------------------------
+        # We could not match this doc element to this AST node (types disagree,
+        # or accumulation didn't converge). We advance both cursors anyway and
+        # emit an AlignedNode that pairs the AST node with WHATEVER doc element
+        # happens to sit at `di`. That means downstream mutations for this
+        # node will target an index range that does NOT correspond to its
+        # text — a patch for a heading may delete a paragraph, etc.
+        #
+        # Kept as a "best effort" because refusing to align at all makes
+        # --patch unusable on any doc the Drive API export surprises us with.
+        # Prefer a partly-wrong push that the user can inspect over a hard
+        # failure, while --patch is still experimental. Revisit when we have
+        # either a hand-rolled pull converter (ADR 027 "Alternatives") or
+        # enough field data to classify the mismatches.
+        #
+        # If you're debugging a corrupted doc after --patch, this is the
+        # first place to look.
+        # ======================================================================
         logger.warning(
             f"Alignment mismatch at doc[{di}]={d.type}:{d.text[:30]!r} "
-            f"vs ast[{ai}]={ntype}:{ntext[:30]!r}"
+            f"vs ast[{ai}]={ntype}:{ntext[:30]!r} — "
+            "downstream mutations for this node may target wrong indices"
         )
         result.append(AlignedNode(
             node=node,
@@ -390,11 +463,22 @@ def diff_to_mutations(
 ) -> list[dict]:
     """Translate edit operations into Docs API batchUpdate requests.
 
-    Currently supports:
-    - Update paragraph/heading text (delete + insert + restyle)
-    - Update inline formatting
+    Supported ops:
 
-    Unsupported operations (insert, delete, table changes) raise ValueError.
+    * ``update`` for paragraph / heading / list item (delete existing
+      text, insert new text, re-apply paragraph style and inline spans).
+    * ``update`` for table cells of unchanged shape (per-cell patch).
+    * ``insert`` of paragraph / heading / list item / code block at the
+      end of an aligned base node (or at doc start if inserting before
+      the first element).
+    * ``delete`` of an aligned base node's full range.
+
+    Raises ``ValueError`` for shapes we refuse to touch: changing table
+    row/column count, multi-paragraph table cells, and update ops where
+    base and edit node types disagree.
+
+    Requests are returned sorted by descending start index; see the
+    module docstring for why that ordering matters.
     """
     requests = []
 
@@ -455,7 +539,27 @@ def diff_to_mutations(
                 }
             })
 
-    # Sort requests by index in reverse order so earlier indices stay stable
+    # Apply requests in descending start-index order, so each request only
+    # shifts content at indices BELOW the ones we've already processed — the
+    # captured indices on not-yet-applied requests stay valid.
+    #
+    # Assumptions this relies on (not asserted; break at your peril):
+    #   * Python's sort is stable, so the delete+insert+style requests that
+    #     share the same start index keep their emit order (delete → insert →
+    #     restyle → inline styles). `_update_paragraph_requests` depends on
+    #     this.
+    #   * `_sort_key` looks for a `range.startIndex` or `location.index`
+    #     on the first dict value — OK for every request shape we emit
+    #     today (deleteContentRange, insertText, updateParagraphStyle,
+    #     updateTextStyle, createParagraphBullets). A new request shape
+    #     without either will silently sort to 0.
+    #
+    # Known weak spot: multiple `insert` ops with the same anchor will
+    # arrive at the same insert_idx, share the same sort key, and execute
+    # in emit order — but each insertText pushes its predecessor down, so
+    # the final doc order is REVERSED relative to the diff's intent. We
+    # accept this while --patch is experimental; fix by coalescing
+    # same-anchor inserts into a single insertText when it bites us.
     def _sort_key(req):
         for val in req.values():
             if isinstance(val, dict):
@@ -750,6 +854,12 @@ def _insert_node_requests(
         text = "".join(c.text for c in node.children) + "\n"
         children = node.children
     elif isinstance(node, CodeBlock):
+        # Emit code blocks as blockquote-prefixed lines. This is not a
+        # mistake: the Drive API markdown export does not preserve real
+        # Google Docs code blocks — it round-trips them as blockquoted
+        # text. To stay consistent with what we pull back, insert goes
+        # out the same way. Revisit if/when Drive export learns to
+        # represent code blocks natively.
         prefixed = "\n".join(f"> {line}" for line in node.text.split("\n"))
         text = prefixed + "\n"
         children = []
@@ -915,6 +1025,32 @@ def preview_diff(
             docs_service=docs_service, drive_service=drive_service,
         )
 
+    # Dry-run the mutation translator so unsupported ops (table shape
+    # changes, multi-paragraph cells, mismatched types) surface here
+    # rather than after the user confirms. We pull the doc JSON and run
+    # alignment + diff_to_mutations; the result is discarded — diff_push
+    # will redo the work against fresh state right before applying.
+    try:
+        doc = (
+            docs_service.documents()
+            .get(documentId=document_id, includeTabsContent=True)
+            .execute()
+        )
+        tab_id = None
+        tab_body = None
+        for tab in doc.get("tabs", []):
+            props = tab.get("tabProperties", {})
+            if props.get("title") == tab_name:
+                tab_id = props.get("tabId")
+                tab_body = tab.get("documentTab", {}).get("body", {}).get("content", [])
+                break
+        if tab_id and tab_body is not None:
+            doc_elements = walk_doc_body(tab_body)
+            alignment = align(doc_elements, base_nodes)
+            diff_to_mutations(ops, alignment, tab_id)
+    except ValueError as e:
+        warnings.append(f"Patch cannot be applied: {e}")
+
     # Build summary
     updates = [op for op in ops if op.type == "update"]
     inserts = [op for op in ops if op.type == "insert"]
@@ -968,9 +1104,10 @@ def diff_push(
         List of warning messages (empty if all went well)
 
     Raises:
-        ValueError: If the diff contains unsupported operations
-            (inserts, deletes, table changes). Caller should fall
-            back to full-replace push.
+        ValueError: If the diff contains shapes we refuse to translate
+            (table row/column-count change, multi-paragraph table
+            cells, mismatched node types on an update). The caller
+            should fall back to full-replace push in that case.
     """
     from . import native_md
     from googleapiclient.discovery import build
