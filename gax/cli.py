@@ -1040,6 +1040,9 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
         else:
             ui_success(summary)
 
+    if fail_count:
+        sys.exit(1)
+
 
 @docs.section("main")
 @main.command("push")
