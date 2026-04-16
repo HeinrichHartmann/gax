@@ -2087,5 +2087,52 @@ def bug(title: str | None, body: str | None):
     sys.exit(subprocess.call(cmd))
 
 
+@docs.section("utility")
+@main.command()
+def upgrade():
+    """Upgrade gax to the latest version from GitHub (uv tool install path).
+
+    Runs ``uv tool install --reinstall git+<repo>`` so the tool is rebuilt
+    from the current ``main``, then prints the CHANGELOG so you can see
+    what landed.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("uv"):
+        click.echo("Error: 'uv' is not installed.", err=True)
+        click.echo(
+            "Install it: https://docs.astral.sh/uv/getting-started/installation/",
+            err=True,
+        )
+        sys.exit(1)
+
+    git_url = f"git+https://github.com/{REPO}.git"
+    cmd = ["uv", "tool", "install", "--reinstall", git_url]
+    click.echo(f"Running: {' '.join(cmd)}")
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        sys.exit(rc)
+
+    # Fetch CHANGELOG from GitHub (the installed package doesn't ship it)
+    changelog_url = f"https://raw.githubusercontent.com/{REPO}/main/CHANGELOG.md"
+    try:
+        import urllib.request
+        with urllib.request.urlopen(changelog_url, timeout=10) as resp:
+            changelog = resp.read().decode("utf-8")
+    except Exception:
+        changelog = None
+
+    if changelog:
+        click.echo("\n" + "=" * 60)
+        click.echo("CHANGELOG")
+        click.echo("=" * 60)
+        click.echo(changelog)
+    else:
+        click.echo(
+            f"\nView changelog at: https://github.com/{REPO}/blob/main/CHANGELOG.md"
+        )
+
+
 if __name__ == "__main__":
     main()
