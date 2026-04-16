@@ -2059,32 +2059,87 @@ ISSUES_URL = f"https://github.com/{REPO}/issues"
 @docs.section("utility")
 @main.command()
 @click.argument("title", required=False)
-@click.option("--body", "-b", help="Bug description")
-def bug(title: str | None, body: str | None):
-    """Report a bug (opens GitHub issue via gh CLI).
+@click.option("--body", "-b", help="Issue description")
+@click.option(
+    "--type",
+    "issue_type",
+    type=click.Choice(["bug", "feature"]),
+    default="bug",
+    show_default=True,
+    help="Issue type (sets the GitHub label)",
+)
+def issue(title: str | None, body: str | None, issue_type: str):
+    """File a GitHub issue for gax (opens via gh CLI).
 
     \b
     Examples:
-        gax bug
-        gax bug "Push swallows newlines"
-        gax bug "Push swallows newlines" -b "When pushing .tab.gax files..."
+        gax issue
+        gax issue "Push swallows newlines"
+        gax issue "Attachment support" --type feature
     """
     import shutil
     import subprocess
 
     if not shutil.which("gh"):
         click.echo("Error: 'gh' (GitHub CLI) is not installed.", err=True)
-        click.echo(f"\nPlease report bugs at: {ISSUES_URL}/new", err=True)
+        click.echo(f"\nPlease file issues at: {ISSUES_URL}/new", err=True)
         click.echo("\nOr install gh: https://cli.github.com/", err=True)
         sys.exit(1)
 
-    cmd = ["gh", "issue", "create", "--repo", REPO, "--label", "bug"]
+    cmd = ["gh", "issue", "create", "--repo", REPO, "--label", issue_type]
     if title:
         cmd += ["--title", title]
     if body:
         cmd += ["--body", body]
 
     sys.exit(subprocess.call(cmd))
+
+
+@docs.section("utility")
+@main.command()
+def upgrade():
+    """Upgrade gax to the latest version from GitHub (uv tool install path).
+
+    Runs ``uv tool install --reinstall git+<repo>`` so the tool is rebuilt
+    from the current ``main``, then prints the CHANGELOG so you can see
+    what landed.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("uv"):
+        click.echo("Error: 'uv' is not installed.", err=True)
+        click.echo(
+            "Install it: https://docs.astral.sh/uv/getting-started/installation/",
+            err=True,
+        )
+        sys.exit(1)
+
+    git_url = f"git+https://github.com/{REPO}.git"
+    cmd = ["uv", "tool", "install", "--reinstall", git_url]
+    click.echo(f"Running: {' '.join(cmd)}")
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        sys.exit(rc)
+
+    # Fetch CHANGELOG from GitHub (the installed package doesn't ship it)
+    changelog_url = f"https://raw.githubusercontent.com/{REPO}/main/CHANGELOG.md"
+    try:
+        import urllib.request
+        with urllib.request.urlopen(changelog_url, timeout=10) as resp:
+            changelog = resp.read().decode("utf-8")
+    except Exception:
+        changelog = None
+
+    if changelog:
+        click.echo("\n" + "=" * 60)
+        click.echo("CHANGELOG")
+        click.echo("=" * 60)
+        click.echo(changelog)
+    else:
+        click.echo(
+            f"\nView changelog at: https://github.com/{REPO}/blob/main/CHANGELOG.md"
+        )
 
 
 if __name__ == "__main__":

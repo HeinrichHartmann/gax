@@ -2,9 +2,11 @@
 
 ## Instructions (for agents running this protocol)
 
+**This is a strict checklist. Execute it exactly as written. Do not improvise, do not add extra tests, do not skip items, do not substitute your own judgment for what should be tested. If a step is unclear, note it in Other findings and move on -- do not invent an alternative.**
+
 1. **Write your run to `TEST_REPORT.md`** in the repo root. This file is gitignored and clobbered on each run -- do not edit this protocol file itself.
 2. **Copy the checklist** from this file into `TEST_REPORT.md` as your working document.
-3. **Run each test** in order. Execute the exact commands shown.
+3. **Run each test** in order. Execute the exact commands shown -- no variations.
 4. **Validate the result carefully** -- don't just check the exit code. Open files, inspect contents, verify against the Google UI where the test says so. A command that "ran" but produced garbage is a failure.
 5. **Check the box** (`[x]`) in `TEST_REPORT.md` only if the test passed its validation.
 6. **Leave the box unchecked and add a note** directly under the test item if it failed or was skipped. Include the error, exit code, or what was wrong with the output.
@@ -66,9 +68,9 @@ Later this should be converted into an automated smoke test.
 
 ## Mailbox
 
-- [ ] `gax mailbox clone -q "in:inbox" -l 10` -- creates list file
+- [ ] `gax mailbox clone -q "in:inbox" --limit 10` -- creates list file
 - [ ] `gax mailbox pull <file>` -- refreshes
-- [ ] `gax mailbox fetch -q "in:inbox" -l 3 -o threads/` -- materializes full threads
+- [ ] `gax mailbox fetch -q "in:inbox" --limit 3 -o threads/` -- materializes full threads
 
 ## Mail labels
 

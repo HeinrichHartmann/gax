@@ -1068,6 +1068,13 @@ def tab_push(file: Path, yes: bool, use_patch: bool):
             for w in push_warnings:
                 click.echo(f"  Warning: {w.feature}: {w.detail}")
 
+            click.echo(
+                "Warning: markdown cannot faithfully represent a Google Doc. "
+                "Non-markdown formatting (colors, fonts, alignment, comments, "
+                "suggestions, images) may be lost. Use --patch for incremental "
+                "updates that preserve formatting (experimental)."
+            )
+
             if not yes:
                 if not click.confirm("Push these changes?"):
                     click.echo("Aborted.")
