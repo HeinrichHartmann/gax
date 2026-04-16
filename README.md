@@ -61,17 +61,17 @@ COMMANDS
 
   Main:
 
-    clone:
-      gax clone [URL]
-          Clone a Google resource from URL.
-          -o, --output: Output file
-          -f, --format: Output format (for forms)
-
     checkout:
       gax checkout [URL]
           Checkout a Google resource from URL into a folder of individual files.
           -o, --output: Output folder
           -f, --format: Output format (for sheets)
+
+    clone:
+      gax clone [URL]
+          Clone a Google resource from URL.
+          -o, --output: Output file
+          -f, --format: Output format (for forms)
 
     pull:
       gax pull [FILES]
@@ -91,120 +91,226 @@ COMMANDS
           List available calendars.
       gax cal checkout [CALENDAR]
           Checkout events as individual .cal.gax.md files into a folder.
+          -o, --output: Output folder (default: calendar.cal.gax.md.d)
+          --days, -d: Number of days (default: 7)
+          --from: Start date (YYYY-MM-DD)
+          --to: End date (YYYY-MM-DD)
       gax cal clone [CALENDAR]
           Clone events to a .cal.gax.md file.
+          -o, --output: Output file (default: calendar.cal.gax.md)
+          --days, -d: Number of days (default: 7)
+          --from: Start date (YYYY-MM-DD)
+          --to: End date (YYYY-MM-DD)
+          -v, --verbose: Include event descriptions
       gax cal event clone [ID_OR_URL]
           Clone an event to a local .cal.gax.md file.
+          --cal, -c: Calendar ID (default: primary)
+          -o, --output: Output file path
+      gax cal event delete [FILE_PATH]
+          Delete event from calendar.
+          -y, --yes: Skip confirmation
+      gax cal event new
+          Create a new event file (edit and push to create upstream).
+          --cal, -c: Calendar ID (default: primary)
+          -o, --output: Output file path
+      gax cal event pull [FILE_PATH]
+          Pull latest event data from API.
       gax cal event push [FILE_PATH]
           Push local changes to API.
+          -y, --yes: Skip confirmation
       gax cal list [CALENDAR]
           List events from a calendar.
+          --days, -d: Number of days to show (default: 7)
+          --from: Start date (YYYY-MM-DD)
+          --to: End date (YYYY-MM-DD)
+          --format, -f: Output format (default: md)
+          -v, --verbose: Include event descriptions
       gax cal pull [FILE]
           Pull latest events to existing file.
 
     contacts [unstable]:
-      gax contacts clone
-          Clone all contacts to a local file.
-      gax contacts plan [FILE]
-          Generate a plan for syncing local contacts to Google.
       gax contacts apply [PLAN_FILE]
           Apply a contacts plan to Google.
+          -y, --yes: Skip confirmation
+      gax contacts clone
+          Clone all contacts to a local file.
+          -f, --format: Output format: md (view-only) or jsonl (editable)
+          -o, --output: Output file (default: contacts.<format>)
+      gax contacts plan [FILE]
+          Generate a plan for syncing local contacts to Google.
+          -o, --output: Output plan file (default: <file>.plan.yaml)
       gax contacts pull [FILE]
           Pull latest contacts from Google.
 
     doc:
-      gax doc clone [URL]
-          Clone a Google Doc to a local .doc.gax.md file.
       gax doc checkout [URL]
           Checkout all tabs to individual files in a folder.
+          -o, --output: Output folder (default: <title>.doc.gax.md.d)
+      gax doc clone [URL]
+          Clone a Google Doc to a local .doc.gax.md file.
+          --output, -o: Output file (default: <title>.doc.gax.md)
+          --with-comments: Include document comments as separate sections
+          -q, --quiet: Suppress multi-tab status message
       gax doc pull [FILE]
           Pull latest content from Google Docs to local file.
+          --with-comments: Include document comments as separate sections
       gax doc tab clone [URL] [TAB_NAME]
           Clone a single tab to a .tab.gax.md file.
-      gax doc tab push [FILE]
-          Push local changes to a single tab.
+          --output, -o: Output file (default: <tab>.tab.gax.md)
       gax doc tab diff [FILE]
           Show diff between local file and remote tab.
+      gax doc tab import [URL] [FILE]
+          Import a markdown file as a new tab in a document.
+          --output, -o: Output tracking file (default: <filename>.tab.gax.md)
+      gax doc tab list [URL]
+          List tabs in a document (TSV output).
+      gax doc tab pull [FILE]
+          Pull latest content for a single tab.
+      gax doc tab push [FILE]
+          Push local changes to a single tab (with confirmation).
+          -y, --yes: Skip confirmation prompt
+          --patch: Incremental push: apply only changed elements (experimental)
 
     draft:
-      gax draft new
-          Create a new local draft file.
       gax draft clone [DRAFT_ID_OR_URL]
           Clone an existing draft from Gmail.
-      gax draft push [FILE]
-          Push local draft to Gmail.
-      gax draft pull [FILE]
-          Pull latest content from Gmail draft.
+          --output, -o: Output file (default: <subject>.draft.gax.md)
       gax draft list
           List Gmail drafts (TSV output).
+          --limit: Maximum results (default: 100)
+      gax draft new
+          Create a new local draft file.
+          --output, -o: Output file (default: <subject>.draft.gax.md)
+          --to: Recipient email address
+          --subject: Email subject
+      gax draft pull [FILE]
+          Pull latest content from Gmail draft.
+      gax draft push [FILE]
+          Push local draft to Gmail.
+          -y, --yes: Skip confirmation prompt
 
     file [unstable]:
       gax file clone [URL_OR_ID]
           Clone a file from Google Drive.
-      gax file push [FILE_PATH]
-          Push local file to Google Drive.
+          -o, --output: Output file path
       gax file pull [FILE_PATH]
           Pull latest version of a file from Google Drive.
+      gax file push [FILE_PATH]
+          Push local file to Google Drive.
+          --public: Make file publicly accessible
+          -y, --yes: Skip confirmation
 
     form [unstable]:
-      gax form clone [URL]
-          Clone a Google Form to a local .form.gax.md file.
-      gax form plan [FILE]
-          Generate a plan from edited form file.
       gax form apply [PLAN_FILE]
           Apply form changes from a plan file.
+          -y, --yes: Skip confirmation
+      gax form clone [URL]
+          Clone a Google Form to a local .form.gax.md file.
+          --output, -o: Output file (default: <title>.form.gax.md)
+          --format, -f: Content format: md (readable, default) or yaml (round-trip safe)
+      gax form plan [FILE]
+          Generate a plan from edited form file.
+          -o, --output: Output plan file
       gax form pull [FILE]
           Pull latest form definition from Google Forms.
 
     mail:
       gax mail clone [THREAD_ID_OR_URL]
           Clone a single email thread to a local .mail.gax.md file.
+          --output, -o: Output file
       gax mail pull [PATH]
           Pull latest messages for .mail.gax.md file(s).
       gax mail reply [FILE_OR_URL]
           Create a reply draft from a thread.
+          --output, -o: Output file (default: Re_<subject>.draft.gax.md)
 
     mail-filter [unstable]:
-      gax mail-filter clone
-          Clone Gmail filters to a .gax.md file.
-      gax mail-filter plan [FILE]
-          Generate plan from edited filters file.
       gax mail-filter apply [PLAN_FILE]
           Apply filter changes from plan file.
+          -y, --yes: Skip confirmation
+      gax mail-filter clone
+          Clone Gmail filters to a .gax.md file.
+          -o, --output: Output file (default: mail-filters.gax.md)
+      gax mail-filter list
+          List Gmail filters (TSV output).
+      gax mail-filter plan [FILE]
+          Generate plan from edited filters file.
+          -o, --output: Output plan file
+      gax mail-filter pull [FILE]
+          Pull latest filters to existing file.
 
     mail-label [unstable]:
-      gax mail-label clone
-          Clone Gmail labels to a .gax.md file.
-      gax mail-label plan [FILE]
-          Generate plan from edited labels file.
       gax mail-label apply [PLAN_FILE]
           Apply label changes from plan file.
+          -y, --yes: Skip confirmation
+      gax mail-label clone
+          Clone Gmail labels to a .gax.md file.
+          -o, --output: Output file (default: mail-labels.gax.md)
+          --all: Include system labels (read-only)
+      gax mail-label list
+          List Gmail labels (TSV output).
+      gax mail-label plan [FILE]
+          Generate plan from edited labels file.
+          -o, --output: Output plan file
+          --delete: Include deletions in plan
+      gax mail-label pull [FILE]
+          Pull latest labels to existing file.
+          --all: Include system labels (read-only)
 
     mailbox:
-      gax mailbox clone
-          Clone threads from Gmail for bulk labeling.
-      gax mailbox fetch
-          Fetch full threads matching query into a folder.
-      gax mailbox plan [FILE]
-          Generate plan from edited list file.
       gax mailbox apply [PLAN_FILE]
           Apply label changes from plan.
+          -y, --yes: Skip confirmation
+      gax mailbox clone
+          Clone threads from Gmail for bulk labeling.
+          -o, --output: Output file (default: mailbox.gax.md)
+          -q, --query: Search query (default: in:inbox)
+          --limit: Maximum threads (default: 50)
+      gax mailbox fetch
+          Fetch full threads matching query into a folder.
+          -o, --output: Output folder (default: mailbox.gax.md.d)
+          -q, --query: Search query (default: in:inbox)
+          --limit: Maximum threads (default: 50)
+      gax mailbox plan [FILE]
+          Generate plan from edited list file.
+          -o, --output: Output file (default: mailbox.plan.yaml)
       gax mailbox pull [FILE]
           Update a .gax.md file by re-fetching from Gmail.
 
     sheet:
-      gax sheet clone [URL]
-          Clone first tab from a spreadsheet to a .sheet.gax.md file.
+      gax sheet apply [FOLDER]
+          Apply planned changes by pushing to Google Sheets.
+          --with-formulas: Interpret formulas (e.g. =SUM(A1:A10))
+          -y, --yes: Skip confirmation
       gax sheet checkout [URL]
           Checkout all tabs to individual files in a folder.
+          -o, --output: Output folder (default: <title>.sheet.gax.md.d)
+          -f, --format: Output format: md, csv, tsv, psv, json, jsonl
+      gax sheet clone [URL]
+          Clone first tab from a spreadsheet to a .sheet.gax.md file.
+          --output, -o: Output file (default: <title>.sheet.gax.md)
+          -f, --format: Output format: md, csv, tsv, psv, json, jsonl
+          -q, --quiet: Suppress multi-tab status message
+      gax sheet plan [FOLDER]
+          Show what changes would be pushed to Google Sheets.
+      gax sheet pull [FILE]
+          Pull latest data for all tabs in a multipart file or checkout folder.
       gax sheet push [FOLDER]
           Push all tabs in a checkout folder to Google Sheets.
-      gax sheet pull [FILE]
-          Pull latest data for all tabs.
+          --with-formulas: Interpret formulas (e.g. =SUM(A1:A10))
+          -y, --yes: Skip confirmation prompt
       gax sheet tab clone [URL] [TAB_NAME]
           Clone a single tab to a .sheet.gax.md file.
+          --output, -o: Output file (default: <tab>.sheet.gax.md)
+          -f, --format: Output format: md, csv, tsv, psv, json, jsonl
+      gax sheet tab list [URL]
+          List tabs in a spreadsheet (TSV output).
+      gax sheet tab pull [FILE]
+          Pull latest data for a single tab.
       gax sheet tab push [FILE]
           Push local data to a single tab.
+          --with-formulas: Interpret formulas (e.g. =SUM(A1:A10))
+          -y, --yes: Skip confirmation prompt
 
   Utility:
 
@@ -217,13 +323,19 @@ COMMANDS
           Show authentication status.
 
     issue:
-      gax issue [TITLE] [--type bug|feature]
-          File a GitHub issue for gax (opens via gh CLI). Defaults to --type bug.
+      gax issue [TITLE]
+          File a GitHub issue for gax (opens via gh CLI).
+          --body, -b: Issue description
+          --type: Issue type (sets the GitHub label)
+
+    upgrade:
+      gax upgrade
+          Upgrade gax to the latest version from GitHub (uv tool install path).
 
 FILES
+    .sheet.gax.md         Spreadsheet data
     .doc.gax.md           Document
     .tab.gax.md           Single document tab
-    .sheet.gax.md         Spreadsheet data
     .mail.gax.md          Email thread
     .draft.gax.md         Email draft
     .cal.gax.md           Calendar event
@@ -231,6 +343,12 @@ FILES
     .gax.md               Mail list (TSV with YAML header)
     .label.mail.gax.md    Gmail labels state
     .filter.mail.gax.md   Gmail filters state
+
+    ~/.config/gax/credentials.json    OAuth credentials
+    ~/.config/gax/token.json          Access token
+
+SEE ALSO
+    gax <command> --help
 ```
 <!-- END GAX MAN -->
 

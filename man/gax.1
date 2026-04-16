@@ -144,7 +144,8 @@ Pull latest content for a single tab.
 .TP
 \f[B]gax doc tab push\f[R] \f[I][FILE]\f[R]
 Push local changes to a single tab (with confirmation).
-\f[B]\-y, \[en]yes\f[R]: Skip confirmation prompt
+\f[B]\-y, \[en]yes\f[R]: Skip confirmation prompt \f[B]\[en]patch\f[R]:
+Incremental push: apply only changed elements (experimental)
 .SS draft
 .TP
 \f[B]gax draft clone\f[R] \f[I][DRAFT_ID_OR_URL]\f[R]
@@ -343,8 +344,12 @@ Show authentication status.
 .TP
 \f[B]gax issue\f[R] \f[I][TITLE]\f[R]
 File a GitHub issue for gax (opens via gh CLI).
-\f[B]\[en]body, \-b\f[R]: Issue description.
-\f[B]\[en]type\f[R]: \f[I]bug\f[R] (default) or \f[I]feature\f[R].
+\f[B]\[en]body, \-b\f[R]: Issue description \f[B]\[en]type\f[R]: Issue
+type (sets the GitHub label)
+.SS upgrade
+.TP
+\f[B]gax upgrade\f[R]
+Upgrade gax to the latest version from GitHub (uv tool install path).
 .SH FILES
 .PP
 .TS
