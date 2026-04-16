@@ -2059,26 +2059,34 @@ ISSUES_URL = f"https://github.com/{REPO}/issues"
 @docs.section("utility")
 @main.command()
 @click.argument("title", required=False)
-@click.option("--body", "-b", help="Bug description")
-def bug(title: str | None, body: str | None):
-    """Report a bug (opens GitHub issue via gh CLI).
+@click.option("--body", "-b", help="Issue description")
+@click.option(
+    "--type",
+    "issue_type",
+    type=click.Choice(["bug", "feature"]),
+    default="bug",
+    show_default=True,
+    help="Issue type (sets the GitHub label)",
+)
+def issue(title: str | None, body: str | None, issue_type: str):
+    """File a GitHub issue for gax (opens via gh CLI).
 
     \b
     Examples:
-        gax bug
-        gax bug "Push swallows newlines"
-        gax bug "Push swallows newlines" -b "When pushing .tab.gax files..."
+        gax issue
+        gax issue "Push swallows newlines"
+        gax issue "Attachment support" --type feature
     """
     import shutil
     import subprocess
 
     if not shutil.which("gh"):
         click.echo("Error: 'gh' (GitHub CLI) is not installed.", err=True)
-        click.echo(f"\nPlease report bugs at: {ISSUES_URL}/new", err=True)
+        click.echo(f"\nPlease file issues at: {ISSUES_URL}/new", err=True)
         click.echo("\nOr install gh: https://cli.github.com/", err=True)
         sys.exit(1)
 
-    cmd = ["gh", "issue", "create", "--repo", REPO, "--label", "bug"]
+    cmd = ["gh", "issue", "create", "--repo", REPO, "--label", issue_type]
     if title:
         cmd += ["--title", title]
     if body:
