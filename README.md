@@ -216,9 +216,9 @@ COMMANDS
       gax auth status
           Show authentication status.
 
-    bug:
-      gax bug [TITLE]
-          Report a bug (opens GitHub issue via gh CLI).
+    issue:
+      gax issue [TITLE] [--type bug|feature]
+          File a GitHub issue for gax (opens via gh CLI). Defaults to --type bug.
 
 FILES
     .doc.gax.md           Document
