@@ -390,6 +390,155 @@ make man                              # Generate man/gax.1
 sudo cp man/gax.1 /usr/share/man/man1/  # Install system-wide
 ```
 
+## FAQ
+
+### How do I get Google OAuth credentials?
+
+GAX requires OAuth 2.0 credentials from Google Cloud Platform to access your Google Workspace data. Here's how to set them up:
+
+#### 1. Create a Google Cloud Project
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
+2. Click **Select a project** → **NEW PROJECT**
+3. Enter a project name (e.g., "GAX CLI Access") and click **CREATE**
+4. Wait for the project to be created and selected
+
+#### 2. Enable Required APIs
+
+1. In the Google Cloud Console, go to **APIs & Services** → **Library**
+   
+   [Go to API Library](https://console.cloud.google.com/apis/library)
+
+2. Search for and enable these APIs (click each, then click **ENABLE**):
+   - **Google Drive API** (required for all file access)
+   - **Google Docs API** (for document sync)
+   - **Google Sheets API** (for spreadsheet sync)
+   - **Gmail API** (for email operations)
+   - **Google Calendar API** (for calendar sync)
+   - **Google Forms API** (for form management)
+   - **People API** (for contacts sync)
+
+#### 3. Configure OAuth Consent Screen
+
+1. Go to **APIs & Services** → **OAuth consent screen**
+   
+   [Go to OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)
+
+2. Choose **External** user type and click **CREATE**
+
+3. Fill in the required fields:
+   - **App name**: `GAX CLI` (or any name you prefer)
+   - **User support email**: Your email address
+   - **Application logo**: Optional
+   - **App domain**: Leave blank for personal use
+   - **Authorized domains**: Leave blank for personal use
+   - **Developer contact information**: Your email address
+
+4. Click **SAVE AND CONTINUE**
+
+5. On the **Scopes** page, click **SAVE AND CONTINUE** (GAX will request scopes as needed)
+
+6. On the **Test users** page:
+   - Click **ADD USERS**
+   - Add your Gmail address
+   - Click **SAVE AND CONTINUE**
+
+7. Review and click **BACK TO DASHBOARD**
+
+#### 4. Create OAuth Client ID
+
+1. Go to **APIs & Services** → **Credentials**
+   
+   [Go to Credentials](https://console.cloud.google.com/apis/credentials)
+
+2. Click **CREATE CREDENTIALS** → **OAuth client ID**
+
+3. Choose **Application type** → **Desktop application**
+
+4. Enter name: `GAX CLI Client`
+
+5. Click **CREATE**
+
+6. In the popup, click **DOWNLOAD JSON**
+
+7. Save the downloaded file as `~/.config/gax/credentials.json`
+
+```bash
+# Create the config directory if it doesn't exist
+mkdir -p ~/.config/gax
+
+# Move your downloaded file (adjust the filename as needed)
+mv ~/Downloads/client_*.json ~/.config/gax/credentials.json
+```
+
+#### 5. First Authentication
+
+Run the authentication flow:
+
+```bash
+gax auth login
+```
+
+This will:
+1. Open your browser to Google's OAuth page
+2. Ask you to sign in and grant permissions
+3. Save your access tokens locally
+
+### What permissions does GAX request?
+
+GAX requests these OAuth scopes to access your Google Workspace data:
+
+- `https://www.googleapis.com/auth/spreadsheets` - Read/write Google Sheets
+- `https://www.googleapis.com/auth/drive` - Read/write/create Google Drive files
+- `https://www.googleapis.com/auth/documents` - Read/write Google Docs
+- `https://www.googleapis.com/auth/gmail.readonly` - Read Gmail messages
+- `https://www.googleapis.com/auth/gmail.compose` - Send emails and create drafts
+- `https://www.googleapis.com/auth/gmail.modify` - Modify Gmail labels and threads
+- `https://www.googleapis.com/auth/gmail.settings.basic` - Manage Gmail filters
+- `https://www.googleapis.com/auth/calendar` - Read/write Google Calendar events
+- `https://www.googleapis.com/auth/forms.body` - Read/write Google Forms
+- `https://www.googleapis.com/auth/contacts` - Read/write Google Contacts
+
+### Authentication troubleshooting
+
+**Error: `OAuth credentials not found`**
+```bash
+# Check that credentials file exists and has correct permissions
+ls -la ~/.config/gax/credentials.json
+# If missing, re-download from Google Cloud Console
+```
+
+**Error: `Access denied` or `OAuth error`**
+```bash
+# Clear stored tokens and re-authenticate
+gax auth logout
+gax auth login
+```
+
+**Error: `API not enabled`**
+- Go to the [Google Cloud Console](https://console.cloud.google.com/apis/library)
+- Make sure all required APIs are enabled for your project
+
+**Error: `This app isn't verified`**
+- Click **Advanced** → **Go to GAX CLI (unsafe)**
+- This is safe for personal use with your own OAuth credentials
+
+### Can I use GAX with G Suite/Workspace accounts?
+
+Yes, but you may need additional setup:
+
+1. **Personal Google account**: Follow the standard setup above
+2. **Work/School account**: Your administrator may need to approve the OAuth application or you may need to create the project within your organization's Google Cloud account
+
+Contact your Google Workspace administrator if you encounter access restrictions.
+
+### Where are my credentials stored?
+
+- **OAuth client credentials**: `~/.config/gax/credentials.json`
+- **Access tokens**: `~/.config/gax/token.json`
+
+These files contain sensitive authentication data. Keep them secure and never commit them to version control.
+
 ## License
 
 MIT
