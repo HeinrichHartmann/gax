@@ -970,8 +970,16 @@ def tab_diff(file: Path):
 @tab.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-def tab_push(file: Path, yes: bool):
-    """Push local changes to a single tab (with confirmation)."""
+@click.option("--patch", "use_patch", is_flag=True, help="Incremental push: apply only changed elements (experimental)")
+def tab_push(file: Path, yes: bool, use_patch: bool):
+    """Push local changes to a single tab (with confirmation).
+
+    The default push path is full-replace (see ADR 023). The ``--patch`` flag
+    selects an **experimental** incremental push path (ADR 027) that diffs the
+    local markdown against the live document and applies only the changed
+    elements. The ``--patch`` path is under evaluation and may fail on
+    structural changes; when in doubt, omit the flag.
+    """
     try:
         import difflib
 
@@ -988,51 +996,86 @@ def tab_push(file: Path, yes: bool):
 
         document_id = extract_doc_id(source_url)
 
-        # Get remote content for diff
-        remote_section = pull_single_tab(document_id, tab_name, source_url)
+        content_to_push = native_md.inline_images_from_store(local_section.content)
 
-        local_lines = local_section.content.splitlines(keepends=True)
-        remote_lines = remote_section.content.splitlines(keepends=True)
+        if use_patch:
+            # --patch: AST-level diff preview + incremental push
+            from .diff_push import diff_push as _diff_push, preview_diff
 
-        diff = list(
-            difflib.unified_diff(
-                remote_lines,
-                local_lines,
-                fromfile="remote",
-                tofile="local",
-                lineterm="",
-            )
-        )
+            preview = preview_diff(document_id, tab_name, content_to_push)
 
-        if not diff:
-            click.echo("No differences to push.")
-            return
-
-        # Show diff
-        click.echo("Changes to push:")
-        click.echo("-" * 40)
-        for line in diff:
-            click.echo(line.rstrip("\n"))
-        click.echo("-" * 40)
-
-        # Check for unsupported features
-        from .md2docs import parse_markdown, check_unsupported
-
-        push_warnings = check_unsupported(parse_markdown(local_section.content))
-        for w in push_warnings:
-            click.echo(f"  Warning: {w.feature}: {w.detail}")
-
-        # Confirm
-        if not yes:
-            if not click.confirm("Push these changes?"):
-                click.echo("Aborted.")
+            if not preview.ops:
+                click.echo("No differences to push.")
                 return
 
-        # Push the changes (inline images from blob store back to base64)
-        click.echo(f"Pushing to tab '{tab_name}'...")
-        content_to_push = native_md.inline_images_from_store(local_section.content)
-        update_tab_content(document_id, tab_name, content_to_push)
-        success("Pushed successfully.")
+            # Show operation-level preview
+            click.echo("Patch operations:")
+            click.echo("-" * 40)
+            for line in preview.summary_lines:
+                click.echo(line)
+            click.echo("-" * 40)
+
+            if preview.warnings:
+                for w in preview.warnings:
+                    error(w)
+                click.echo("Use regular push (without --patch) for structural changes.")
+                sys.exit(1)
+
+            if not yes:
+                if not click.confirm("Apply patch?"):
+                    click.echo("Aborted.")
+                    return
+
+            click.echo(f"Patching tab '{tab_name}'...")
+            push_warnings = _diff_push(
+                document_id, tab_name, content_to_push,
+                docs_service=preview.docs_service,
+                drive_service=preview.drive_service,
+            )
+            for w in push_warnings:
+                click.echo(f"  Note: {w}")
+            success("Patched successfully.")
+        else:
+            # Default: line-level diff preview + full-replace push
+            remote_section = pull_single_tab(document_id, tab_name, source_url)
+
+            local_lines = local_section.content.splitlines(keepends=True)
+            remote_lines = remote_section.content.splitlines(keepends=True)
+
+            diff = list(
+                difflib.unified_diff(
+                    remote_lines,
+                    local_lines,
+                    fromfile="remote",
+                    tofile="local",
+                    lineterm="",
+                )
+            )
+
+            if not diff:
+                click.echo("No differences to push.")
+                return
+
+            click.echo("Changes to push:")
+            click.echo("-" * 40)
+            for line in diff:
+                click.echo(line.rstrip("\n"))
+            click.echo("-" * 40)
+
+            from .md2docs import parse_markdown, check_unsupported
+
+            push_warnings = check_unsupported(parse_markdown(local_section.content))
+            for w in push_warnings:
+                click.echo(f"  Warning: {w.feature}: {w.detail}")
+
+            if not yes:
+                if not click.confirm("Push these changes?"):
+                    click.echo("Aborted.")
+                    return
+
+            click.echo(f"Pushing to tab '{tab_name}'...")
+            update_tab_content(document_id, tab_name, content_to_push)
+            success("Pushed successfully.")
 
     except Exception as e:
         error(f"Error: {e}")
