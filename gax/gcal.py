@@ -672,7 +672,7 @@ def _resolve_calendar_id(calendar: str | None) -> str:
 
     Returns "primary" if calendar is None.
     """
-    if not calendar:
+    if not calendar or calendar == "primary":
         return "primary"
 
     calendars = list_calendars()

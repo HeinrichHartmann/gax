@@ -310,7 +310,6 @@ def get_draft_summary(draft_id: str, *, service=None) -> dict:
             userId="me",
             id=draft_id,
             format="metadata",
-            metadataHeaders=["To", "Subject", "Date"],
         )
         .execute()
     )
