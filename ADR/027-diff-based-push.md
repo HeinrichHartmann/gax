@@ -122,7 +122,7 @@ Full merge support for concurrent upstream edits.
 
 ## Decision
 
-Implement diff-based push as the primary push strategy for Google Docs tabs. The current full-replace approach remains as a fallback for cases where diff-based push is not feasible (e.g., structural changes too complex to express as mutations).
+Implement diff-based push as an **experimental second push path**, gated behind the `--patch` flag on `gax doc tab push`. The current full-replace approach remains the default. The `--patch` path is available for further evaluation on real-world documents; once it has proven robust across the document types we care about, we may promote it to the default (or to the primary strategy with full-replace as a fallback).
 
 ### Implementation Plan
 
@@ -132,9 +132,11 @@ Implement diff-based push as the primary push strategy for Google Docs tabs. The
 
 3. **Mutation translator**: `gax/mutations.py`. Input: list of `EditOp` + alignment mapping. Output: list of Docs API `batchUpdate` requests.
 
-4. **Push command integration**: Update `gax doc tab push` to use the diff-based pipeline. Store or re-derive the base state on push. Verify upstream unchanged before applying.
+4. **Push command integration**: Wire the diff-based pipeline into `gax doc tab push` behind an experimental `--patch` flag. Re-derive the base state on push and verify upstream unchanged before applying. The default push path remains full-replace.
 
-5. **Fallback**: If the diff contains structural changes that the mutation translator can't handle (e.g., table dimension changes), fall back to full-replace with a warning.
+5. **Fallback**: If the diff contains structural changes that the mutation translator can't handle (e.g., table dimension changes), abort with a message directing the user to run without `--patch`.
+
+6. **Promotion criteria**: Before making `--patch` the default, evaluate it on a representative set of real documents (markdown-native, human-authored, collaboratively edited) and confirm it preserves formatting without data loss or index drift.
 
 ## Consequences
 

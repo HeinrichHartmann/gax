@@ -972,7 +972,14 @@ def tab_diff(file: Path):
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
 @click.option("--patch", "use_patch", is_flag=True, help="Incremental push: apply only changed elements (experimental)")
 def tab_push(file: Path, yes: bool, use_patch: bool):
-    """Push local changes to a single tab (with confirmation)."""
+    """Push local changes to a single tab (with confirmation).
+
+    The default push path is full-replace (see ADR 023). The ``--patch`` flag
+    selects an **experimental** incremental push path (ADR 027) that diffs the
+    local markdown against the live document and applies only the changed
+    elements. The ``--patch`` path is under evaluation and may fail on
+    structural changes; when in doubt, omit the flag.
+    """
     try:
         import difflib
 
