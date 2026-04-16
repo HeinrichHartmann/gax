@@ -1,5 +1,9 @@
 # gax - Google Access CLI
 
+<p align="center">
+  <img src="assets/logo.png" alt="gax logo" width="480">
+</p>
+
 Sync Google Workspace (Docs, Sheets, Gmail, Calendar) to local files that are human-readable, machine-readable, and git-friendly.
 
 Designed to be equally usable by humans and AI agents, gax facilitates AI-enhanced workflows where LLMs can read, analyze, and modify Google Workspace content through familiar file operations.
