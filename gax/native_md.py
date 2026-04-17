@@ -6,12 +6,42 @@ roundtrip conversion of Google Docs to/from Markdown.
 
 import base64
 import re
+from dataclasses import dataclass
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 
 from .auth import get_authenticated_credentials
 from .store import store_blob
+
+
+@dataclass
+class TabInfo:
+    """Metadata for a single tab in a Google Doc."""
+
+    id: str
+    title: str
+    index: int
+    depth: int = 0
+    has_children: bool = False
+
+
+def _flatten_tabs(tabs: list, depth: int = 0) -> list[TabInfo]:
+    """Recursively flatten a nested tabs structure from the Docs API."""
+    result = []
+    for i, tab in enumerate(tabs):
+        props = tab.get("tabProperties", {})
+        result.append(
+            TabInfo(
+                id=props.get("tabId", ""),
+                title=props.get("title", f"Tab {i}"),
+                index=0,  # assigned by caller after flattening
+                depth=depth,
+                has_children=bool(tab.get("childTabs")),
+            )
+        )
+        result.extend(_flatten_tabs(tab.get("childTabs", []), depth + 1))
+    return result
 
 
 def extract_images_to_store(markdown: str) -> str:
@@ -220,20 +250,29 @@ def create_doc_from_markdown(
     return result["id"]
 
 
-def split_doc_by_tabs(markdown: str, tab_titles: list[str]) -> dict[str, str]:
+def split_doc_by_tabs(markdown: str, tab_titles: list[str], tab_depths: list[int] | None = None) -> dict[str, str]:
     """Split exported markdown by tab titles.
 
     The native Drive API export concatenates all tabs. Each tab starts
-    with its title as an H1 header. This function splits the content
-    back into individual tabs.
+    with its title as a header — H1 for top-level, H2 for children, etc.
 
     Args:
         markdown: Full markdown export from Drive API
         tab_titles: List of tab titles in order
+        tab_depths: List of tab depths (0=top-level). If None, all are depth 0.
 
     Returns:
         Dict mapping tab title to markdown content
     """
+    if tab_depths is None:
+        tab_depths = [0] * len(tab_titles)
+
+    # Build lookup: (header_level, normalized_title) -> tab_title
+    tab_lookup = {}
+    for title, depth in zip(tab_titles, tab_depths):
+        header_level = depth + 1  # depth 0 -> H1, depth 1 -> H2, etc.
+        tab_lookup[(header_level, title)] = title
+
     result = {}
     lines = markdown.split("\n")
 
@@ -245,31 +284,34 @@ def split_doc_by_tabs(markdown: str, tab_titles: list[str]) -> dict[str, str]:
         text = text.strip()
         if text.startswith("**") and text.endswith("**"):
             text = text[2:-2]
-        # Unescape markdown special characters
         text = re.sub(r"\\(.)", r"\1", text)
         return text
 
+    def _parse_header(line: str) -> tuple[int, str] | None:
+        """Parse a markdown header line, returning (level, text) or None."""
+        m = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if m:
+            return len(m.group(1)), _normalize_header(m.group(2))
+        return None
+
     for line in lines:
-        # Check if this line is a tab header
-        if line.startswith("# "):
-            header_text = _normalize_header(line[2:])
-            if header_text in tab_titles:
-                # Save previous tab
+        header = _parse_header(line)
+        if header:
+            level, text = header
+            if (level, text) in tab_lookup:
                 if current_tab is not None:
                     result[current_tab] = "\n".join(current_lines).strip() + "\n"
-                # Start new tab
-                current_tab = header_text
+                current_tab = tab_lookup[(level, text)]
                 current_lines = []
                 continue
 
         if current_tab is not None:
             current_lines.append(line)
 
-    # Save last tab
     if current_tab is not None:
         result[current_tab] = "\n".join(current_lines).strip() + "\n"
 
-    # Fallback: single-tab doc with no H1 title header — use full content
+    # Fallback: single-tab doc with no title header
     if not result and len(tab_titles) == 1:
         result[tab_titles[0]] = markdown.strip() + "\n"
 
@@ -278,8 +320,8 @@ def split_doc_by_tabs(markdown: str, tab_titles: list[str]) -> dict[str, str]:
 
 def get_doc_tabs(
     document_id: str, *, docs_service=None, num_retries: int = 0
-) -> list[dict]:
-    """Get list of tabs in a document.
+) -> tuple[str, list[TabInfo]]:
+    """Get document title and list of tabs.
 
     Args:
         document_id: Google Docs document ID
@@ -287,7 +329,7 @@ def get_doc_tabs(
         num_retries: Retries with exponential backoff on 429/5xx
 
     Returns:
-        List of {id, title, index} dicts
+        Tuple of (doc_title, list of TabInfo)
     """
     if docs_service is None:
         creds = get_authenticated_credentials()
@@ -299,18 +341,12 @@ def get_doc_tabs(
         .execute(num_retries=num_retries)
     )
 
-    tabs = []
-    for i, tab in enumerate(doc.get("tabs", [])):
-        props = tab.get("tabProperties", {})
-        tabs.append(
-            {
-                "id": props.get("tabId", ""),
-                "title": props.get("title", f"Tab {i}"),
-                "index": i,
-            }
-        )
+    doc_title = doc.get("title", "Untitled")
+    flat = _flatten_tabs(doc.get("tabs", []))
+    for i, t in enumerate(flat):
+        t.index = i
 
-    return tabs
+    return doc_title, flat
 
 
 def export_tab_markdown(
@@ -336,8 +372,9 @@ def export_tab_markdown(
         Markdown content for the specified tab
     """
     # Get tab titles
-    tabs = get_doc_tabs(document_id, docs_service=docs_service, num_retries=num_retries)
-    tab_titles = [t["title"] for t in tabs]
+    _title, tabs = get_doc_tabs(document_id, docs_service=docs_service, num_retries=num_retries)
+    tab_titles = [t.title for t in tabs]
+    tab_depths = [t.depth for t in tabs]
 
     if tab_title not in tab_titles:
         raise ValueError(f"Tab not found: {tab_title}")
@@ -348,7 +385,7 @@ def export_tab_markdown(
     )
 
     # Split by tabs
-    tab_contents = split_doc_by_tabs(full_md, tab_titles)
+    tab_contents = split_doc_by_tabs(full_md, tab_titles, tab_depths)
 
     if tab_title not in tab_contents:
         # Tab might be empty or have different header structure

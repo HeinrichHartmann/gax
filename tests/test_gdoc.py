@@ -11,9 +11,9 @@ from gax.gdoc import (
     pull_doc,
     format_multipart,
     format_section,
-    get_tabs_list,
     pull_single_tab,
 )
+from gax.native_md import get_doc_tabs, TabInfo
 
 
 # Load fixtures
@@ -39,10 +39,13 @@ class TestPullDoc:
     def test_multi_tab_document(self, mock_native_md):
         """Test pulling a document with multiple tabs."""
         # Mock native_md functions
-        mock_native_md.get_doc_tabs.return_value = [
-            {"id": "t.1", "title": "Overview", "index": 0},
-            {"id": "t.2", "title": "Timeline", "index": 1},
-        ]
+        mock_native_md.get_doc_tabs.return_value = (
+            "Project Plan",
+            [
+                TabInfo(id="t.1", title="Overview", index=0),
+                TabInfo(id="t.2", title="Timeline", index=1),
+            ],
+        )
         mock_native_md.export_doc_markdown.return_value = (
             "# Overview\n\nThese are the project goals.\n\n"
             "# Timeline\n\n## Key Milestones\n\nMilestone 1\n"
@@ -80,9 +83,10 @@ class TestPullDoc:
     @patch("gax.gdoc.native_md")
     def test_single_tab_document(self, mock_native_md):
         """Test pulling a document with a single tab."""
-        mock_native_md.get_doc_tabs.return_value = [
-            {"id": "t1", "title": "Simple Doc", "index": 0}
-        ]
+        mock_native_md.get_doc_tabs.return_value = (
+            "Simple Doc",
+            [TabInfo(id="t1", title="Simple Doc", index=0)],
+        )
         mock_native_md.export_doc_markdown.return_value = (
             "# Simple Doc\n\nHello World\n"
         )
@@ -105,7 +109,7 @@ class TestPullDoc:
     def test_document_without_tabs(self, mock_native_md):
         """Test pulling a legacy document without tabs array."""
         # No tabs returned means fallback to default
-        mock_native_md.get_doc_tabs.return_value = []
+        mock_native_md.get_doc_tabs.return_value = ("Legacy Doc", [])
         mock_native_md.export_doc_markdown.return_value = "Legacy content\n"
         mock_native_md.split_doc_by_tabs.return_value = {"Document": "Legacy content"}
 
@@ -130,10 +134,13 @@ class TestFormatMultipart:
     @patch("gax.gdoc.native_md")
     def test_format_multi_tab_to_file(self, mock_native_md, tmp_path):
         """Test formatting a multi-tab document and writing to file."""
-        mock_native_md.get_doc_tabs.return_value = [
-            {"id": "t.1", "title": "Overview", "index": 0},
-            {"id": "t.2", "title": "Timeline", "index": 1},
-        ]
+        mock_native_md.get_doc_tabs.return_value = (
+            "Project Plan",
+            [
+                TabInfo(id="t.1", title="Overview", index=0),
+                TabInfo(id="t.2", title="Timeline", index=1),
+            ],
+        )
         mock_native_md.export_doc_markdown.return_value = (
             "# Overview\n\nProject goals.\n\n"
             "# Timeline\n\n## Key Milestones\n\nMilestone 1\n"
@@ -173,10 +180,13 @@ class TestFormatMultipart:
     @patch("gax.gdoc.native_md")
     def test_sections_are_self_contained(self, mock_native_md, tmp_path):
         """Test that each section can be extracted as a standalone file."""
-        mock_native_md.get_doc_tabs.return_value = [
-            {"id": "t.1", "title": "Overview", "index": 0},
-            {"id": "t.2", "title": "Timeline", "index": 1},
-        ]
+        mock_native_md.get_doc_tabs.return_value = (
+            "Project Plan",
+            [
+                TabInfo(id="t.1", title="Overview", index=0),
+                TabInfo(id="t.2", title="Timeline", index=1),
+            ],
+        )
         mock_native_md.export_doc_markdown.return_value = "# Overview\n\n# Timeline\n"
         mock_native_md.split_doc_by_tabs.return_value = {
             "Overview": "Overview content",
@@ -218,9 +228,10 @@ class TestHeadingConversion:
     def test_heading_levels(self, mock_native_md):
         """Test that headings from native export are preserved."""
         # Native API returns markdown directly with headings
-        mock_native_md.get_doc_tabs.return_value = [
-            {"id": "t1", "title": "Headings", "index": 0}
-        ]
+        mock_native_md.get_doc_tabs.return_value = (
+            "Headings Test",
+            [TabInfo(id="t1", title="Headings", index=0)],
+        )
         mock_native_md.export_doc_markdown.return_value = (
             "# Headings\n\n# Heading 1\n\n## Heading 2\n\n### Heading 3\n\n"
             "#### Heading 4\n\nNormal text\n"
@@ -245,22 +256,22 @@ class TestHeadingConversion:
         assert "Normal text" in content
 
 
-class TestGetTabsList:
-    """Tests for get_tabs_list function."""
+class TestGetDocTabs:
+    """Tests for get_doc_tabs function."""
 
     def test_multi_tab_document(self):
         """Test getting tabs from a multi-tab document."""
         doc_response = json.loads(load_fixture("sample_doc_response.json"))
         service = make_mock_service(doc_response)
 
-        info = get_tabs_list("test-doc-123", service=service)
+        title, tabs = get_doc_tabs("test-doc-123", docs_service=service)
 
-        assert info["title"] == "Project Plan"
-        assert len(info["tabs"]) == 2
-        assert info["tabs"][0]["title"] == "Overview"
-        assert info["tabs"][0]["index"] == 0
-        assert info["tabs"][1]["title"] == "Timeline"
-        assert info["tabs"][1]["index"] == 1
+        assert title == "Project Plan"
+        assert len(tabs) == 2
+        assert tabs[0].title == "Overview"
+        assert tabs[0].index == 0
+        assert tabs[1].title == "Timeline"
+        assert tabs[1].index == 1
 
     def test_single_tab_document(self):
         """Test getting tabs from a single-tab document."""
@@ -276,12 +287,12 @@ class TestGetTabsList:
         }
         service = make_mock_service(doc_response)
 
-        info = get_tabs_list("single-doc", service=service)
+        title, tabs = get_doc_tabs("single-doc", docs_service=service)
 
-        assert info["title"] == "Simple Doc"
-        assert len(info["tabs"]) == 1
-        assert info["tabs"][0]["title"] == "Simple Doc"
-        assert info["tabs"][0]["id"] == "t.123"
+        assert title == "Simple Doc"
+        assert len(tabs) == 1
+        assert tabs[0].title == "Simple Doc"
+        assert tabs[0].id == "t.123"
 
     def test_legacy_document_no_tabs(self):
         """Test getting tabs from a legacy document without tabs array."""
@@ -292,12 +303,57 @@ class TestGetTabsList:
         }
         service = make_mock_service(doc_response)
 
-        info = get_tabs_list("legacy-doc", service=service)
+        title, tabs = get_doc_tabs("legacy-doc", docs_service=service)
 
-        assert info["title"] == "Legacy Doc"
-        assert len(info["tabs"]) == 1
-        assert info["tabs"][0]["title"] == "Legacy Doc"
-        assert info["tabs"][0]["id"] == ""
+        assert title == "Legacy Doc"
+        assert len(tabs) == 0
+
+    def test_nested_tabs(self):
+        """Test getting tabs from a document with nested (child) tabs."""
+        doc_response = {
+            "documentId": "nested-doc",
+            "title": "Nested Doc",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "t.1", "title": "Overview"},
+                    "documentTab": {"body": {"content": []}},
+                },
+                {
+                    "tabProperties": {"tabId": "t.2", "title": "Design"},
+                    "documentTab": {"body": {"content": []}},
+                    "childTabs": [
+                        {
+                            "tabProperties": {"tabId": "t.3", "title": "Frontend"},
+                            "documentTab": {"body": {"content": []}},
+                        },
+                        {
+                            "tabProperties": {"tabId": "t.4", "title": "Backend"},
+                            "documentTab": {"body": {"content": []}},
+                            "childTabs": [
+                                {
+                                    "tabProperties": {"tabId": "t.5", "title": "API"},
+                                    "documentTab": {"body": {"content": []}},
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
+        service = make_mock_service(doc_response)
+
+        title, tabs = get_doc_tabs("nested-doc", docs_service=service)
+
+        assert title == "Nested Doc"
+        assert len(tabs) == 5
+        assert [(t.title, t.depth, t.has_children) for t in tabs] == [
+            ("Overview", 0, False),
+            ("Design", 0, True),
+            ("Frontend", 1, False),
+            ("Backend", 1, True),
+            ("API", 2, False),
+        ]
+        assert [t.index for t in tabs] == [0, 1, 2, 3, 4]
 
 
 class TestPullSingleTab:
