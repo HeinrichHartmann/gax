@@ -11,7 +11,8 @@ Module structure
 
   ContactsHeader       — dataclass for file frontmatter
   File format          — parse/format contacts files
-  API helpers          — fetch, normalize, write-back contacts
+  API helpers          — fetch contacts, serialize/deserialize API format
+  Formatting           — render normalized contacts as JSONL or markdown
   Comparison helpers   — diff logic for local vs remote
   Contacts(Resource)   — resource class (the public interface for cli.py)
 
@@ -26,6 +27,10 @@ Additional notes specific to contacts:
 
   diff() replaces the old plan/apply workflow. No intermediate plan file.
   The diff string shows creates/updates/deletes. push() applies them.
+
+  api_to_contact / contact_to_api are a serialize/deserialize pair for
+  the Google People API format. They should be kept in sync — changes
+  to one likely require changes to the other.
 """
 
 import json
@@ -118,7 +123,12 @@ def parse_jsonl_body(body: str) -> list[dict]:
 
 
 # =============================================================================
-# API helpers — fetch, normalize, and write-back contacts.
+# API helpers — fetch contacts, serialize/deserialize API format.
+#
+# api_to_contact and contact_to_api are an inverse pair:
+#   api_to_contact: Google People API dict → flat normalized dict
+#   contact_to_api: flat normalized dict → Google People API dict
+# Keep them in sync — changes to one likely require changes to the other.
 # =============================================================================
 
 
@@ -176,8 +186,11 @@ def fetch_contacts(*, service=None) -> tuple[list[dict], dict[str, str]]:
     return contacts, groups
 
 
-def normalize_contact(api_contact: dict, groups: dict[str, str]) -> dict:
-    """Normalize API contact to flat structure for JSONL."""
+def api_to_contact(api_contact: dict, groups: dict[str, str]) -> dict:
+    """Normalize API contact to flat structure.
+
+    Inverse of contact_to_api.
+    """
     names = api_contact.get("names") or [{}]
     orgs = api_contact.get("organizations") or [{}]
     addresses = api_contact.get("addresses") or [{}]
@@ -226,53 +239,11 @@ def normalize_contact(api_contact: dict, groups: dict[str, str]) -> dict:
     }
 
 
-def contacts_to_jsonl(contacts: list[dict], groups: dict[str, str]) -> str:
-    """Format raw API contacts as JSONL body."""
-    normalized = [normalize_contact(c, groups) for c in contacts]
-    normalized.sort(key=lambda c: c.get("name", "").lower())
-    return "\n".join(json.dumps(c, ensure_ascii=False) for c in normalized)
+def contact_to_api(contact: dict, groups_by_name: dict[str, str]) -> dict:
+    """Convert flat normalized contact to API format for create/update.
 
-
-def contacts_to_markdown(contacts: list[dict], groups: dict[str, str]) -> str:
-    """Format raw API contacts as markdown body."""
-    normalized = [normalize_contact(c, groups) for c in contacts]
-    normalized.sort(key=lambda c: c.get("name", "").lower())
-
-    entries = []
-    for c in normalized:
-        lines = [f"- {c['name'] or '(unnamed)'}"]
-        if c["email"]:
-            lines.append(f"  - email: {', '.join(c['email'])}")
-        if c["phone"]:
-            lines.append(f"  - phone: {', '.join(c['phone'])}")
-        if c["organization"] or c["title"]:
-            org = c["organization"] or ""
-            if c["title"]:
-                org = f"{org} ({c['title']})" if org else c["title"]
-            lines.append(f"  - organization: {org}")
-        if c["address"]:
-            addr = c["address"].replace("\n", "\n    ")
-            lines.append(f"  - address: {addr}")
-        if c["birthday"]:
-            lines.append(f"  - birthday: {c['birthday']}")
-        if c["website"]:
-            lines.append(f"  - website: {c['website']}")
-        if c["notes"]:
-            notes = c["notes"]
-            if len(notes) > 100:
-                notes = notes[:100] + "..."
-            notes = notes.replace("\n", "\n    ")
-            lines.append(f"  - notes: {notes}")
-        if c["labels"]:
-            lines.append(f"  - labels: {', '.join(c['labels'])}")
-        lines.append(f"  - id: {c['resourceName']}")
-        entries.append("\n".join(lines))
-
-    return "\n".join(entries)
-
-
-def local_to_api_contact(contact: dict, groups_by_name: dict[str, str]) -> dict:
-    """Convert normalized contact to API format for create/update."""
+    Inverse of api_to_contact.
+    """
     api = {}
 
     if contact.get("name") or contact.get("givenName") or contact.get("familyName"):
@@ -340,6 +311,55 @@ def local_to_api_contact(contact: dict, groups_by_name: dict[str, str]) -> dict:
             api["memberships"] = memberships
 
     return api
+
+
+# =============================================================================
+# Formatting — render normalized contacts as JSONL or markdown.
+# These take already-normalized contacts (not raw API format).
+# =============================================================================
+
+
+def format_jsonl(contacts: list[dict]) -> str:
+    """Format normalized contacts as JSONL body."""
+    sorted_contacts = sorted(contacts, key=lambda c: c.get("name", "").lower())
+    return "\n".join(json.dumps(c, ensure_ascii=False) for c in sorted_contacts)
+
+
+def format_markdown(contacts: list[dict]) -> str:
+    """Format normalized contacts as markdown body."""
+    sorted_contacts = sorted(contacts, key=lambda c: c.get("name", "").lower())
+
+    entries = []
+    for c in sorted_contacts:
+        lines = [f"- {c['name'] or '(unnamed)'}"]
+        if c["email"]:
+            lines.append(f"  - email: {', '.join(c['email'])}")
+        if c["phone"]:
+            lines.append(f"  - phone: {', '.join(c['phone'])}")
+        if c["organization"] or c["title"]:
+            org = c["organization"] or ""
+            if c["title"]:
+                org = f"{org} ({c['title']})" if org else c["title"]
+            lines.append(f"  - organization: {org}")
+        if c["address"]:
+            addr = c["address"].replace("\n", "\n    ")
+            lines.append(f"  - address: {addr}")
+        if c["birthday"]:
+            lines.append(f"  - birthday: {c['birthday']}")
+        if c["website"]:
+            lines.append(f"  - website: {c['website']}")
+        if c["notes"]:
+            notes = c["notes"]
+            if len(notes) > 100:
+                notes = notes[:100] + "..."
+            notes = notes.replace("\n", "\n    ")
+            lines.append(f"  - notes: {notes}")
+        if c["labels"]:
+            lines.append(f"  - labels: {', '.join(c['labels'])}")
+        lines.append(f"  - id: {c['resourceName']}")
+        entries.append("\n".join(lines))
+
+    return "\n".join(entries)
 
 
 # =============================================================================
@@ -459,22 +479,28 @@ class Contacts(Resource):
 
     name = "contacts"
 
+    def _fetch_and_normalize(self, *, service=None):
+        """Fetch contacts from API and normalize. Returns (normalized, groups)."""
+        raw_contacts, groups = fetch_contacts(service=service)
+        normalized = [api_to_contact(c, groups) for c in raw_contacts]
+        return normalized, groups
+
     def clone(self, url: str = "", output: Path | None = None, *,
               fmt: str = "md", **kw) -> Path:
         """Clone all contacts to a local file."""
         logger.info("Fetching contacts...")
-        raw_contacts, groups = fetch_contacts()
+        normalized, _ = self._fetch_and_normalize()
 
         if fmt == "jsonl":
-            body = contacts_to_jsonl(raw_contacts, groups)
+            body = format_jsonl(normalized)
             default_name = "contacts.jsonl"
         else:
-            body = contacts_to_markdown(raw_contacts, groups)
+            body = format_markdown(normalized)
             default_name = "contacts.md"
 
         header = ContactsHeader(
             format=fmt,
-            count=len(raw_contacts),
+            count=len(normalized),
             pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         content = format_contacts_file(header, body)
@@ -484,7 +510,7 @@ class Contacts(Resource):
             raise ValueError(f"File already exists: {file_path}")
 
         file_path.write_text(content, encoding="utf-8")
-        logger.info(f"Contacts: {len(raw_contacts)}")
+        logger.info(f"Contacts: {len(normalized)}")
         return file_path
 
     def pull(self, path: Path, **kw) -> None:
@@ -492,21 +518,21 @@ class Contacts(Resource):
         header, _ = parse_contacts_file(path)
 
         logger.info("Fetching contacts...")
-        raw_contacts, groups = fetch_contacts()
+        normalized, _ = self._fetch_and_normalize()
 
         if header.format == "jsonl":
-            body = contacts_to_jsonl(raw_contacts, groups)
+            body = format_jsonl(normalized)
         else:
-            body = contacts_to_markdown(raw_contacts, groups)
+            body = format_markdown(normalized)
 
         new_header = ContactsHeader(
             format=header.format,
-            count=len(raw_contacts),
+            count=len(normalized),
             pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         content = format_contacts_file(new_header, body)
         path.write_text(content, encoding="utf-8")
-        logger.info(f"Contacts: {len(raw_contacts)}")
+        logger.info(f"Contacts: {len(normalized)}")
 
     def diff(self, path: Path, **kw) -> str | None:
         """Preview changes between local JSONL and remote contacts."""
@@ -517,9 +543,7 @@ class Contacts(Resource):
         local_contacts = parse_jsonl_body(body)
 
         logger.info("Fetching remote contacts...")
-        service = get_service()
-        raw_remote, groups = fetch_contacts(service=service)
-        remote_contacts = [normalize_contact(c, groups) for c in raw_remote]
+        remote_contacts, _ = self._fetch_and_normalize()
 
         creates, updates, deletes = compare_contacts(local_contacts, remote_contacts)
         return format_diff_summary(creates, updates, deletes) or None
@@ -535,7 +559,7 @@ class Contacts(Resource):
         logger.info("Fetching remote contacts...")
         service = get_service()
         raw_remote, groups = fetch_contacts(service=service)
-        remote_contacts = [normalize_contact(c, groups) for c in raw_remote]
+        remote_contacts = [api_to_contact(c, groups) for c in raw_remote]
 
         creates, updates, deletes = compare_contacts(local_contacts, remote_contacts)
 
@@ -547,13 +571,13 @@ class Contacts(Resource):
 
         for contact in creates:
             logger.info(f"Creating: {contact.get('name', '(unnamed)')}")
-            api_contact = local_to_api_contact(contact, groups_by_name)
+            api_contact = contact_to_api(contact, groups_by_name)
             service.people().createContact(body=api_contact).execute()
 
         for contact, diff in updates:
             logger.info(f"Updating: {contact.get('name', '(unnamed)')}")
             resource_name = contact["resourceName"]
-            api_contact = local_to_api_contact(contact, groups_by_name)
+            api_contact = contact_to_api(contact, groups_by_name)
 
             current = (
                 service.people()
