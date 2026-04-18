@@ -1,13 +1,55 @@
 """Gmail draft management for gax.
 
+Reference resource module — intended as a template for new resources.
+
 Implements push/pull for email drafts as markdown files (.draft.gax.md).
 See ADR 006 for design details.
 
-Module structure:
+Module structure
+================
+
   DraftHeader          — dataclass for .draft.gax.md frontmatter
   File format          — parse/format .draft.gax.md files
   Gmail API helpers    — wrappers around Gmail API quirks
   Draft(ResourceItem)  — resource class (the public interface for cli.py)
+
+Design decisions
+================
+
+Separation of concerns:
+  This module contains ONLY business logic. No Click, no sys.exit(), no
+  UI imports. The CLI layer (cli.py) owns all command definitions, argument
+  parsing, confirmation prompts, and user-facing output. cli.py imports only
+  the Draft class — never module-level functions.
+
+Resource class as public interface:
+  The Draft class is what cli.py calls. All core operations (new, clone,
+  list, pull, diff, push) are methods on this class. The class is stateless —
+  just a namespace conforming to the ResourceItem interface.
+
+Communication conventions:
+  - logging.info()  — status messages (picked up by the spinner)
+  - ValueError      — user-fixable errors (cli.py catches and formats)
+  - Return values   — results for cli.py to format (e.g. Path from clone)
+  - File descriptor  — for streaming output (e.g. list writes TSV to `out`)
+
+Module-level functions:
+  Shared helpers extracted from the class to reduce duplication and keep
+  methods readable. NOT an additional abstraction layer — just factoring.
+  No underscores: everything in this module is internal to the resource
+  except DraftHeader, parse_draft, and format_draft (used by mail.py).
+
+What we chose NOT to abstract:
+  - No separate API client class. The Gmail API calls live directly in the
+    class methods and helpers. An API layer would add indirection without
+    real benefit at this scale.
+  - No base class for .gax.md file handling. parse_draft/format_draft could
+    generalize (every resource has frontmatter + body), but we avoid
+    premature abstraction. If a pattern emerges across 3+ resources, then
+    extract.
+  - No caching or service reuse across methods. diff() then push() will
+    auth and fetch twice. Acceptable cost for simplicity — optimize later
+    if profiling shows it matters.
 """
 
 import base64
@@ -31,7 +73,8 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Data class
+# Data class — shared between file format functions and the resource class.
+# Defined first because Python needs it before type annotations that use it.
 # =============================================================================
 
 
@@ -52,7 +95,9 @@ class DraftHeader:
 
 
 # =============================================================================
-# File format: parse / format .draft.gax.md
+# File format — parse/format .draft.gax.md files.
+# Public: parse_draft, format_draft are used by mail.py for reply drafts.
+# parse_draft_id is URL/ID parsing, only used by Draft.clone().
 # =============================================================================
 
 
@@ -130,7 +175,9 @@ def parse_draft_id(url_or_id: str) -> str:
 
 
 # =============================================================================
-# Gmail API helpers
+# Gmail API helpers — simplify the quirky Gmail API response format.
+# These are module-internal: extracted from class methods to reduce
+# duplication, not to build an API abstraction layer.
 # =============================================================================
 
 
@@ -223,7 +270,9 @@ def fetch_draft(draft_id: str, *, service=None) -> tuple[DraftHeader, str]:
 
 
 # =============================================================================
-# Resource class
+# Resource class — the public interface for cli.py.
+# All core operations are methods here. The class is stateless (no __init__).
+# cli.py calls Draft().clone(), Draft().push(), etc.
 # =============================================================================
 
 
