@@ -314,6 +314,40 @@ class TestFromDocJson:
         assert t.rows[0][0][0].text == "A"
         assert t._raw_table is not None
 
+    def test_hard_line_break_preserved(self):
+        """Issue #2: Interior newline runs are hard line breaks, not paragraph boundaries."""
+        body = [
+            {
+                "startIndex": 1,
+                "endIndex": 20,
+                "paragraph": {
+                    "elements": [
+                        {
+                            "startIndex": 1,
+                            "endIndex": 7,
+                            "textRun": {"content": "line1\n"},
+                        },
+                        {"startIndex": 7, "endIndex": 8, "textRun": {"content": "\n"}},
+                        {
+                            "startIndex": 8,
+                            "endIndex": 14,
+                            "textRun": {"content": "line2\n"},
+                        },
+                    ],
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                },
+            }
+        ]
+        blocks = from_doc_json(body)
+        assert len(blocks) == 1
+        # Should preserve all three text runs (the interior \n is a hard break)
+        texts = [s.text for s in blocks[0].spans]
+        assert "line1" in "".join(texts)
+        assert "line2" in "".join(texts)
+        # The interior newline should be present
+        full = "".join(texts)
+        assert "\n" in full
+
     def test_link_extraction(self):
         body = [
             {
@@ -368,6 +402,22 @@ class TestRoundTrip:
         blocks = from_markdown(md)
         rendered = render_markdown(blocks)
         assert rendered == md
+
+    def test_mixed_list_types_preserved(self):
+        """Issue #3: Adjacent ordered and unordered lists must not merge."""
+        md = "- bullet\n\n1. ordered\n"
+        blocks = from_markdown(md)
+        rendered = render_markdown(blocks)
+        assert "- bullet" in rendered
+        assert "1. ordered" in rendered
+
+    def test_nested_list_parent_before_child(self):
+        """Issue #4: Parent list items must appear before their children."""
+        md = "- parent\n  - child\n"
+        blocks = from_markdown(md)
+        assert len(blocks) == 2
+        assert blocks[0].spans[0].text == "parent"
+        assert blocks[1].spans[0].text == "child"
 
 
 # =============================================================================

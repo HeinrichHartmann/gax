@@ -281,13 +281,15 @@ def _extract_list_items(list_tok: dict, depth: int = 0) -> list[ListItem]:
         if item_tok["type"] != "list_item":
             continue
         inline_children: list[Span] = []
+        nested: list[ListItem] = []
         for child in item_tok.get("children", []):
             if child["type"] == "list":
-                items.extend(_extract_list_items(child, depth=depth + 1))
+                nested.extend(_extract_list_items(child, depth=depth + 1))
             else:
                 inline_children.extend(_flatten_inline([child]))
         if inline_children:
             items.append(ListItem(spans=inline_children, ordered=ordered, depth=depth))
+        items.extend(nested)
     return items
 
 
@@ -374,18 +376,24 @@ HEADING_STYLES = {
 
 
 def _spans_from_textruns(elements: list[dict]) -> list[Span]:
-    """Convert Google Docs textRun elements to Span list."""
+    """Convert Google Docs textRun elements to Span list.
+
+    The last element's trailing newline is the paragraph boundary and is
+    stripped.  Interior standalone newline runs are hard line breaks and
+    are preserved.
+    """
     spans: list[Span] = []
-    for elem in elements:
+    for idx, elem in enumerate(elements):
         tr = elem.get("textRun")
         if not tr:
             continue
         text = tr["content"]
-        # Skip trailing newline (paragraph boundary marker)
-        if text == "\n":
-            continue
-        if text.endswith("\n"):
+        is_last = idx == len(elements) - 1
+
+        # Strip the paragraph-terminating newline (always on the last run)
+        if is_last and text.endswith("\n"):
             text = text[:-1]
+
         if not text:
             continue
 
@@ -540,10 +548,18 @@ def to_tokens(blocks: list[Block]) -> list[dict]:
             )
 
         elif isinstance(block, ListItem):
-            # Collect consecutive list items at the same depth/ordered
-            list_items: list[ListItem] = []
+            # Collect consecutive list items, splitting when ordered/depth changes
+            list_items: list[ListItem] = [block]
+            i += 1
             while i < len(blocks) and isinstance(blocks[i], ListItem):
-                list_items.append(blocks[i])
+                item = blocks[i]
+                assert isinstance(item, ListItem)
+                if (
+                    item.ordered != list_items[0].ordered
+                    or item.depth != list_items[0].depth
+                ):
+                    break
+                list_items.append(item)
                 i += 1
             tokens.append(_list_items_to_token(list_items))
             continue  # i already advanced

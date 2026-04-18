@@ -363,16 +363,24 @@ def _update_paragraph_requests(
         }
     )
 
-    # Step 3: Apply heading style
+    # Step 3: Apply paragraph style (heading level or reset to normal)
+    style_map = {
+        1: "HEADING_1",
+        2: "HEADING_2",
+        3: "HEADING_3",
+        4: "HEADING_4",
+        5: "HEADING_5",
+        6: "HEADING_6",
+    }
     if isinstance(new_block, Heading):
-        style_map = {
-            1: "HEADING_1",
-            2: "HEADING_2",
-            3: "HEADING_3",
-            4: "HEADING_4",
-            5: "HEADING_5",
-            6: "HEADING_6",
-        }
+        named_style = style_map.get(new_block.level, "HEADING_1")
+    elif isinstance(base, Heading):
+        # Heading → Paragraph/ListItem: reset to NORMAL_TEXT
+        named_style = "NORMAL_TEXT"
+    else:
+        named_style = None
+
+    if named_style:
         requests.append(
             {
                 "updateParagraphStyle": {
@@ -381,9 +389,7 @@ def _update_paragraph_requests(
                         "endIndex": start + _utf16_len(new_text),
                         "tabId": tab_id,
                     },
-                    "paragraphStyle": {
-                        "namedStyleType": style_map.get(new_block.level, "HEADING_1")
-                    },
+                    "paragraphStyle": {"namedStyleType": named_style},
                     "fields": "namedStyleType",
                 }
             }

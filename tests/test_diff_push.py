@@ -316,6 +316,20 @@ class TestDiffToMutations:
         ]
         assert len(bold_reqs) == 1
 
+    def test_heading_demotion_resets_style(self):
+        """Issue #1: Heading → Paragraph must reset namedStyleType to NORMAL_TEXT."""
+        base = _make_blocks_with_range(("heading", "Title", 5, 15, 2))
+        edited = [Paragraph(spans=[Span("Title")])]
+        ops = [EditOp("update", 0, 0, base[0], edited[0])]
+
+        mutations = diff_to_mutations(ops, base, "t1")
+        style_reqs = [m for m in mutations if "updateParagraphStyle" in m]
+        assert len(style_reqs) == 1
+        assert (
+            style_reqs[0]["updateParagraphStyle"]["paragraphStyle"]["namedStyleType"]
+            == "NORMAL_TEXT"
+        )
+
 
 # =============================================================================
 # Table updates
