@@ -12,8 +12,10 @@ from gax.gdoc import (
     format_multipart,
     format_section,
     pull_single_tab,
+    compute_tab_paths,
+    DocSection,
 )
-from gax.native_md import get_doc_tabs, TabInfo
+from gax.native_md import get_doc_tabs, split_doc_by_tabs, TabInfo
 
 
 # Load fixtures
@@ -435,3 +437,126 @@ class TestPullSingleTab:
 
         assert section.section_title == "Legacy Doc"
         assert "Legacy content" in section.content
+
+
+def _section(title, depth=0, has_children=False, tab_id="t.x", section_type=None):
+    """Helper to create a DocSection for path computation tests."""
+    return DocSection(
+        title="Doc",
+        source="https://docs.google.com/document/d/abc/edit",
+        time="2026-01-01T00:00:00Z",
+        section=1,
+        section_title=title,
+        content="",
+        section_type=section_type,
+        tab_depth=depth,
+        tab_has_children=has_children,
+        tab_id=tab_id,
+    )
+
+
+class TestComputeTabPaths:
+    """Tests for compute_tab_paths function."""
+
+    def test_flat_tabs(self, tmp_path):
+        """Flat tabs (no nesting) produce files in root folder."""
+        sections = [
+            _section("Overview"),
+            _section("Timeline"),
+        ]
+        paths = compute_tab_paths(sections, tmp_path)
+        assert [p.relative_to(tmp_path) for p in paths] == [
+            Path("Overview.tab.gax.md"),
+            Path("Timeline.tab.gax.md"),
+        ]
+
+    def test_nested_tabs(self, tmp_path):
+        """Nested tabs produce subdirectories."""
+        sections = [
+            _section("Overview"),
+            _section("Design", has_children=True),
+            _section("Frontend", depth=1),
+            _section("Backend", depth=1, has_children=True),
+            _section("API", depth=2),
+        ]
+        paths = compute_tab_paths(sections, tmp_path)
+        rel = [p.relative_to(tmp_path) for p in paths]
+        assert rel == [
+            Path("Overview.tab.gax.md"),
+            Path("Design/Design.tab.gax.md"),
+            Path("Design/Frontend.tab.gax.md"),
+            Path("Design/Backend/Backend.tab.gax.md"),
+            Path("Design/Backend/API.tab.gax.md"),
+        ]
+
+    def test_sibling_parent_tabs(self, tmp_path):
+        """Two top-level parent tabs produce separate subdirectories."""
+        sections = [
+            _section("Design", has_children=True),
+            _section("Frontend", depth=1),
+            _section("Testing", has_children=True),
+            _section("Unit", depth=1),
+        ]
+        paths = compute_tab_paths(sections, tmp_path)
+        rel = [p.relative_to(tmp_path) for p in paths]
+        assert rel == [
+            Path("Design/Design.tab.gax.md"),
+            Path("Design/Frontend.tab.gax.md"),
+            Path("Testing/Testing.tab.gax.md"),
+            Path("Testing/Unit.tab.gax.md"),
+        ]
+
+    def test_comment_sections_skipped(self, tmp_path):
+        """Comment sections get empty Path placeholders."""
+        sections = [
+            _section("Overview"),
+            _section("Overview (Comments)", section_type="comments"),
+        ]
+        paths = compute_tab_paths(sections, tmp_path)
+        assert paths[0] == tmp_path / "Overview.tab.gax.md"
+        assert paths[1] == Path("")
+
+    def test_special_characters_sanitized(self, tmp_path):
+        """Tab names with special characters are sanitized."""
+        sections = [_section("Q&A: Design/Notes")]
+        paths = compute_tab_paths(sections, tmp_path)
+        assert paths[0] == tmp_path / "Q&A-_Design-Notes.tab.gax.md"
+
+
+class TestSplitDocByTabsNested:
+    """Tests for split_doc_by_tabs with nested tabs.
+
+    The Drive API exports ALL tabs as H1 headers regardless of nesting depth.
+    """
+
+    def test_flat_h1_tabs(self):
+        """Standard H1-separated tabs."""
+        md = "# Overview\n\nGoals.\n\n# Timeline\n\nMilestones.\n"
+        result = split_doc_by_tabs(md, ["Overview", "Timeline"])
+        assert "Goals." in result["Overview"]
+        assert "Milestones." in result["Timeline"]
+
+    def test_nested_all_h1(self):
+        """Nested tabs are all exported as H1 by the Drive API."""
+        md = (
+            "# Overview\n\nGoals.\n\n"
+            "# Design\n\nIntro.\n\n"
+            "# Frontend\n\nReact stuff.\n\n"
+            "# Backend\n\nPython stuff.\n"
+        )
+        result = split_doc_by_tabs(
+            md,
+            ["Overview", "Design", "Frontend", "Backend"],
+            [0, 0, 1, 1],
+        )
+        assert "Goals." in result["Overview"]
+        assert "Intro." in result["Design"]
+        assert "React stuff." in result["Frontend"]
+        assert "Python stuff." in result["Backend"]
+
+    def test_h2_not_matched_as_tab_when_not_in_list(self):
+        """H2 headers that aren't tab titles should be kept as content."""
+        md = "# Overview\n\n## Subsection\n\nBody.\n"
+        result = split_doc_by_tabs(md, ["Overview"], [0])
+        assert "## Subsection" in result["Overview"]
+        assert "Body." in result["Overview"]

@@ -253,25 +253,18 @@ def create_doc_from_markdown(
 def split_doc_by_tabs(markdown: str, tab_titles: list[str], tab_depths: list[int] | None = None) -> dict[str, str]:
     """Split exported markdown by tab titles.
 
-    The native Drive API export concatenates all tabs. Each tab starts
-    with its title as a header — H1 for top-level, H2 for children, etc.
+    The native Drive API export concatenates all tabs, each starting
+    with an H1 header (regardless of nesting depth).
 
     Args:
         markdown: Full markdown export from Drive API
         tab_titles: List of tab titles in order
-        tab_depths: List of tab depths (0=top-level). If None, all are depth 0.
+        tab_depths: Unused, kept for API compatibility.
 
     Returns:
         Dict mapping tab title to markdown content
     """
-    if tab_depths is None:
-        tab_depths = [0] * len(tab_titles)
-
-    # Build lookup: (header_level, normalized_title) -> tab_title
-    tab_lookup = {}
-    for title, depth in zip(tab_titles, tab_depths):
-        header_level = depth + 1  # depth 0 -> H1, depth 1 -> H2, etc.
-        tab_lookup[(header_level, title)] = title
+    tab_set = set(tab_titles)
 
     result = {}
     lines = markdown.split("\n")
@@ -287,21 +280,13 @@ def split_doc_by_tabs(markdown: str, tab_titles: list[str], tab_depths: list[int
         text = re.sub(r"\\(.)", r"\1", text)
         return text
 
-    def _parse_header(line: str) -> tuple[int, str] | None:
-        """Parse a markdown header line, returning (level, text) or None."""
-        m = re.match(r"^(#{1,6})\s+(.+)$", line)
-        if m:
-            return len(m.group(1)), _normalize_header(m.group(2))
-        return None
-
     for line in lines:
-        header = _parse_header(line)
-        if header:
-            level, text = header
-            if (level, text) in tab_lookup:
+        if line.startswith("# "):
+            header_text = _normalize_header(line[2:])
+            if header_text in tab_set:
                 if current_tab is not None:
                     result[current_tab] = "\n".join(current_lines).strip() + "\n"
-                current_tab = tab_lookup[(level, text)]
+                current_tab = header_text
                 current_lines = []
                 continue
 

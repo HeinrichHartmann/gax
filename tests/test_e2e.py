@@ -685,3 +685,136 @@ class TestCalendarE2E:
         # Clean up: delete the original event (clone file is just local)
         result = _run_gax("cal", "event", "delete", str(event_file), "-y")
         assert result.returncode == 0
+
+
+# =============================================================================
+# Nested Tab E2E Tests
+# =============================================================================
+
+
+def _create_nested_tabs(doc_id: str) -> dict:
+    """Create a nested tab structure in a test document via the API.
+
+    Creates:
+      - Overview (top-level)
+      - Design (top-level, parent)
+        - Frontend (child of Design)
+        - Backend (child of Design)
+
+    Returns dict mapping tab names to tab IDs.
+    """
+    creds = get_authenticated_credentials()
+    service = build("docs", "v1", credentials=creds)
+
+    tab_ids = {}
+
+    # Create Overview tab
+    resp = service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"addDocumentTab": {"tabProperties": {"title": "Overview"}}}]},
+    ).execute()
+    tab_ids["Overview"] = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
+
+    # Insert content into Overview
+    service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"insertText": {"text": "Project goals.\n", "location": {"index": 1, "tabId": tab_ids["Overview"]}}}]},
+    ).execute()
+
+    # Create Design tab
+    resp = service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"addDocumentTab": {"tabProperties": {"title": "Design"}}}]},
+    ).execute()
+    tab_ids["Design"] = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
+
+    service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"insertText": {"text": "Design intro.\n", "location": {"index": 1, "tabId": tab_ids["Design"]}}}]},
+    ).execute()
+
+    # Create Frontend as child of Design
+    resp = service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"addDocumentTab": {"tabProperties": {"title": "Frontend", "parentTabId": tab_ids["Design"]}}}]},
+    ).execute()
+    tab_ids["Frontend"] = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
+
+    service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"insertText": {"text": "React components.\n", "location": {"index": 1, "tabId": tab_ids["Frontend"]}}}]},
+    ).execute()
+
+    # Create Backend as child of Design
+    resp = service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"addDocumentTab": {"tabProperties": {"title": "Backend", "parentTabId": tab_ids["Design"]}}}]},
+    ).execute()
+    tab_ids["Backend"] = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
+
+    service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"insertText": {"text": "Python services.\n", "location": {"index": 1, "tabId": tab_ids["Backend"]}}}]},
+    ).execute()
+
+    return tab_ids
+
+
+@pytest.mark.e2e
+class TestNestedTabE2E:
+    """End-to-end tests for nested tab checkout/push/pull."""
+
+    def test_checkout_nested_structure(self, check_auth, test_doc, temp_dir):
+        """Test: create nested tabs -> checkout -> verify directory tree."""
+        _create_nested_tabs(test_doc["id"])
+
+        # Checkout
+        folder = temp_dir / "nested.doc.gax.md.d"
+        result = _run_gax("doc", "checkout", test_doc["url"], "-o", str(folder))
+        assert result.returncode == 0, f"Checkout failed: {result.stderr}"
+
+        # Verify directory structure
+        assert (folder / ".gax.yaml").exists()
+
+        # Design has children -> gets a subdirectory
+        assert (folder / "Design").is_dir()
+        assert (folder / "Design" / "Design.tab.gax.md").exists()
+        assert (folder / "Design" / "Frontend.tab.gax.md").exists()
+        assert (folder / "Design" / "Backend.tab.gax.md").exists()
+
+        # Overview is a leaf -> flat file
+        assert (folder / "Overview.tab.gax.md").exists()
+
+        # Verify content
+        overview = (folder / "Overview.tab.gax.md").read_text()
+        assert "Project goals" in overview
+
+        frontend = (folder / "Design" / "Frontend.tab.gax.md").read_text()
+        assert "React components" in frontend
+
+    def test_checkout_modify_push_pull(self, check_auth, test_doc, temp_dir):
+        """Test: checkout -> modify tab -> push -> pull -> verify round-trip."""
+        _create_nested_tabs(test_doc["id"])
+
+        # Checkout
+        folder = temp_dir / "modify.doc.gax.md.d"
+        result = _run_gax("doc", "checkout", test_doc["url"], "-o", str(folder))
+        assert result.returncode == 0, f"Checkout failed: {result.stderr}"
+
+        # Modify a nested tab
+        frontend_path = folder / "Design" / "Frontend.tab.gax.md"
+        content = frontend_path.read_text()
+        updated = content.replace("React components", "React and Vue components")
+        frontend_path.write_text(updated)
+
+        # Push the folder
+        result = _run_gax("push", str(folder), "-y")
+        assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+        # Pull back
+        result = _run_gax("pull", str(folder), "-y")
+        assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+        # Verify the change survived the round-trip
+        pulled = (folder / "Design" / "Frontend.tab.gax.md").read_text()
+        assert "Vue components" in pulled

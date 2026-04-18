@@ -1221,6 +1221,50 @@ def pull(file: Path, with_comments: bool):
         sys.exit(1)
 
 
+def _safe_name(name: str) -> str:
+    """Sanitize a name for use as a filename."""
+    s = re.sub(r'[<>:"/\\|?*]', "-", name)
+    return re.sub(r"\s+", "_", s)
+
+
+def compute_tab_paths(sections: list[DocSection], folder: Path) -> list[Path]:
+    """Compute filesystem paths for checkout tab files.
+
+    Tabs with children get subdirectories; their content lives inside.
+    Leaf tabs are plain files in their parent's directory.
+
+    Returns a list of Paths parallel to sections (empty Path for comments).
+    """
+    ancestor_stack: list[str] = []
+    tab_paths: list[Path] = []
+
+    for section in sections:
+        if section.section_type == "comments":
+            tab_paths.append(Path(""))
+            continue
+
+        safe = _safe_name(section.section_title)
+        depth = section.tab_depth
+
+        # Trim ancestor stack to current depth
+        ancestor_stack = ancestor_stack[:depth]
+
+        if section.tab_has_children:
+            rel = Path(*ancestor_stack, safe) if ancestor_stack else Path(safe)
+            file_path = folder / rel / f"{safe}.tab.gax.md"
+            ancestor_stack.append(safe)
+        else:
+            if ancestor_stack:
+                rel = Path(*ancestor_stack)
+                file_path = folder / rel / f"{safe}.tab.gax.md"
+            else:
+                file_path = folder / f"{safe}.tab.gax.md"
+
+        tab_paths.append(file_path)
+
+    return tab_paths
+
+
 @doc.command()
 @click.argument("url")
 @click.option(
@@ -1272,43 +1316,7 @@ def checkout(url: str, output: Optional[Path]):
 
         click.echo(f"Checking out {len(sections)} tabs to {folder}/")
 
-        # Build directory paths for nested tabs.
-        # A tab with children gets a subdirectory; its content goes inside.
-        # We need to compute the filesystem path for each section by tracking
-        # the ancestor chain based on depth.
-        ancestor_stack: list[str] = []  # safe names at each depth
-
-        def _safe_name(name: str) -> str:
-            s = re.sub(r'[<>:"/\\|?*]', "-", name)
-            return re.sub(r"\s+", "_", s)
-
-        tab_paths: list[Path] = []
-        for section in sections:
-            if section.section_type == "comments":
-                tab_paths.append(Path(""))  # placeholder
-                continue
-
-            safe = _safe_name(section.section_title)
-            depth = section.tab_depth
-
-            # Trim ancestor stack to current depth
-            ancestor_stack = ancestor_stack[:depth]
-
-            if section.tab_has_children:
-                # This tab gets a subdirectory; content lives inside it
-                rel = Path(*ancestor_stack, safe) if ancestor_stack else Path(safe)
-                file_path = folder / rel / f"{safe}.tab.gax.md"
-                ancestor_stack.append(safe)
-            else:
-                # Regular file in current ancestor directory
-                if ancestor_stack:
-                    rel = Path(*ancestor_stack)
-                    file_path = folder / rel / f"{safe}.tab.gax.md"
-                else:
-                    file_path = folder / f"{safe}.tab.gax.md"
-                # Don't push onto ancestor_stack — no children
-
-            tab_paths.append(file_path)
+        tab_paths = compute_tab_paths(sections, folder)
 
         # Write tab tree to .gax.yaml
         tab_tree = []
