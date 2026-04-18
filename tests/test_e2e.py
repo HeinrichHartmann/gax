@@ -1768,9 +1768,7 @@ class TestMailThreadE2E:
 
         # Reply from the file
         reply_file = temp_dir / "reply.draft.gax.md"
-        result = _run_gax(
-            "mail", "reply", str(thread_file), "-o", str(reply_file)
-        )
+        result = _run_gax("mail", "reply", str(thread_file), "-o", str(reply_file))
         assert result.returncode == 0, f"Reply failed: {result.stderr}"
         assert reply_file.exists()
 

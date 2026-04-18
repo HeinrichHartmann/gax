@@ -290,9 +290,7 @@ class File(Resource):
                 raise ValueError("No file_id in tracking file")
 
             logger.info(f"Updating Drive file: {file_id}")
-            metadata = update_file(
-                file_id, path, public=public if public else None
-            )
+            metadata = update_file(file_id, path, public=public if public else None)
         else:
             logger.info(f"Uploading: {path.name}")
             metadata = upload_file(path, public=public)

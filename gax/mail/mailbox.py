@@ -28,7 +28,9 @@ Same conventions as draft.py (see its docstring for full rationale).
 import logging
 import re
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import Any
 
 from googleapiclient.discovery import build
 
@@ -190,11 +192,9 @@ def _parse_gax_content(path: Path) -> str:
 # =============================================================================
 
 
-def _make_filename(date_str: str, from_addr: str, subject: str, _thread_id: str) -> str:
+def _make_filename(date_str: str, from_addr: str, subject: str) -> str:
     """Create filename: date-from-subject.mail.gax.md"""
     try:
-        from email.utils import parsedate_to_datetime
-
         dt = parsedate_to_datetime(date_str)
         date_part = dt.strftime("%Y-%m-%d")
     except (ValueError, TypeError):
@@ -266,8 +266,6 @@ def _get_thread_summary(thread_id: str, service) -> dict:
         from_email = from_addr.split()[0] if from_addr else ""
 
     try:
-        from email.utils import parsedate_to_datetime
-
         dt = parsedate_to_datetime(date_str)
         date_short = dt.strftime("%Y-%m-%d")
     except (ValueError, TypeError):
@@ -342,8 +340,6 @@ def _get_thread_for_relabel(thread_id: str, service, label_id_to_name: dict) -> 
         from_email = from_addr.split()[0] if from_addr else ""
 
     try:
-        from email.utils import parsedate_to_datetime
-
         dt = parsedate_to_datetime(date_str)
         date_short = dt.strftime("%Y-%m-%d")
     except (ValueError, TypeError):
@@ -632,7 +628,7 @@ class Mailbox:
                     desired_labels_expanded.add("/".join(parts[:i]))
             labels_to_remove = current_user_labels - desired_labels_expanded
 
-            change = {"id": thread_id}
+            change: dict[str, Any] = {"id": thread_id}
             has_change = False
 
             if sys_to_add:
@@ -829,9 +825,7 @@ class Mailbox:
                 content = format_multipart(sections)
 
                 first = sections[0]
-                filename = _make_filename(
-                    first.date, first.from_addr, first.title, thread_id
-                )
+                filename = _make_filename(first.date, first.from_addr, first.title)
                 file_path = output_path / filename
 
                 if file_path.exists():

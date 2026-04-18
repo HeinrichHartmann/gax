@@ -14,8 +14,6 @@ from .shared import (  # noqa: F401 — public API
     format_multipart as format_multipart,
     extract_thread_id as extract_thread_id,
     pull_thread as pull_thread,
-    _mail_section_to_multipart as _mail_section_to_multipart,
-    _get_header as _get_header,
 )
 from .thread import Thread as Thread  # noqa: F401
 from .mailbox import Mailbox as Mailbox  # noqa: F401
