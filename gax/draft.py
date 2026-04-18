@@ -2,6 +2,12 @@
 
 Implements push/pull for email drafts as markdown files (.draft.gax.md).
 See ADR 006 for design details.
+
+Module structure:
+  DraftHeader          — dataclass for .draft.gax.md frontmatter
+  File format          — parse/format .draft.gax.md files
+  Gmail API helpers    — wrappers around Gmail API quirks
+  Draft(ResourceItem)  — resource class (the public interface for cli.py)
 """
 
 import base64
@@ -24,9 +30,14 @@ from .resource import ResourceItem
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# Data class
+# =============================================================================
+
+
 @dataclass
-class DraftConfig:
-    """Configuration/metadata for a draft file."""
+class DraftHeader:
+    """Frontmatter of a .draft.gax.md file."""
 
     draft_id: str = ""
     message_id: str = ""
@@ -45,62 +56,61 @@ class DraftConfig:
 # =============================================================================
 
 
-def parse_draft(content: str) -> tuple[DraftConfig, str]:
-    """Parse a .draft.gax.md file into config and body.
+def parse_draft(content: str) -> tuple[DraftHeader, str]:
+    """Parse a .draft.gax.md file into header and body.
 
     Returns:
-        Tuple of (DraftConfig, body_content)
+        Tuple of (DraftHeader, body_content)
     """
     sections = multipart.parse_multipart(content)
     if not sections:
         raise ValueError("No content found in draft file")
 
     section = sections[0]
-    headers = section.headers
+    h = section.headers
 
-    config = DraftConfig(
-        draft_id=headers.get("draft_id", ""),
-        message_id=headers.get("message_id", ""),
-        subject=headers.get("subject", ""),
-        to=headers.get("to", ""),
-        cc=headers.get("cc", ""),
-        bcc=headers.get("bcc", ""),
-        thread_id=headers.get("thread_id", ""),
-        in_reply_to=headers.get("in_reply_to", ""),
-        source=headers.get("source", ""),
-        time=headers.get("time", ""),
+    header = DraftHeader(
+        draft_id=h.get("draft_id", ""),
+        message_id=h.get("message_id", ""),
+        subject=h.get("subject", ""),
+        to=h.get("to", ""),
+        cc=h.get("cc", ""),
+        bcc=h.get("bcc", ""),
+        thread_id=h.get("thread_id", ""),
+        in_reply_to=h.get("in_reply_to", ""),
+        source=h.get("source", ""),
+        time=h.get("time", ""),
     )
 
-    return config, section.content
+    return header, section.content
 
 
-def format_draft(config: DraftConfig, body: str) -> str:
-    """Format a draft config and body as .draft.gax.md content."""
-    headers: dict[str, Any] = {"type": "gax/draft"}
+def format_draft(header: DraftHeader, body: str) -> str:
+    """Format a draft header and body as .draft.gax.md content."""
+    h: dict[str, Any] = {"type": "gax/draft"}
 
-    # Add headers in consistent order
-    if config.draft_id:
-        headers["draft_id"] = config.draft_id
-    if config.message_id:
-        headers["message_id"] = config.message_id
-    if config.thread_id:
-        headers["thread_id"] = config.thread_id
-    if config.in_reply_to:
-        headers["in_reply_to"] = config.in_reply_to
+    if header.draft_id:
+        h["draft_id"] = header.draft_id
+    if header.message_id:
+        h["message_id"] = header.message_id
+    if header.thread_id:
+        h["thread_id"] = header.thread_id
+    if header.in_reply_to:
+        h["in_reply_to"] = header.in_reply_to
 
-    headers["subject"] = config.subject
-    headers["to"] = config.to
+    h["subject"] = header.subject
+    h["to"] = header.to
 
-    if config.cc:
-        headers["cc"] = config.cc
-    if config.bcc:
-        headers["bcc"] = config.bcc
-    if config.source:
-        headers["source"] = config.source
-    if config.time:
-        headers["time"] = config.time
+    if header.cc:
+        h["cc"] = header.cc
+    if header.bcc:
+        h["bcc"] = header.bcc
+    if header.source:
+        h["source"] = header.source
+    if header.time:
+        h["time"] = header.time
 
-    return multipart.format_section(headers, body)
+    return multipart.format_section(h, body)
 
 
 def parse_draft_id(url_or_id: str) -> str:
@@ -109,12 +119,10 @@ def parse_draft_id(url_or_id: str) -> str:
 
     url_or_id = unquote(url_or_id)
 
-    # Gmail drafts URL: https://mail.google.com/mail/u/0/#drafts/r1234567890
     match = re.search(r"#drafts/([A-Za-z0-9-]+)$", url_or_id)
     if match:
         return match.group(1)
 
-    # Already an ID
     if re.fullmatch(r"r?[A-Za-z0-9-]+", url_or_id):
         return url_or_id
 
@@ -126,7 +134,7 @@ def parse_draft_id(url_or_id: str) -> str:
 # =============================================================================
 
 
-def _get_header(headers_list: list[dict], name: str) -> str:
+def get_header(headers_list: list[dict], name: str) -> str:
     """Get a header value by name from Gmail API headers list."""
     for h in headers_list:
         if h["name"].lower() == name.lower():
@@ -134,31 +142,31 @@ def _get_header(headers_list: list[dict], name: str) -> str:
     return ""
 
 
-def _build_message(config: DraftConfig, body: str) -> dict:
+def build_message(header: DraftHeader, body: str) -> dict:
     """Build RFC 2822 message dict for Gmail API."""
     message = MIMEText(body, "plain", "utf-8")
-    message["to"] = config.to
-    message["subject"] = config.subject
+    message["to"] = header.to
+    message["subject"] = header.subject
 
-    if config.cc:
-        message["cc"] = config.cc
-    if config.bcc:
-        message["bcc"] = config.bcc
-    if config.in_reply_to:
-        message["In-Reply-To"] = config.in_reply_to
-        message["References"] = config.in_reply_to
+    if header.cc:
+        message["cc"] = header.cc
+    if header.bcc:
+        message["bcc"] = header.bcc
+    if header.in_reply_to:
+        message["In-Reply-To"] = header.in_reply_to
+        message["References"] = header.in_reply_to
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
     result: dict[str, Any] = {"raw": raw}
-    if config.thread_id:
-        result["threadId"] = config.thread_id
+    if header.thread_id:
+        result["threadId"] = header.thread_id
 
     return result
 
 
-def _extract_body(payload: dict) -> str:
-    """Extract plain text body from message payload."""
+def extract_body(payload: dict) -> str:
+    """Extract plain text body from Gmail message payload."""
     mime_type = payload.get("mimeType", "")
 
     if mime_type == "text/plain":
@@ -176,21 +184,16 @@ def _extract_body(payload: dict) -> str:
                     return base64.urlsafe_b64decode(data).decode(
                         "utf-8", errors="replace"
                     )
-        # Fallback: recurse into parts
         for part in parts:
-            result = _extract_body(part)
+            result = extract_body(part)
             if result:
                 return result
 
     return ""
 
 
-def get_draft(draft_id: str, *, service=None) -> tuple[DraftConfig, str]:
-    """Fetch a draft from Gmail.
-
-    Returns:
-        Tuple of (DraftConfig, body_content)
-    """
+def fetch_draft(draft_id: str, *, service=None) -> tuple[DraftHeader, str]:
+    """Fetch a draft from Gmail. Returns (DraftHeader, body)."""
     if service is None:
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
@@ -203,84 +206,20 @@ def get_draft(draft_id: str, *, service=None) -> tuple[DraftConfig, str]:
     payload = message.get("payload", {})
     headers_list = payload.get("headers", [])
 
-    config = DraftConfig(
+    header = DraftHeader(
         draft_id=result.get("id", ""),
         message_id=message.get("id", ""),
-        subject=_get_header(headers_list, "Subject"),
-        to=_get_header(headers_list, "To"),
-        cc=_get_header(headers_list, "Cc"),
-        bcc=_get_header(headers_list, "Bcc"),
+        subject=get_header(headers_list, "Subject"),
+        to=get_header(headers_list, "To"),
+        cc=get_header(headers_list, "Cc"),
+        bcc=get_header(headers_list, "Bcc"),
         thread_id=message.get("threadId", ""),
-        in_reply_to=_get_header(headers_list, "In-Reply-To"),
+        in_reply_to=get_header(headers_list, "In-Reply-To"),
         source=f"https://mail.google.com/mail/u/0/#drafts/{result.get('id', '')}",
         time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
-    return config, _extract_body(payload)
-
-
-def list_drafts(*, limit: int = 100, service=None) -> list[dict]:
-    """List drafts from Gmail.
-
-    Returns:
-        List of draft info dicts with id field
-    """
-    if service is None:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-    drafts = []
-    page_token = None
-
-    while len(drafts) < limit:
-        batch_size = min(100, limit - len(drafts))
-        result = (
-            service.users()
-            .drafts()
-            .list(userId="me", maxResults=batch_size, pageToken=page_token)
-            .execute()
-        )
-
-        batch = result.get("drafts", [])
-        drafts.extend(batch)
-
-        page_token = result.get("nextPageToken")
-        if not page_token or not batch:
-            break
-
-    return drafts[:limit]
-
-
-def get_draft_summary(draft_id: str, *, service=None) -> dict:
-    """Get summary info for a draft (metadata only)."""
-    if service is None:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-    result = (
-        service.users()
-        .drafts()
-        .get(userId="me", id=draft_id, format="metadata")
-        .execute()
-    )
-
-    message = result.get("message", {})
-    headers_list = message.get("payload", {}).get("headers", [])
-
-    date_str = _get_header(headers_list, "Date")
-    try:
-        dt = parsedate_to_datetime(date_str)
-        date_short = dt.strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        date_short = date_str[:10] if date_str else ""
-
-    return {
-        "draft_id": result.get("id", ""),
-        "thread_id": message.get("threadId", ""),
-        "date": date_short,
-        "to": _get_header(headers_list, "To")[:40],
-        "subject": _get_header(headers_list, "Subject")[:60],
-    }
+    return header, extract_body(payload)
 
 
 # =============================================================================
@@ -302,12 +241,12 @@ class Draft(ResourceItem):
 
     def new(self, to: str, subject: str, output: Path | None = None) -> Path:
         """Create a new local draft file. Returns path created."""
-        config = DraftConfig(
+        header = DraftHeader(
             subject=subject,
             to=to,
             time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
-        content = format_draft(config, "\n")
+        content = format_draft(header, "\n")
 
         file_path = self._output_path(subject, output)
         if file_path.exists():
@@ -321,51 +260,85 @@ class Draft(ResourceItem):
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
 
-        drafts = list_drafts(limit=limit, service=service)
+        # Fetch draft ID list
+        drafts = []
+        page_token = None
+        while len(drafts) < limit:
+            batch_size = min(100, limit - len(drafts))
+            result = (
+                service.users()
+                .drafts()
+                .list(userId="me", maxResults=batch_size, pageToken=page_token)
+                .execute()
+            )
+            batch = result.get("drafts", [])
+            drafts.extend(batch)
+            page_token = result.get("nextPageToken")
+            if not page_token or not batch:
+                break
+        drafts = drafts[:limit]
+
         if not drafts:
             return
 
         out.write("draft_id\tthread_id\tdate\tto\tsubject\n")
         for draft_info in drafts:
-            draft_id = draft_info["id"]
-            logger.info(f"Fetching: {draft_id}")
+            did = draft_info["id"]
+            logger.info(f"Fetching: {did}")
             try:
-                summary = get_draft_summary(draft_id, service=service)
+                result = (
+                    service.users()
+                    .drafts()
+                    .get(userId="me", id=did, format="metadata")
+                    .execute()
+                )
+                message = result.get("message", {})
+                hl = message.get("payload", {}).get("headers", [])
+
+                date_str = get_header(hl, "Date")
+                try:
+                    date_short = parsedate_to_datetime(date_str).strftime("%Y-%m-%d")
+                except (ValueError, TypeError):
+                    date_short = date_str[:10] if date_str else ""
+
                 out.write(
-                    f"{summary['draft_id']}\t{summary['thread_id']}\t"
-                    f"{summary['date']}\t{summary['to']}\t{summary['subject']}\n"
+                    f"{result.get('id', '')}\t"
+                    f"{message.get('threadId', '')}\t"
+                    f"{date_short}\t"
+                    f"{get_header(hl, 'To')[:40]}\t"
+                    f"{get_header(hl, 'Subject')[:60]}\n"
                 )
             except Exception as e:
-                logger.warning(f"Error fetching {draft_id}: {e}")
+                logger.warning(f"Error fetching {did}: {e}")
 
     def clone(self, url: str, output: Path | None = None, **kw) -> Path:
         """Clone a draft from Gmail to a local file."""
         draft_id = parse_draft_id(url)
         logger.info(f"Fetching draft: {draft_id}")
 
-        config, body = get_draft(draft_id)
-        content = format_draft(config, body)
+        header, body = fetch_draft(draft_id)
+        content = format_draft(header, body)
 
-        file_path = self._output_path(config.subject, output)
+        file_path = self._output_path(header.subject, output)
         if file_path.exists():
             raise ValueError(f"File already exists: {file_path}")
 
         file_path.write_text(content, encoding="utf-8")
-        logger.info(f"Subject: {config.subject}, To: {config.to}")
+        logger.info(f"Subject: {header.subject}, To: {header.to}")
         return file_path
 
     def pull(self, path: Path, **kw) -> None:
         """Pull latest draft content from Gmail."""
         content = path.read_text(encoding="utf-8")
-        config, _ = parse_draft(content)
+        header, _ = parse_draft(content)
 
-        if not config.draft_id:
+        if not header.draft_id:
             raise ValueError("No draft_id in file")
 
-        remote_config, remote_body = get_draft(config.draft_id)
-        new_content = format_draft(remote_config, remote_body)
+        remote_header, remote_body = fetch_draft(header.draft_id)
+        new_content = format_draft(remote_header, remote_body)
         path.write_text(new_content, encoding="utf-8")
-        logger.info(f"Subject: {remote_config.subject}, To: {remote_config.to}")
+        logger.info(f"Subject: {remote_header.subject}, To: {remote_header.to}")
 
     def diff(self, path: Path, **kw) -> str | None:
         """Preview changes between local draft and remote.
@@ -374,29 +347,27 @@ class Draft(ResourceItem):
         For new drafts (no draft_id), returns a summary of what will be created.
         """
         content = path.read_text(encoding="utf-8")
-        config, body = parse_draft(content)
+        header, body = parse_draft(content)
 
-        if not config.to:
+        if not header.to:
             raise ValueError("'to' field is required")
-        if not config.subject:
+        if not header.subject:
             raise ValueError("'subject' field is required")
 
-        if not config.draft_id:
-            return f"New draft: {config.subject}\nTo: {config.to}"
+        if not header.draft_id:
+            return f"New draft: {header.subject}\nTo: {header.to}"
 
-        remote_config, remote_body = get_draft(config.draft_id)
+        remote_header, remote_body = fetch_draft(header.draft_id)
 
         lines = []
 
-        # Header changes
-        if config.to != remote_config.to:
-            lines.append(f"to: {remote_config.to} -> {config.to}")
-        if config.subject != remote_config.subject:
-            lines.append(f"subject: {remote_config.subject} -> {config.subject}")
-        if config.cc != remote_config.cc:
-            lines.append(f"cc: {remote_config.cc} -> {config.cc}")
+        if header.to != remote_header.to:
+            lines.append(f"to: {remote_header.to} -> {header.to}")
+        if header.subject != remote_header.subject:
+            lines.append(f"subject: {remote_header.subject} -> {header.subject}")
+        if header.cc != remote_header.cc:
+            lines.append(f"cc: {remote_header.cc} -> {header.cc}")
 
-        # Body diff
         body_diff = list(
             difflib.unified_diff(
                 remote_body.splitlines(keepends=True),
@@ -415,37 +386,37 @@ class Draft(ResourceItem):
     def push(self, path: Path, **kw) -> None:
         """Push local draft to Gmail. Unconditional — caller handles confirmation."""
         content = path.read_text(encoding="utf-8")
-        config, body = parse_draft(content)
+        header, body = parse_draft(content)
 
-        if not config.to:
+        if not header.to:
             raise ValueError("'to' field is required")
-        if not config.subject:
+        if not header.subject:
             raise ValueError("'subject' field is required")
 
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
-        message = _build_message(config, body)
+        message = build_message(header, body)
 
-        if not config.draft_id:
-            logger.info(f"Creating draft: {config.subject}")
+        if not header.draft_id:
+            logger.info(f"Creating draft: {header.subject}")
             result = (
                 service.users()
                 .drafts()
                 .create(userId="me", body={"message": message})
                 .execute()
             )
-            config.draft_id = result["id"]
-            config.message_id = result.get("message", {}).get("id", "")
-            config.source = (
-                f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
+            header.draft_id = result["id"]
+            header.message_id = result.get("message", {}).get("id", "")
+            header.source = (
+                f"https://mail.google.com/mail/u/0/#drafts/{header.draft_id}"
             )
         else:
-            logger.info(f"Updating draft: {config.draft_id}")
+            logger.info(f"Updating draft: {header.draft_id}")
             service.users().drafts().update(
-                userId="me", id=config.draft_id, body={"message": message}
+                userId="me", id=header.draft_id, body={"message": message}
             ).execute()
 
-        config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        new_content = format_draft(config, body)
+        header.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        new_content = format_draft(header, body)
         path.write_text(new_content, encoding="utf-8")
         logger.info("Pushed successfully")

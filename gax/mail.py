@@ -720,7 +720,7 @@ def reply(file_or_url: str, output: Optional[Path]):
             subject = f"Re: {subject}"
 
         # Create draft config
-        config = draft_module.DraftConfig(
+        config = draft_module.DraftHeader(
             subject=subject,
             to=from_addr,
             thread_id=thread_id,
