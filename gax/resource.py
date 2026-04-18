@@ -63,7 +63,11 @@ class ResourceGroup:
     """
 
     name: str
-    entry: ResourceItem
+    entry_type: ResourceItem
+
+    def list(self, url: str, **kw) -> list[ResourceItem]:
+        """List entries in the collection. Returns list of entry_type instances."""
+        raise NotImplementedError(f"{self.name} does not support list")
 
     def checkout(self, url: str, output: Path | None = None, **kw) -> Path:
         """Fetch remote collection → local directory. Returns path created."""

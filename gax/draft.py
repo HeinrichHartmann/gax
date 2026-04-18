@@ -22,6 +22,7 @@ from .auth import get_authenticated_credentials
 from . import multipart
 from .ui import operation, success, error
 from . import docs as doc
+from .resource import ResourceItem
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +359,89 @@ def extract_draft_id(url_or_id: str) -> str:
         return url_or_id
 
     raise ValueError(f"Cannot extract draft ID from: {url_or_id}")
+
+
+# =============================================================================
+# Resource class
+# =============================================================================
+
+
+class Draft(ResourceItem):
+    """Gmail draft resource."""
+
+    name = "draft"
+
+    def _output_path(self, subject: str, output: Path | None) -> Path:
+        if output:
+            return output
+        safe = re.sub(r'[<>:"/\\|?*]', "-", subject or "untitled")
+        safe = re.sub(r"\s+", "_", safe)[:50]
+        return Path(f"{safe}.draft.gax.md")
+
+    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+        """Clone a draft from Gmail to a local file."""
+        draft_id = extract_draft_id(url)
+        logger.info(f"Fetching draft: {draft_id}")
+
+        config, body = get_draft(draft_id)
+        content = format_draft(config, body)
+
+        file_path = self._output_path(config.subject, output)
+        if file_path.exists():
+            raise ValueError(f"File already exists: {file_path}")
+
+        file_path.write_text(content, encoding="utf-8")
+        logger.info(f"Subject: {config.subject}, To: {config.to}")
+        return file_path
+
+    def pull(self, path: Path, **kw) -> None:
+        """Pull latest draft content from Gmail."""
+        content = path.read_text(encoding="utf-8")
+        config, _ = parse_draft(content)
+
+        if not config.draft_id:
+            raise ValueError("No draft_id in file")
+
+        remote_config, remote_body = get_draft(config.draft_id)
+        new_content = format_draft(remote_config, remote_body)
+        path.write_text(new_content, encoding="utf-8")
+        logger.info(f"Subject: {remote_config.subject}, To: {remote_config.to}")
+
+    def push(self, path: Path, yes: bool = False, **kw) -> None:
+        """Push local draft to Gmail."""
+        content = path.read_text(encoding="utf-8")
+        config, body = parse_draft(content)
+
+        if not config.to:
+            raise ValueError("'to' field is required")
+        if not config.subject:
+            raise ValueError("'subject' field is required")
+
+        if not config.draft_id:
+            # Create new draft
+            logger.info(f"Creating draft: {config.subject}")
+            result = create_draft(config, body)
+
+            config.draft_id = result["id"]
+            config.message_id = result.get("message", {}).get("id", "")
+            config.source = (
+                f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
+            )
+            config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            new_content = format_draft(config, body)
+            path.write_text(new_content, encoding="utf-8")
+            logger.info(f"Created draft: {config.draft_id}")
+        else:
+            # Update existing draft
+            remote_config, remote_body = get_draft(config.draft_id)
+
+            update_draft(config.draft_id, config, body)
+
+            config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            new_content = format_draft(config, body)
+            path.write_text(new_content, encoding="utf-8")
+            logger.info("Pushed successfully")
 
 
 # =============================================================================

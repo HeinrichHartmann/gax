@@ -517,98 +517,13 @@ def _push_file(
                 )
 
         elif file_type == "gax/draft":
-            from .draft import (
-                parse_draft,
-                get_draft,
-                create_draft,
-                update_draft,
-                format_draft,
-            )
-            import difflib
+            from .draft import Draft as DraftResource
 
-            content = file_path.read_text(encoding="utf-8")
-            config, body = parse_draft(content)
-
-            if not config.to:
-                return False, "'to' field is required"
-            if not config.subject:
-                return False, "'subject' field is required"
-
-            if not config.draft_id:
-                # Create new draft
-                if not yes:
-                    click.echo(f"Create new draft '{config.subject}' to {config.to}?")
-                    if not click.confirm("Proceed?"):
-                        return False, "cancelled"
-
-                result = create_draft(config, body)
-
-                # Update local file with draft_id
-                config.draft_id = result["id"]
-                config.message_id = result.get("message", {}).get("id", "")
-                config.source = (
-                    f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
-                )
-                config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-                new_content = format_draft(config, body)
-                file_path.write_text(new_content, encoding="utf-8")
-
-                return True, f"created draft {config.draft_id}"
-            else:
-                # Update existing draft
-                try:
-                    remote_config, remote_body = get_draft(config.draft_id)
-                except Exception as e:
-                    if "404" in str(e) or "not found" in str(e).lower():
-                        return False, f"Draft {config.draft_id} no longer exists"
-                    raise
-
-                local_lines = body.splitlines(keepends=True)
-                remote_lines = remote_body.splitlines(keepends=True)
-
-                diff = list(
-                    difflib.unified_diff(
-                        remote_lines,
-                        local_lines,
-                        fromfile="remote",
-                        tofile="local",
-                        lineterm="",
-                    )
-                )
-
-                header_changes = []
-                if config.to != remote_config.to:
-                    header_changes.append(f"to: {remote_config.to} -> {config.to}")
-                if config.subject != remote_config.subject:
-                    header_changes.append(
-                        f"subject: {remote_config.subject} -> {config.subject}"
-                    )
-
-                if not diff and not header_changes:
-                    return True, "no changes"
-
-                if not yes:
-                    if header_changes:
-                        click.echo("Header changes:")
-                        for change in header_changes:
-                            click.echo(f"  {change}")
-                    if diff:
-                        click.echo("Body changes:")
-                        click.echo("-" * 40)
-                        for line in diff:
-                            click.echo(line.rstrip("\n"))
-                        click.echo("-" * 40)
-                    if not click.confirm("Push these changes?"):
-                        return False, "cancelled"
-
-                update_draft(config.draft_id, config, body)
-
-                config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                new_content = format_draft(config, body)
-                file_path.write_text(new_content, encoding="utf-8")
-
+            try:
+                DraftResource().push(file_path, yes=yes)
                 return True, "pushed"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/cal":
             from .gcal import yaml_to_event, create_event, update_event, event_to_yaml
@@ -883,16 +798,13 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             return True, f"{len(new_sections)} messages"
 
         elif file_type == "gax/draft":
-            from .draft import parse_draft, get_draft, format_draft
+            from .draft import Draft as DraftResource
 
-            content = file_path.read_text(encoding="utf-8")
-            config, _ = parse_draft(content)
-            if not config.draft_id:
-                return False, "No draft_id in file"
-            remote_config, remote_body = get_draft(config.draft_id)
-            new_content = format_draft(remote_config, remote_body)
-            file_path.write_text(new_content, encoding="utf-8")
-            return True, "updated"
+            try:
+                DraftResource().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/list":
             from .mail import _parse_gax_header, _relabel_fetch_threads, _write_gax_file
@@ -2107,7 +2019,7 @@ def tab_push(file: Path, with_formulas: bool, yes: bool):
     """Push local data to a single tab."""
     try:
         # Preview: count rows in local file
-        from .frontmatter import parse_file
+        from .gsheet.frontmatter import parse_file
         from .formats import get_format
 
         config, data = parse_file(file)
