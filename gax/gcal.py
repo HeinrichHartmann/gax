@@ -166,11 +166,7 @@ def get_event(event_id: str, calendar_id: str = "primary", *, service=None) -> d
     if service is None:
         service = get_calendar_service()
 
-    return (
-        service.events()
-        .get(calendarId=calendar_id, eventId=event_id)
-        .execute()
-    )
+    return service.events().get(calendarId=calendar_id, eventId=event_id).execute()
 
 
 def create_event(event: CalendarEvent, *, service=None) -> dict:
@@ -201,9 +197,7 @@ def update_event(event: CalendarEvent, *, service=None) -> dict:
     )
 
 
-def delete_event(
-    event_id: str, calendar_id: str = "primary", *, service=None
-) -> None:
+def delete_event(event_id: str, calendar_id: str = "primary", *, service=None) -> None:
     """Delete an event."""
     if service is None:
         service = get_calendar_service()
@@ -692,13 +686,18 @@ class Cal(Resource):
             out.write(f"{cal['name']}{primary}\n")
             out.write(f"  {cal['id']}\n")
 
-    def clone(self, url: str = "", output: Path | None = None, *,
-              calendar: str | None = None,
-              days: int | None = None,
-              date_from: str | None = None,
-              date_to: str | None = None,
-              verbose: bool = False,
-              **kw) -> Path:
+    def clone(
+        self,
+        url: str = "",
+        output: Path | None = None,
+        *,
+        calendar: str | None = None,
+        days: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        verbose: bool = False,
+        **kw,
+    ) -> Path:
         """Clone events to a .cal.gax.md list file."""
         time_min, time_max = resolve_time_range(days, date_from, date_to)
 
@@ -708,9 +707,13 @@ class Cal(Resource):
 
         count = self._clone_events_to_file(
             file_path,
-            time_min=time_min, time_max=time_max,
-            calendar=calendar, verbose=verbose,
-            days=days, date_from=date_from, date_to=date_to,
+            time_min=time_min,
+            time_max=time_max,
+            calendar=calendar,
+            verbose=verbose,
+            days=days,
+            date_from=date_from,
+            date_to=date_to,
         )
         logger.info(f"Events: {count}")
         return file_path
@@ -724,19 +727,25 @@ class Cal(Resource):
 
         self._clone_events_to_file(
             path,
-            time_min=time_min, time_max=time_max,
-            calendar=calendar, verbose=verbose,
+            time_min=time_min,
+            time_max=time_max,
+            calendar=calendar,
+            verbose=verbose,
             days=header.get("days"),
             date_from=str(header["from"]) if "from" in header else None,
             date_to=str(header["to"]) if "to" in header else None,
         )
 
-    def checkout(self, *, output: Path | None = None,
-                 calendar: str | None = None,
-                 days: int | None = None,
-                 date_from: str | None = None,
-                 date_to: str | None = None,
-                 **kw) -> tuple[int, int]:
+    def checkout(
+        self,
+        *,
+        output: Path | None = None,
+        calendar: str | None = None,
+        days: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        **kw,
+    ) -> tuple[int, int]:
         """Checkout events as individual files. Returns (cloned, skipped)."""
         time_min, time_max = resolve_time_range(days, date_from, date_to)
         folder = output or Path("calendar.cal.gax.md.d")
@@ -785,7 +794,9 @@ class Cal(Resource):
 
             file_path = folder / filename
             if file_path.exists():
-                file_path = folder / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax.md"
+                file_path = (
+                    folder / f"{date_str}_{safe_title}_{event_id[:8]}.cal.gax.md"
+                )
 
             content = event_to_yaml(event_data)
             file_path.write_text(content)
@@ -794,9 +805,9 @@ class Cal(Resource):
 
         return cloned, skipped
 
-    def event_clone(self, id_or_url: str, *,
-                    calendar: str = "primary",
-                    output: Path | None = None) -> Path:
+    def event_clone(
+        self, id_or_url: str, *, calendar: str = "primary", output: Path | None = None
+    ) -> Path:
         """Clone a single event to a .cal.gax.md file."""
         event_id, cal_id = extract_event_id(id_or_url)
         if calendar != "primary":
@@ -825,8 +836,9 @@ class Cal(Resource):
         output.write_text(content)
         return output
 
-    def event_new(self, *, calendar: str = "primary",
-                  output: Path | None = None) -> Path:
+    def event_new(
+        self, *, calendar: str = "primary", output: Path | None = None
+    ) -> Path:
         """Create a new event template file."""
         now = datetime.now(timezone.utc)
         start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -910,8 +922,11 @@ class Cal(Resource):
         return local_event.title
 
     def _clone_events_to_file(
-        self, path: Path, *,
-        time_min: datetime, time_max: datetime,
+        self,
+        path: Path,
+        *,
+        time_min: datetime,
+        time_max: datetime,
         calendar: str | None = None,
         verbose: bool = False,
         days: int | None = None,
@@ -947,8 +962,11 @@ class Cal(Resource):
         with open(path, "w") as f:
             f.write("---\n")
             yaml.dump(
-                header, f, default_flow_style=False,
-                allow_unicode=True, sort_keys=False,
+                header,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
             )
             f.write("---\n")
             f.write(tsv_body)
