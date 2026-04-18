@@ -4,6 +4,7 @@ Re-exports from doc.py. CLI commands live in cli.py.
 """
 
 from .doc import (  # noqa: F401
+    TabInfo,
     DocSection,
     Comment,
     CommentReply,
