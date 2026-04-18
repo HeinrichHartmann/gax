@@ -215,47 +215,12 @@ def _pull_folder(
 
         elif checkout_type == "gax/doc-checkout":
             url = metadata.get("url")
-            document_id = metadata.get("document_id")
-            if not url or not document_id:
-                return False, "No URL or document_id in .gax.yaml"
+            if not url:
+                return False, "No URL in .gax.yaml"
 
-            # Run checkout to scratch dir
-            from .gdoc import pull_doc, format_section
+            from .gdoc import Doc
 
-            sections = pull_doc(document_id, url)
-
-            scratch_path.mkdir(parents=True, exist_ok=True)
-
-            # Write metadata
-            new_metadata = {
-                "type": "gax/doc-checkout",
-                "document_id": document_id,
-                "url": url,
-                "title": sections[0].title if sections else metadata.get("title", ""),
-                "checked_out": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
-            }
-            with open(scratch_path / ".gax.yaml", "w") as f:
-                yaml.dump(
-                    new_metadata,
-                    f,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    sort_keys=False,
-                )
-
-            # Create tab files
-            for section in sections:
-                if section.section_type == "comments":
-                    continue
-                tab_name = section.section_title
-                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
-                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-                file_name = f"{safe_tab_name}.tab.gax.md"
-
-                content = format_section(section)
-                (scratch_path / file_name).write_text(content, encoding="utf-8")
+            Doc().clone(url, output=scratch_path)
         else:
             return False, f"Unsupported checkout type: {checkout_type}"
 
@@ -428,75 +393,21 @@ def _push_file(
             return True, f"pushed {rows} rows"
 
         elif file_type == "gax/doc":
-            # Check if it's a single tab file
-            content = file_path.read_text(encoding="utf-8")
-            sections = parse_multipart(content)
-            if not sections:
-                return False, "No sections found"
+            try:
+                from .gdoc import Tab
 
-            # Single tab push
-            if len(sections) == 1:
-                from .gdoc import extract_doc_id, pull_single_tab, update_tab_content
-                from .gdoc import native_md
-                import difflib
-
-                local_section = sections[0]
-                source_url = local_section.headers.get("source", "")
-                tab_name = local_section.headers.get(
-                    "tab", local_section.headers.get("section_title", "")
-                )
-
-                if not source_url:
-                    return False, "No source URL found"
-
-                document_id = extract_doc_id(source_url)
-
-                # Get remote content for diff
-                remote_section = pull_single_tab(document_id, tab_name, source_url)
-
-                local_lines = local_section.content.splitlines(keepends=True)
-                remote_lines = remote_section.content.splitlines(keepends=True)
-
-                diff = list(
-                    difflib.unified_diff(
-                        remote_lines,
-                        local_lines,
-                        fromfile="remote",
-                        tofile="local",
-                        lineterm="",
-                    )
-                )
-
-                if not diff:
+                t = Tab()
+                diff_text = t.diff(file_path)
+                if diff_text is None:
                     return True, "no changes"
-
-                # Check for unsupported features before confirming
-                from .gdoc.md2docs import parse_markdown, check_unsupported
-
-                push_warnings = check_unsupported(parse_markdown(local_section.content))
-
                 if not yes:
-                    click.echo("Changes to push:")
-                    click.echo("-" * 40)
-                    for line in diff:
-                        click.echo(line.rstrip("\n"))
-                    click.echo("-" * 40)
-                    if push_warnings:
-                        for w in push_warnings:
-                            click.echo(f"  Warning: {w.feature}: {w.detail}")
+                    click.echo(diff_text)
                     if not click.confirm("Push these changes?"):
                         return False, "cancelled"
-
-                content_to_push = native_md.inline_images_from_store(
-                    local_section.content
-                )
-                update_tab_content(document_id, tab_name, content_to_push)
+                t.push(file_path)
                 return True, "pushed"
-            else:
-                return (
-                    False,
-                    "Multipart doc push not supported. Use 'gax doc tab push' for individual tabs.",
-                )
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/draft":
             try:
@@ -645,21 +556,13 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             except ValueError as e:
                 return False, str(e)
         if file_type == "gax/doc":
-            from .gdoc import pull_doc, extract_doc_id
-            from .gdoc import format_multipart as doc_format_multipart
+            try:
+                from .gdoc import Tab
 
-            content = file_path.read_text(encoding="utf-8")
-            sections = parse_multipart(content)
-            if not sections:
-                return False, "No sections found"
-            source_url = sections[0].headers.get("source", "")
-            if not source_url:
-                return False, "No source URL found"
-            document_id = extract_doc_id(source_url)
-            new_sections = pull_doc(document_id, source_url)
-            new_content = doc_format_multipart(new_sections)
-            file_path.write_text(new_content, encoding="utf-8")
-            return True, f"{len(new_sections)} tabs"
+                Tab().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/sheet":
             rows = pull_all(file_path)
