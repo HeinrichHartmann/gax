@@ -450,14 +450,13 @@ def _push_file(
                 return False, "No file_id in tracking file"
 
             # Find the actual file (tracking file without .gax.md suffix)
-            actual_file = file_path.with_suffix("")
+            # e.g. report.pdf.gax.md -> report.pdf
+            name = file_path.name
+            if not name.endswith(".gax.md"):
+                return False, f"Cannot find actual file for {file_path}"
+            actual_file = file_path.parent / name[:-7]
             if not actual_file.exists():
-                name = file_path.name
-                if name.endswith(".gax.md"):
-                    base_name = name[:-7]  # Remove .gax.md
-                    actual_file = file_path.parent / base_name
-                    if not actual_file.exists():
-                        return False, f"Cannot find actual file for {file_path}"
+                return False, f"Cannot find actual file for {file_path}"
 
             if not yes:
                 click.echo(f"Update Drive file: {tracking_data.get('name')}")

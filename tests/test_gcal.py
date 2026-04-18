@@ -358,9 +358,12 @@ class TestEventDiff:
         return CalendarEvent(**defaults)
 
     def test_new_event_returns_summary(self, tmp_path):
-        event = self._make_local_event(id="", title="Launch party",
-                                       start="2026-04-01T18:00:00Z",
-                                       end="2026-04-01T20:00:00Z")
+        event = self._make_local_event(
+            id="",
+            title="Launch party",
+            start="2026-04-01T18:00:00Z",
+            end="2026-04-01T20:00:00Z",
+        )
         f = tmp_path / "new.cal.gax.md"
         f.write_text(event_to_yaml(event))
 
