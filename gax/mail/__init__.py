@@ -2,6 +2,7 @@
 
 Package structure:
   shared   -- dataclasses, format helpers, Gmail API helpers
+  thread   -- Thread(Resource) class
   _legacy  -- CLI commands (being moved to cli.py)
 """
 
@@ -16,6 +17,7 @@ from .shared import (  # noqa: F401 — public API
     _mail_section_to_multipart as _mail_section_to_multipart,
     _get_header as _get_header,
 )
+from .thread import Thread as Thread  # noqa: F401
 from ._legacy import *  # noqa: F401,F403
 from ._legacy import (  # noqa: F401 — explicit re-exports for cli.py
     thread as thread,

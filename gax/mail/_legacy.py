@@ -12,8 +12,6 @@ from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
 from ..ui import operation, success, error
-from .. import multipart
-from .. import draft as draft_module
 from .. import docs as doc
 
 from .shared import (  # noqa: F401 — re-exported for backward compat
@@ -27,16 +25,18 @@ from .shared import (  # noqa: F401 — re-exported for backward compat
     _get_header as _get_header,
     pull_thread as pull_thread,
 )
+from .thread import (  # noqa: F401 — re-exported for backward compat
+    Thread as Thread,
+    _is_thread_id as _is_thread_id,
+    _pull_single_file as _pull_single_file,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# CLI commands
+# Thread CLI commands (will move to cli.py in Step 4)
 # =============================================================================
-
-
-# Old mail container group removed - thread is now the mail group (ADR 020)
 
 
 @doc.section("resource")
@@ -44,23 +44,6 @@ logger = logging.getLogger(__name__)
 def thread():
     """Individual email thread operations (clone, pull, reply)"""
     pass
-
-
-def _is_thread_id(value: str) -> bool:
-    """Check if value looks like a thread ID (vs a search query)."""
-    # Gmail URL
-    if "mail.google.com" in value:
-        return True
-    # Pure hex string (typical thread ID)
-    if re.fullmatch(r"[0-9a-f]{16}", value):
-        return True
-    # Alphanumeric ID (Gmail web IDs)
-    if re.fullmatch(r"[A-Za-z0-9]{20,}", value):
-        return True
-    # Numeric thread ID from popout URLs
-    if re.fullmatch(r"\d{15,}", value):
-        return True
-    return False
 
 
 @thread.command()
@@ -76,79 +59,16 @@ def clone(thread_id_or_url: str, output: Optional[Path]):
 
     \b
     Examples:
-        gax mail thread clone 19d0bed1cddbab6d
-        gax mail thread clone "https://mail.google.com/..."
-        gax mail thread clone 19d0bed1cddbab6d -o thread.mail.gax.md
-
-    For bulk cloning, use: gax mail list checkout FOLDER -q QUERY
+        gax mail clone 19d0bed1cddbab6d
+        gax mail clone "https://mail.google.com/..."
+        gax mail clone 19d0bed1cddbab6d -o thread.mail.gax.md
     """
     try:
-        if not _is_thread_id(thread_id_or_url):
-            click.echo(
-                f"Error: '{thread_id_or_url}' is not a valid thread ID or URL",
-                err=True,
-            )
-            click.echo(
-                "For bulk cloning, use: gax mail list checkout FOLDER -q QUERY",
-                err=True,
-            )
-            sys.exit(1)
-
-        thread_id = extract_thread_id(thread_id_or_url)
-
-        click.echo(f"Fetching thread: {thread_id}")
-        sections = pull_thread(thread_id)
-        content = format_multipart(sections)
-
-        if output:
-            file_path = output
-        else:
-            # Generate filename from subject
-            safe_subject = re.sub(r'[<>:"/\\|?*]', "-", sections[0].title)
-            safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-            file_path = Path(f"{safe_subject}_{thread_id}.mail.gax.md")
-
-        if file_path.exists():
-            click.echo(f"Error: File already exists: {file_path}", err=True)
-            click.echo('Use "gax mail pull" to update an existing file.', err=True)
-            sys.exit(1)
-
-        file_path.write_text(content, encoding="utf-8")
-        click.echo(f"Created: {file_path}")
-        click.echo(f"Subject: {sections[0].title}")
-        click.echo(f"Messages: {len(sections)}")
-
-        # Report attachments
-        total_attachments = sum(len(s.attachments) for s in sections)
-        if total_attachments:
-            click.echo(f"Attachments: {total_attachments}")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        file_path = Thread().clone(url=thread_id_or_url, output=output)
+        success(f"Created: {file_path}")
+    except (ValueError, Exception) as e:
+        error(str(e))
         sys.exit(1)
-
-
-def _pull_single_file(file_path: Path) -> tuple[int, int]:
-    """Pull updates for a single .mail.gax.md file. Returns (old_count, new_count)."""
-    content = file_path.read_text(encoding="utf-8")
-
-    # Extract thread_id from file
-    match = re.search(r"^thread_id:\s*(\S+)", content, re.MULTILINE)
-    if not match:
-        raise ValueError(f"No thread_id found in {file_path}")
-
-    thread_id = match.group(1)
-
-    # Count existing messages
-    old_count = len(re.findall(r"^section:\s*\d+", content, re.MULTILINE))
-
-    sections = pull_thread(thread_id)
-    new_content = format_multipart(sections)
-
-    new_count = len(sections)
-
-    file_path.write_text(new_content, encoding="utf-8")
-    return old_count, new_count
 
 
 @thread.command()
@@ -158,55 +78,17 @@ def pull(path: Path):
 
     Single file:
 
-        gax mail thread pull thread.mail.gax.md
+        gax mail pull thread.mail.gax.md
 
     Folder (updates all .mail.gax.md files):
 
-        gax mail thread pull Inbox/
+        gax mail pull Inbox/
     """
     try:
-        if path.is_file():
-            # Single file mode
-            click.echo(f"Updating: {path}")
-            old_count, new_count = _pull_single_file(path)
-            click.echo(f"Messages: {old_count} -> {new_count}")
-            if new_count > old_count:
-                click.echo(f"New messages: {new_count - old_count}")
-
-        elif path.is_dir():
-            # Folder mode: update all .mail.gax.md files
-            files = list(path.glob("*.mail.gax.md"))
-            if not files:
-                click.echo(f"No .mail.gax.md files found in {path}")
-                return
-
-            click.echo(f"Updating {len(files)} files in {path}/")
-            updated = 0
-            errors = 0
-            total_new = 0
-
-            for file_path in sorted(files):
-                try:
-                    old_count, new_count = _pull_single_file(file_path)
-                    updated += 1
-                    new_messages = new_count - old_count
-                    if new_messages > 0:
-                        total_new += new_messages
-                        click.echo(f"  {file_path.name}: +{new_messages} messages")
-                except Exception as e:
-                    errors += 1
-                    click.echo(f"  {file_path.name}: Error - {e}", err=True)
-
-            click.echo(f"Updated: {updated}, Errors: {errors}")
-            if total_new > 0:
-                click.echo(f"Total new messages: {total_new}")
-
-        else:
-            click.echo(f"Error: {path} is not a file or directory", err=True)
-            sys.exit(1)
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        Thread().pull(path)
+        success(f"Updated: {path}")
+    except ValueError as e:
+        error(str(e))
         sys.exit(1)
 
 
@@ -370,11 +252,6 @@ def _list_threads(query: str, limit: int):
         sys.exit(1)
 
 
-# =============================================================================
-# Reply command (creates draft from thread)
-# =============================================================================
-
-
 @thread.command()
 @click.argument("file_or_url")
 @click.option(
@@ -386,95 +263,19 @@ def _list_threads(query: str, limit: int):
 def reply(file_or_url: str, output: Optional[Path]):
     """Create a reply draft from a thread.
 
-    Takes a .mail.gax.md file or Gmail thread URL and creates a .draft.gax.md file
-    with the reply metadata pre-filled.
-
     Examples:
 
-        gax mail thread reply Project_Update.mail.gax.md
-        gax mail thread reply "https://mail.google.com/mail/u/0/#inbox/abc123"
-        gax mail thread reply thread.mail.gax.md -o my_reply.draft.gax.md
+        gax mail reply Project_Update.mail.gax.md
+        gax mail reply "https://mail.google.com/mail/u/0/#inbox/abc123"
+        gax mail reply thread.mail.gax.md -o my_reply.draft.gax.md
     """
     try:
-        # Determine if input is a file or URL
-        file_path = Path(file_or_url)
-
-        if file_path.exists() and file_path.name.endswith(".gax.md"):
-            # Parse .mail.gax.md file
-            content = file_path.read_text(encoding="utf-8")
-            sections = multipart.parse_multipart(content)
-
-            if not sections:
-                click.echo("Error: No sections found in file", err=True)
-                sys.exit(1)
-
-            # Get last message for reply
-            last_section = sections[-1]
-            thread_id = last_section.headers.get("thread_id", "")
-            subject = last_section.headers.get("title", "")
-            from_addr = last_section.headers.get("from", "")
-
-            # For in_reply_to, we'd need message_id which isn't stored in .mail.gax.md
-            # Use thread_id for threading
-            in_reply_to = ""
-
-        else:
-            # Treat as URL or thread ID - fetch from Gmail
-            thread_id = extract_thread_id(file_or_url)
-            click.echo(f"Fetching thread: {thread_id}")
-
-            sections = pull_thread(thread_id)
-            if not sections:
-                click.echo("Error: No messages found in thread", err=True)
-                sys.exit(1)
-
-            last_section = sections[-1]
-            subject = last_section.title
-            from_addr = last_section.from_addr
-            in_reply_to = ""
-
-        # Create reply subject
-        if not subject.lower().startswith("re:"):
-            subject = f"Re: {subject}"
-
-        # Create draft config
-        config = draft_module.DraftHeader(
-            subject=subject,
-            to=from_addr,
-            thread_id=thread_id,
-            in_reply_to=in_reply_to,
-            time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        )
-
-        body = "\n"  # Empty body
-
-        draft_content = draft_module.format_draft(config, body)
-
-        # Determine output filename
-        if output:
-            out_path = output
-        else:
-            safe_subject = re.sub(r'[<>:"/\\|?*]', "-", subject)
-            safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-            out_path = Path(f"{safe_subject}.draft.gax.md")
-
-        if out_path.exists():
-            click.echo(f"Error: File already exists: {out_path}", err=True)
-            sys.exit(1)
-
-        out_path.write_text(draft_content, encoding="utf-8")
-        click.echo(f"Created: {out_path}")
-        click.echo(f"To: {from_addr}")
-        click.echo(f"Subject: {subject}")
-        click.echo(f"Edit the file, then run: gax mail draft push {out_path}")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        out_path = Thread().reply(file_or_url, output=output)
+        success(f"Created: {out_path}")
+        click.echo(f"Edit the file, then run: gax draft push {out_path}")
+    except ValueError as e:
+        error(str(e))
         sys.exit(1)
-
-
-# Draft is now a top-level command (registered in cli.py)
-# mail.add_command(draft_module.draft)  # Removed - see ADR 020
 
 
 # =============================================================================
