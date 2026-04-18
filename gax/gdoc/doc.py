@@ -941,6 +941,32 @@ def _walk_tab_files(folder: Path) -> list[Path]:
     return sorted(folder.rglob("*.doc.gax.md"))
 
 
+def _read_checkout_metadata(path: Path) -> dict:
+    """Read and validate .gax.yaml metadata from a checkout folder."""
+    metadata_path = path / ".gax.yaml"
+    if not metadata_path.exists():
+        raise ValueError(f"No .gax.yaml found in {path}")
+
+    with open(metadata_path) as f:
+        metadata = yaml.safe_load(f)
+
+    if not metadata.get("document_id") or not metadata.get("url"):
+        raise ValueError("No document_id or url in .gax.yaml")
+
+    return metadata
+
+
+def _known_tab_files(path: Path, metadata: dict) -> list[Path]:
+    """Return tab file paths listed in .gax.yaml metadata.
+
+    Falls back to recursive glob if no tabs list is present (legacy checkouts).
+    """
+    tabs = metadata.get("tabs")
+    if not tabs:
+        return _walk_tab_files(path)
+    return [path / entry["path"] for entry in tabs if (path / entry["path"]).exists()]
+
+
 # =============================================================================
 # Tab(Resource) — single tab, single file
 # =============================================================================
@@ -1203,17 +1229,11 @@ class Doc(Resource):
 
     def pull(self, path: Path, **kw) -> None:
         """Pull all tabs in a checkout folder (supports nested tabs)."""
+        metadata = _read_checkout_metadata(path)
         metadata_path = path / ".gax.yaml"
-        if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
 
-        with open(metadata_path) as f:
-            metadata = yaml.safe_load(f)
-
-        document_id = metadata.get("document_id")
-        url = metadata.get("url")
-        if not document_id or not url:
-            raise ValueError("No document_id or url in .gax.yaml")
+        document_id = metadata["document_id"]
+        url = metadata["url"]
 
         logger.info(f"Pulling: {document_id}")
         sections = pull_doc(document_id, url)
@@ -1262,14 +1282,12 @@ class Doc(Resource):
 
     def diff(self, path: Path, **kw) -> str | None:
         """Diff all tabs in a checkout folder against remote."""
-        metadata_path = path / ".gax.yaml"
-        if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
+        metadata = _read_checkout_metadata(path)
 
         all_diffs = []
         tab = Tab()
 
-        for tab_file in _walk_tab_files(path):
+        for tab_file in _known_tab_files(path, metadata):
             tab_diff = tab.diff(tab_file)
             if tab_diff:
                 all_diffs.append(f"--- {tab_file.relative_to(path)} ---")
@@ -1279,13 +1297,11 @@ class Doc(Resource):
 
     def push(self, path: Path, **kw) -> None:
         """Push all changed tabs in a checkout folder."""
-        metadata_path = path / ".gax.yaml"
-        if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
+        metadata = _read_checkout_metadata(path)
 
         tab = Tab()
 
-        for tab_file in _walk_tab_files(path):
+        for tab_file in _known_tab_files(path, metadata):
             if tab.diff(tab_file) is not None:
                 logger.info(f"Pushing: {tab_file.relative_to(path)}")
                 tab.push(tab_file, **kw)
