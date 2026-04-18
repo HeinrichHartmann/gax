@@ -886,3 +886,179 @@ class TestDraftE2E:
 
         finally:
             _delete_draft(draft_id)
+
+
+# =============================================================================
+# Contacts E2E Tests
+# =============================================================================
+
+
+def _delete_contact(resource_name: str):
+    """Delete a contact via the People API directly."""
+    creds = get_authenticated_credentials()
+    service = build("people", "v1", credentials=creds)
+    service.people().deleteContact(resourceName=resource_name).execute()
+
+
+E2E_CONTACT_PREFIX = "gaxe2etest"
+
+
+def _find_contact_by_given_name(given_name: str) -> str | None:
+    """Find a contact by givenName, return resourceName or None."""
+    matches = _find_contacts_by_prefix(given_name)
+    return matches[0] if matches else None
+
+
+def _find_contacts_by_prefix(prefix: str) -> list[str]:
+    """Find all contacts whose givenName starts with prefix. Returns resourceNames."""
+    creds = get_authenticated_credentials()
+    service = build("people", "v1", credentials=creds)
+    matches = []
+    page_token = None
+
+    while True:
+        result = (
+            service.people()
+            .connections()
+            .list(
+                resourceName="people/me",
+                pageSize=500,
+                personFields="names",
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        for c in result.get("connections", []):
+            for n in c.get("names", []):
+                if (n.get("givenName") or "").startswith(prefix):
+                    matches.append(c["resourceName"])
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+
+    return matches
+
+
+def _cleanup_test_contacts():
+    """Delete all contacts matching the e2e test prefix."""
+    for rn in _find_contacts_by_prefix(E2E_CONTACT_PREFIX):
+        _delete_contact(rn)
+
+
+@pytest.mark.e2e
+class TestContactsE2E:
+    """End-to-end smoke test for contacts: clone -> add -> push -> pull -> remove -> push -> pull."""
+
+    def test_create_and_delete_contact(self, check_auth, temp_dir):
+        """Test full create/delete cycle via push."""
+        import time
+
+        test_given = E2E_CONTACT_PREFIX
+        test_family = "contact"
+        contacts_file = temp_dir / "contacts.jsonl"
+
+        # Clean up any leftover test contacts from previous runs
+        _cleanup_test_contacts()
+
+        try:
+            # Clone contacts as JSONL
+            result = _run_gax(
+                "contacts", "clone",
+                "-f", "jsonl",
+                "-o", str(contacts_file),
+            )
+            assert result.returncode == 0, f"Clone failed: {result.stderr}"
+            assert contacts_file.exists()
+
+            # Read and verify structure
+            content = contacts_file.read_text()
+            assert "type: gax/contacts" in content
+            assert "format: jsonl" in content
+
+            # Count original contacts
+            from gax.contacts import parse_contacts_file, parse_jsonl_body
+            header, body = parse_contacts_file(contacts_file)
+            original_contacts = parse_jsonl_body(body)
+            original_count = len(original_contacts)
+
+            # Add a new test contact
+            new_contact = {
+                "resourceName": "",
+                "name": f"{test_given} {test_family}",
+                "givenName": test_given,
+                "familyName": test_family,
+                "email": ["gax-e2e-test@example.com"],
+                "phone": [],
+                "organization": "",
+                "title": "",
+                "department": "",
+                "address": "",
+                "birthday": "",
+                "notes": "",
+                "nickname": "",
+                "website": "",
+                "labels": [],
+            }
+            original_contacts.append(new_contact)
+
+            # Write back with new contact
+            from gax.contacts import format_jsonl, format_contacts_file, ContactsHeader
+            new_body = format_jsonl(original_contacts)
+            new_header = ContactsHeader(
+                format="jsonl",
+                count=len(original_contacts),
+                pulled=header.pulled,
+            )
+            contacts_file.write_text(
+                format_contacts_file(new_header, new_body), encoding="utf-8"
+            )
+
+            # Push — should create the new contact
+            result = _run_gax("contacts", "push", str(contacts_file), "-y")
+            assert result.returncode == 0, f"Push (create) failed: {result.stderr}"
+
+            # People API has propagation delay
+            time.sleep(3)
+
+            # Verify contact was created in Google
+            resource_name = _find_contact_by_given_name(test_given)
+            assert resource_name, "Contact was not created in Google"
+
+            # Pull — should now include the contact with a resourceName
+            result = _run_gax("contacts", "pull", str(contacts_file))
+            assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+            pulled_content = contacts_file.read_text()
+            assert test_given in pulled_content
+
+            # Parse pulled contacts, remove the test contact
+            header, body = parse_contacts_file(contacts_file)
+            pulled_contacts = parse_jsonl_body(body)
+            filtered = [c for c in pulled_contacts if c.get("givenName") != test_given]
+            assert len(filtered) == original_count, "Test contact not found in pulled data"
+
+            # Write back without the test contact
+            new_body = format_jsonl(filtered)
+            new_header = ContactsHeader(
+                format="jsonl",
+                count=len(filtered),
+                pulled=header.pulled,
+            )
+            contacts_file.write_text(
+                format_contacts_file(new_header, new_body), encoding="utf-8"
+            )
+
+            # Push — should delete the test contact
+            result = _run_gax("contacts", "push", str(contacts_file), "-y")
+            assert result.returncode == 0, f"Push (delete) failed: {result.stderr}"
+
+            # People API has propagation delay
+            time.sleep(3)
+
+            # Verify contact was deleted from Google
+            resource_name = _find_contact_by_given_name(test_given)
+            assert resource_name is None, "Contact was not deleted from Google"
+
+        finally:
+            # Safety cleanup — catches any leftovers from this or stale runs
+            _cleanup_test_contacts()
