@@ -1435,6 +1435,137 @@ class TestLabelE2E:
 
 
 # =============================================================================
+# Filter E2E Tests
+# =============================================================================
+
+E2E_FILTER_QUERY = f"{E2E_PREFIX}-filter-query"
+
+
+def _find_test_filters() -> list[dict]:
+    """Find all Gmail filters whose query contains the e2e prefix."""
+    creds = get_authenticated_credentials()
+    service = build("gmail", "v1", credentials=creds)
+    result = service.users().settings().filters().list(userId="me").execute()
+    return [
+        f
+        for f in result.get("filter", [])
+        if E2E_FILTER_QUERY in f.get("criteria", {}).get("query", "")
+    ]
+
+
+def _cleanup_test_filters():
+    """Delete all filters matching the e2e query prefix."""
+    creds = get_authenticated_credentials()
+    service = build("gmail", "v1", credentials=creds)
+    for f in _find_test_filters():
+        try:
+            service.users().settings().filters().delete(
+                userId="me", id=f["id"]
+            ).execute()
+        except Exception:
+            pass
+
+
+@pytest.mark.e2e
+class TestFilterE2E:
+    """End-to-end smoke test for filters: clone -> add -> apply -> pull -> remove -> apply."""
+
+    def test_create_and_delete_filter(self, check_auth, temp_dir):
+        """Test full create/delete cycle via apply."""
+        filters_file = temp_dir / "filters.gax.md"
+
+        _cleanup_test_filters()
+
+        try:
+            # Clone filters
+            result = _run_gax(
+                "mail-filter",
+                "clone",
+                "-o",
+                str(filters_file),
+            )
+            assert result.returncode == 0, f"Clone failed: {result.stderr}"
+            assert filters_file.exists()
+
+            # Read and parse
+            from gax.filter import parse_filters_file, format_filters_file
+
+            header, filters = parse_filters_file(filters_file)
+            original_count = len(filters)
+
+            # Add a test filter
+            filters.append(
+                {
+                    "name": f"{E2E_PREFIX}-filter",
+                    "criteria": {"query": E2E_FILTER_QUERY},
+                    "action": {"archive": True},
+                }
+            )
+            content = format_filters_file(header, filters)
+            filters_file.write_text(content, encoding="utf-8")
+
+            # Plan — should show one create
+            result = _run_gax("mail-filter", "plan", str(filters_file))
+            assert result.returncode == 0, f"Plan failed: {result.stderr}"
+            assert "Create: 1" in result.stdout
+
+            # Apply — should create the filter
+            result = _run_gax("mail-filter", "apply", str(filters_file), "-y")
+            assert result.returncode == 0, f"Apply (create) failed: {result.stderr}"
+
+            # Verify filter was created via API
+            test_filters = _find_test_filters()
+            assert len(test_filters) == 1, (
+                f"Expected 1 test filter, found {len(test_filters)}"
+            )
+
+            # Pull — should include the new filter
+            result = _run_gax("mail-filter", "pull", str(filters_file))
+            assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+            pulled_content = filters_file.read_text()
+            assert E2E_FILTER_QUERY in pulled_content
+
+            # Plan after pull — should show no changes
+            result = _run_gax("mail-filter", "plan", str(filters_file))
+            assert result.returncode == 0, f"Plan (no changes) failed: {result.stderr}"
+            assert "no changes" in result.stdout.lower()
+
+            # Remove the test filter from file
+            header, filters = parse_filters_file(filters_file)
+            filtered = [
+                f
+                for f in filters
+                if E2E_FILTER_QUERY not in f.get("criteria", {}).get("query", "")
+            ]
+            assert len(filtered) == original_count, (
+                "Test filter not found in pulled data"
+            )
+
+            content = format_filters_file(header, filtered)
+            filters_file.write_text(content, encoding="utf-8")
+
+            # Apply — should delete the filter
+            result = _run_gax("mail-filter", "apply", str(filters_file), "-y")
+            assert result.returncode == 0, f"Apply (delete) failed: {result.stderr}"
+
+            # Verify filter was deleted
+            test_filters = _find_test_filters()
+            assert len(test_filters) == 0, "Test filter was not deleted"
+
+        finally:
+            _cleanup_test_filters()
+
+    def test_list(self, check_auth):
+        """Test: list filters as TSV."""
+        result = _run_gax("mail-filter", "list")
+        assert result.returncode == 0, f"List failed: {result.stderr}"
+        # Should have TSV header
+        assert "id\t" in result.stdout
+        assert "query" in result.stdout
+
+
+# =============================================================================
 # Form E2E Tests
 # =============================================================================
 
