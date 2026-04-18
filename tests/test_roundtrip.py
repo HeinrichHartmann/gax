@@ -23,7 +23,7 @@ from googleapiclient.discovery import build
 
 from gax.auth import get_authenticated_credentials, is_authenticated
 from gax.gdoc import create_tab_with_content
-from gax.native_md import export_tab_markdown
+from gax.gdoc.native_md import export_tab_markdown
 
 
 # =============================================================================

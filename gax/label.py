@@ -1,27 +1,56 @@
-"""Gmail label management commands.
+"""Gmail label management for gax.
 
-Declarative label management following ADR 010:
-- pull: Export current labels to YAML
-- push: Apply label changes (create, rename, delete, visibility)
+Resource module — follows the draft.py reference pattern.
+
+Declarative label management: clone labels to YAML, edit locally,
+diff to preview changes, push to apply. See ADR 010.
+
+Module structure
+================
+
+  LabelHeader          — dataclass for file frontmatter
+  File format          — parse/format label files
+  API helpers          — fetch labels, visibility/color mappings
+  Comparison helpers   — diff logic for desired vs current state
+  Label(Resource)      — resource class (the public interface for cli.py)
+
+Design decisions
+================
+
+Same conventions as draft.py (see its docstring for full rationale).
+Additional notes specific to labels:
+
+  Deletions are opt-in: diff() and push() accept allow_delete=False
+  by default. Removing a label from the file does NOT delete it unless
+  explicitly requested. This prevents accidental mass deletion.
+
+  Nested labels (e.g. "Projects/Active") require parent creation.
+  push() handles this automatically by sorting creates by depth.
+
+  Rename is supported via 'rename_from' field in the YAML. This is
+  detected during diff and executed as a patch on the existing label.
 """
 
+from __future__ import annotations
+
 import logging
-import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-import click
 import yaml
+from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
-from . import docs as doc
-from .ui import operation, success
-from googleapiclient.discovery import build
+from .resource import Resource
 
 logger = logging.getLogger(__name__)
 
 
-# Visibility mappings
+# =============================================================================
+# Constants
+# =============================================================================
+
 LABEL_LIST_VISIBILITY = {
     "show": "labelShow",
     "hide": "labelHide",
@@ -34,7 +63,6 @@ MESSAGE_LIST_VISIBILITY = {
     "hide": "hide",
 }
 
-# System labels that cannot be modified
 SYSTEM_LABELS = {
     "INBOX",
     "SPAM",
@@ -53,171 +81,26 @@ SYSTEM_LABELS = {
 }
 
 
-@doc.section("resource")
-@doc.maturity("unstable")
-@click.group()
-def label():
-    """Gmail label management (declarative)."""
-    pass
+# =============================================================================
+# Data class
+# =============================================================================
 
 
-@label.command("list")
-def label_list():
-    """List Gmail labels (TSV output)."""
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+@dataclass
+class LabelHeader:
+    """Frontmatter of a labels file."""
 
-        result = service.users().labels().list(userId="me").execute()
-        labels_list = result.get("labels", [])
-
-        # Print header
-        click.echo("id\tname\ttype")
-
-        # Sort: system labels first, then user labels alphabetically
-        system_labels = [lbl for lbl in labels_list if lbl.get("type") == "system"]
-        user_labels = [lbl for lbl in labels_list if lbl.get("type") == "user"]
-
-        system_labels.sort(key=lambda x: x.get("name", ""))
-        user_labels.sort(key=lambda x: x.get("name", ""))
-
-        for lbl in system_labels + user_labels:
-            label_id = lbl.get("id", "")
-            name = lbl.get("name", "")
-            label_type = lbl.get("type", "")
-            click.echo(f"{label_id}\t{name}\t{label_type}")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    pulled: str = ""
 
 
-def label_pull_to_file(path, include_all: bool = False) -> int:
-    """Pull labels and write to file. Returns label count."""
-    creds = get_authenticated_credentials()
-    service = build("gmail", "v1", credentials=creds)
-
-    result = service.users().labels().list(userId="me").execute()
-    labels = result.get("labels", [])
-
-    # Build label list
-    label_list = []
-    for lbl in sorted(labels, key=lambda x: x["name"]):
-        label_type = lbl.get("type", "user")
-
-        # Skip system labels unless include_all
-        if label_type == "system" and not include_all:
-            continue
-
-        entry = {"name": lbl["name"]}
-
-        # Add visibility settings if not default
-        llv = lbl.get("labelListVisibility")
-        if llv and llv != "labelShow":
-            entry["visible"] = LABEL_LIST_VISIBILITY_REV.get(llv, llv)
-
-        mlv = lbl.get("messageListVisibility")
-        if mlv and mlv != "show":
-            entry["show_in_list"] = mlv
-
-        # Add color if present
-        color = lbl.get("color")
-        if color:
-            entry["color"] = {
-                "text": color.get("textColor", "#000000"),
-                "bg": color.get("backgroundColor", "#ffffff"),
-            }
-
-        # Mark system labels as read-only
-        if label_type == "system":
-            entry["system"] = True
-
-        label_list.append(entry)
-
-    # Build header
-    header = {
-        "type": "gax/labels",
-        "content-type": "application/yaml",
-        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-
-    # Write YAML with frontmatter
-    with open(Path(path), "w") as f:
-        f.write("# Gmail Labels\n")
-        f.write("# Visibility: visible (show|hide|unread), show_in_list (show|hide)\n")
-        f.write("# Rename: add 'rename_from: OldName'\n")
-        f.write("# Delete: remove from list, use --delete flag\n")
-        f.write("---\n")
-        yaml.dump(
-            header, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-        )
-        f.write("---\n")
-        yaml.dump(
-            label_list, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-        )
-
-    return len(label_list)
+# =============================================================================
+# File format — parse/format label files.
+# =============================================================================
 
 
-@label.command("clone")
-@click.option(
-    "-o",
-    "--output",
-    default="mail-labels.gax.md",
-    help="Output file (default: mail-labels.gax.md)",
-)
-@click.option(
-    "--all", "include_all", is_flag=True, help="Include system labels (read-only)"
-)
-def label_clone(output: str, include_all: bool):
-    """Clone Gmail labels to a .gax.md file.
-
-    Creates a state file with all user labels and their settings.
-    Edit this file and use 'plan' to preview changes, 'apply' to execute.
-
-    \b
-    Example:
-        gax mail-label clone
-        gax mail-label clone -o mylabels.gax.md
-        gax mail-label clone --all  # include system labels
-    """
-    try:
-        if Path(output).exists():
-            click.echo(
-                f"Error: {output} already exists. Use 'pull' to update.", err=True
-            )
-            sys.exit(1)
-        count = label_pull_to_file(output, include_all)
-        click.echo(f"Cloned {count} labels to {output}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@label.command("pull")
-@click.argument("file", type=click.Path(exists=True))
-@click.option(
-    "--all", "include_all", is_flag=True, help="Include system labels (read-only)"
-)
-def label_pull(file: str, include_all: bool):
-    """Pull latest labels to existing file.
-
-    \b
-    Example:
-        gax mail label pull labels.yaml
-    """
-    try:
-        count = label_pull_to_file(file, include_all)
-        click.echo(f"Pulled {count} labels to {file}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-def _parse_labels_file(path: str) -> list:
-    """Parse labels file (supports both old and frontmatter format)."""
-    with open(path) as f:
-        content = f.read()
+def parse_labels_file(path: Path) -> tuple[LabelHeader, list[dict]]:
+    """Parse a labels file into header and label list."""
+    content = path.read_text(encoding="utf-8")
 
     # Skip comment lines at start
     lines = content.split("\n")
@@ -225,304 +108,94 @@ def _parse_labels_file(path: str) -> list:
         lines = lines[1:]
     content = "\n".join(lines)
 
-    # Check for frontmatter format
+    header = LabelHeader()
+
     if content.startswith("---\n"):
         parts = content.split("---\n", 2)
         if len(parts) >= 3:
-            # parts[0] is empty, parts[1] is header, parts[2] is content
-            return yaml.safe_load(parts[2]) or []
+            header_data = yaml.safe_load(parts[1]) or {}
+            header.pulled = header_data.get("pulled", "")
+            labels = yaml.safe_load(parts[2]) or []
+            return header, labels
 
     # Old format: single YAML doc with labels key
     doc = yaml.safe_load(content)
-    return doc.get("labels", []) if doc else []
+    labels = doc.get("labels", []) if doc else []
+    return header, labels
 
 
-@label.command("plan")
-@click.argument("file", type=click.Path(exists=True))
-@click.option("-o", "--output", default="labels.plan.yaml", help="Output plan file")
-@click.option(
-    "--delete", "allow_delete", is_flag=True, help="Include deletions in plan"
-)
-def label_plan(file: str, output: str, allow_delete: bool):
-    """Generate plan from edited labels file.
+def format_labels_file(header: LabelHeader, labels: list[dict]) -> str:
+    """Format header and label list as file content."""
+    file_header = {
+        "type": "gax/labels",
+        "content-type": "application/yaml",
+        "pulled": header.pulled,
+    }
 
-    Compares file with current Gmail state and generates a plan:
-    - Create: Labels in file but not in Gmail
-    - Rename: Labels with 'rename_from' field
-    - Update: Changed visibility/color settings
-    - Delete: Labels in Gmail but not in file (requires --delete)
+    parts = [
+        "# Gmail Labels\n",
+        "# Visibility: visible (show|hide|unread), show_in_list (show|hide)\n",
+        "# Rename: add 'rename_from: OldName'\n",
+        "# Delete: remove from list, use --delete flag\n",
+        "---\n",
+        yaml.dump(
+            file_header, default_flow_style=False, allow_unicode=True, sort_keys=False
+        ),
+        "---\n",
+        yaml.dump(
+            labels, default_flow_style=False, allow_unicode=True, sort_keys=False
+        ),
+    ]
+    return "".join(parts)
 
-    \b
-    Example:
-        gax label plan labels.yaml
-        gax label plan labels.yaml --delete
-    """
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
 
-        # Load desired state from file
-        desired_labels = _parse_labels_file(file)
+# =============================================================================
+# API helpers — fetch labels, visibility/color mappings.
+# =============================================================================
 
-        # Get current state from Gmail
-        result = service.users().labels().list(userId="me").execute()
-        current_labels = {lbl["name"]: lbl for lbl in result.get("labels", [])}
 
-        # Build desired state map
-        desired_map = {}
-        rename_map = {}  # old_name -> new_name
-        for lbl in desired_labels:
-            name = lbl["name"]
-            desired_map[name] = lbl
-            if "rename_from" in lbl:
-                rename_map[lbl["rename_from"]] = name
+def get_service():
+    """Get authenticated Gmail API service."""
+    creds = get_authenticated_credentials()
+    return build("gmail", "v1", credentials=creds)
 
-        # Compute changes
-        plan = {
-            "type": "gax/labels-plan",
-            "source": file,
-            "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "create": [],
-            "rename": [],
-            "update": [],
-            "delete": [],
+
+def fetch_labels(*, service=None) -> list[dict]:
+    """Fetch all labels from Gmail."""
+    service = service or get_service()
+    result = service.users().labels().list(userId="me").execute()
+    return result.get("labels", [])
+
+
+def api_to_label(api_label: dict) -> dict:
+    """Normalize API label to local format."""
+    entry = {"name": api_label["name"]}
+
+    llv = api_label.get("labelListVisibility")
+    if llv and llv != "labelShow":
+        entry["visible"] = LABEL_LIST_VISIBILITY_REV.get(llv, llv)
+
+    mlv = api_label.get("messageListVisibility")
+    if mlv and mlv != "show":
+        entry["show_in_list"] = mlv
+
+    color = api_label.get("color")
+    if color:
+        entry["color"] = {
+            "text": color.get("textColor", "#000000"),
+            "bg": color.get("backgroundColor", "#ffffff"),
         }
 
-        # Check for creates and updates
-        for name, desired in desired_map.items():
-            if desired.get("system"):
-                continue  # Skip system labels
+    if api_label.get("type") == "system":
+        entry["system"] = True
 
-            if "rename_from" in desired:
-                old_name = desired["rename_from"]
-                if old_name in current_labels:
-                    plan["rename"].append(
-                        {
-                            "from": old_name,
-                            "to": name,
-                            "id": current_labels[old_name]["id"],
-                            **_extract_settings(desired),
-                        }
-                    )
-                elif name not in current_labels:
-                    plan["create"].append({"name": name, **_extract_settings(desired)})
-            elif name not in current_labels:
-                plan["create"].append({"name": name, **_extract_settings(desired)})
-            else:
-                current = current_labels[name]
-                if _needs_update(current, desired):
-                    plan["update"].append(
-                        {
-                            "name": name,
-                            "id": current["id"],
-                            **_extract_settings(desired),
-                        }
-                    )
-
-        # Check for deletes
-        if allow_delete:
-            for name, current in current_labels.items():
-                if current.get("type") == "system":
-                    continue
-                if name not in desired_map and name not in rename_map:
-                    plan["delete"].append({"name": name, "id": current["id"]})
-
-        # Remove empty lists
-        plan = {
-            k: v for k, v in plan.items() if v or k in ("type", "source", "generated")
-        }
-
-        # Show summary
-        has_changes = any(k in plan for k in ("create", "rename", "update", "delete"))
-        if not has_changes:
-            click.echo("No changes to apply.")
-            return
-
-        click.echo("Plan:")
-        if "create" in plan:
-            click.echo(f"  Create: {len(plan['create'])}")
-            for item in plan["create"]:
-                click.echo(f"    + {item['name']}")
-        if "rename" in plan:
-            click.echo(f"  Rename: {len(plan['rename'])}")
-            for item in plan["rename"]:
-                click.echo(f"    {item['from']} -> {item['to']}")
-        if "update" in plan:
-            click.echo(f"  Update: {len(plan['update'])}")
-            for item in plan["update"]:
-                click.echo(f"    ~ {item['name']}")
-        if "delete" in plan:
-            click.echo(f"  Delete: {len(plan['delete'])}")
-            for item in plan["delete"]:
-                click.echo(f"    - {item['name']}")
-
-        # Check for potential deletes not included
-        if not allow_delete:
-            potential_deletes = []
-            for name, current in current_labels.items():
-                if current.get("type") == "system":
-                    continue
-                if name not in desired_map and name not in rename_map:
-                    potential_deletes.append(name)
-            if potential_deletes:
-                click.echo(
-                    f"  (Skipped {len(potential_deletes)} deletions, use --delete)"
-                )
-
-        # Write plan
-        with open(output, "w") as f:
-            yaml.dump(
-                plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-            )
-
-        click.echo(f"Wrote plan to {output}")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    return entry
 
 
-@label.command("apply")
-@click.argument("plan_file", type=click.Path(exists=True))
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-def label_apply(plan_file: str, yes: bool):
-    """Apply label changes from plan file.
+def label_to_api_body(desired: dict) -> dict:
+    """Build API body from local label settings."""
+    body = {}
 
-    \b
-    Example:
-        gax label apply labels.plan.yaml
-    """
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        # Load plan
-        with open(plan_file) as f:
-            plan = yaml.safe_load(f)
-
-        if plan.get("type") != "gax/labels-plan":
-            click.echo("Error: Not a labels plan file", err=True)
-            sys.exit(1)
-
-        # Get current labels for parent creation
-        result = service.users().labels().list(userId="me").execute()
-        current_labels = {lbl["name"]: lbl for lbl in result.get("labels", [])}
-
-        # Show summary
-        to_create = plan.get("create", [])
-        to_rename = plan.get("rename", [])
-        to_update = plan.get("update", [])
-        to_delete = plan.get("delete", [])
-
-        if not to_create and not to_rename and not to_update and not to_delete:
-            click.echo("No changes in plan.")
-            return
-
-        click.echo("Applying:")
-        if to_create:
-            click.echo(f"  Create: {len(to_create)}")
-        if to_rename:
-            click.echo(f"  Rename: {len(to_rename)}")
-        if to_update:
-            click.echo(f"  Update: {len(to_update)}")
-        if to_delete:
-            click.echo(f"  Delete: {len(to_delete)}")
-
-        if not yes and not click.confirm("Apply these changes?"):
-            click.echo("Aborted.")
-            return
-
-        # Execute changes
-        total_changes = (
-            len(to_create) + len(to_rename) + len(to_update) + len(to_delete)
-        )
-
-        with operation("Applying label changes", total=total_changes) as op:
-            # 1. Create (parents first for nesting)
-            created = set()
-            for item in sorted(to_create, key=lambda x: x["name"].count("/")):
-                logger.info(f"Creating: {item['name']}")
-                _create_label_with_parents(
-                    service, item["name"], item, current_labels, created
-                )
-                op.advance()
-
-            # 2. Rename
-            for item in to_rename:
-                logger.info(f"Renaming: {item['from']} -> {item['to']}")
-                body = {"name": item["to"]}
-                _apply_settings(body, item)
-                service.users().labels().patch(
-                    userId="me", id=item["id"], body=body
-                ).execute()
-                op.advance()
-
-            # 3. Update
-            for item in to_update:
-                logger.info(f"Updating: {item['name']}")
-                body = {}
-                _apply_settings(body, item)
-                service.users().labels().patch(
-                    userId="me", id=item["id"], body=body
-                ).execute()
-                op.advance()
-
-            # 4. Delete
-            for item in to_delete:
-                logger.info(f"Deleting: {item['name']}")
-                service.users().labels().delete(userId="me", id=item["id"]).execute()
-                op.advance()
-
-        success("Done.")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-def _extract_settings(desired: dict) -> dict:
-    """Extract visibility/color settings for plan."""
-    settings = {}
-    if "visible" in desired:
-        settings["visible"] = desired["visible"]
-    if "show_in_list" in desired:
-        settings["show_in_list"] = desired["show_in_list"]
-    if "color" in desired:
-        settings["color"] = desired["color"]
-    return settings
-
-
-def _needs_update(current: dict, desired: dict) -> bool:
-    """Check if label needs updating."""
-    # Check visibility
-    desired_llv = desired.get("visible", "show")
-    current_llv = LABEL_LIST_VISIBILITY_REV.get(
-        current.get("labelListVisibility", "labelShow"), "show"
-    )
-    if desired_llv != current_llv:
-        return True
-
-    desired_mlv = desired.get("show_in_list", "show")
-    current_mlv = current.get("messageListVisibility", "show")
-    if desired_mlv != current_mlv:
-        return True
-
-    # Check color
-    desired_color = desired.get("color")
-    current_color = current.get("color")
-    if desired_color and not current_color:
-        return True
-    if desired_color and current_color:
-        if desired_color.get("text") != current_color.get("textColor"):
-            return True
-        if desired_color.get("bg") != current_color.get("backgroundColor"):
-            return True
-
-    return False
-
-
-def _apply_settings(body: dict, desired: dict):
-    """Apply visibility and color settings to API body."""
     if "visible" in desired:
         body["labelListVisibility"] = LABEL_LIST_VISIBILITY.get(
             desired["visible"], "labelShow"
@@ -537,32 +210,324 @@ def _apply_settings(body: dict, desired: dict):
             "backgroundColor": desired["color"].get("bg", "#ffffff"),
         }
 
+    return body
 
-def _create_label_with_parents(
-    service, name: str, desired: dict, current_labels: dict, created: set
-):
-    """Create label, ensuring parent labels exist first."""
-    if name in created or name in current_labels:
-        return
 
-    # Create parent labels first if nested
-    if "/" in name:
-        parts = name.split("/")
-        for i in range(len(parts) - 1):
-            parent = "/".join(parts[: i + 1])
-            if parent not in current_labels and parent not in created:
-                body = {"name": parent, "labelListVisibility": "labelShow"}
-                result = (
-                    service.users().labels().create(userId="me", body=body).execute()
+# =============================================================================
+# Comparison helpers — diff logic for desired vs current labels.
+# =============================================================================
+
+
+def needs_update(current: dict, desired: dict) -> bool:
+    """Check if a label needs updating (visibility or color changed)."""
+    desired_llv = desired.get("visible", "show")
+    current_llv = LABEL_LIST_VISIBILITY_REV.get(
+        current.get("labelListVisibility", "labelShow"), "show"
+    )
+    if desired_llv != current_llv:
+        return True
+
+    desired_mlv = desired.get("show_in_list", "show")
+    current_mlv = current.get("messageListVisibility", "show")
+    if desired_mlv != current_mlv:
+        return True
+
+    desired_color = desired.get("color")
+    current_color = current.get("color")
+    if desired_color and not current_color:
+        return True
+    if desired_color and current_color:
+        if desired_color.get("text") != current_color.get("textColor"):
+            return True
+        if desired_color.get("bg") != current_color.get("backgroundColor"):
+            return True
+
+    return False
+
+
+def compute_changes(
+    desired_labels: list[dict],
+    current_labels: dict[str, dict],
+    allow_delete: bool = False,
+) -> dict:
+    """Compute changes between desired (local) and current (remote) labels.
+
+    Returns dict with keys: create, rename, update, delete (each a list).
+    """
+    desired_map = {}
+    rename_map = {}
+    for lbl in desired_labels:
+        name = lbl["name"]
+        desired_map[name] = lbl
+        if "rename_from" in lbl:
+            rename_map[lbl["rename_from"]] = name
+
+    creates = []
+    renames = []
+    updates = []
+    deletes = []
+
+    for name, desired in desired_map.items():
+        if desired.get("system"):
+            continue
+
+        if "rename_from" in desired:
+            old_name = desired["rename_from"]
+            if old_name in current_labels:
+                renames.append(
+                    {
+                        "from": old_name,
+                        "to": name,
+                        "id": current_labels[old_name]["id"],
+                        "settings": desired,
+                    }
                 )
-                current_labels[parent] = result
-                created.add(parent)
-                click.echo(f"Created: {parent} (parent)")
+            elif name not in current_labels:
+                creates.append({"name": name, "settings": desired})
+        elif name not in current_labels:
+            creates.append({"name": name, "settings": desired})
+        else:
+            current = current_labels[name]
+            if needs_update(current, desired):
+                updates.append(
+                    {
+                        "name": name,
+                        "id": current["id"],
+                        "settings": desired,
+                    }
+                )
 
-    # Create the label
-    body = {"name": name}
-    _apply_settings(body, desired)
-    result = service.users().labels().create(userId="me", body=body).execute()
-    current_labels[name] = result
-    created.add(name)
-    click.echo(f"Created: {name}")
+    if allow_delete:
+        for name, current in current_labels.items():
+            if current.get("type") == "system":
+                continue
+            if name not in desired_map and name not in rename_map:
+                deletes.append({"name": name, "id": current["id"]})
+
+    return {
+        "create": creates,
+        "rename": renames,
+        "update": updates,
+        "delete": deletes,
+    }
+
+
+def format_diff_summary(changes: dict, skipped_deletes: int = 0) -> str:
+    """Format a human-readable diff summary."""
+    creates = changes["create"]
+    renames = changes["rename"]
+    updates = changes["update"]
+    deletes = changes["delete"]
+
+    if not creates and not renames and not updates and not deletes:
+        return ""
+
+    lines = []
+
+    if creates:
+        lines.append(f"  Create: {len(creates)}")
+        for item in creates:
+            lines.append(f"    + {item['name']}")
+
+    if renames:
+        lines.append(f"  Rename: {len(renames)}")
+        for item in renames:
+            lines.append(f"    {item['from']} -> {item['to']}")
+
+    if updates:
+        lines.append(f"  Update: {len(updates)}")
+        for item in updates:
+            lines.append(f"    ~ {item['name']}")
+
+    if deletes:
+        lines.append(f"  Delete: {len(deletes)}")
+        for item in deletes:
+            lines.append(f"    - {item['name']}")
+
+    if skipped_deletes > 0:
+        lines.append(f"  (Skipped {skipped_deletes} deletions, use --delete)")
+
+    return "\n".join(lines)
+
+
+# =============================================================================
+# Resource class — the public interface for cli.py.
+# =============================================================================
+
+
+class Label(Resource):
+    """Gmail label resource."""
+
+    name = "label"
+
+    def clone(
+        self,
+        url: str = "",
+        output: Path | None = None,
+        *,
+        include_all: bool = False,
+        **kw,
+    ) -> Path:
+        """Clone Gmail labels to a local file."""
+        labels = self._fetch_normalized(include_all=include_all)
+
+        header = LabelHeader(
+            pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        content = format_labels_file(header, labels)
+
+        file_path = output or Path("labels.mail.gax.md")
+        if file_path.exists():
+            raise ValueError(f"File already exists: {file_path}")
+
+        file_path.write_text(content, encoding="utf-8")
+        logger.info(f"Labels: {len(labels)}")
+        return file_path
+
+    def pull(self, path: Path, *, include_all: bool = False, **kw) -> None:
+        """Pull latest labels from Gmail."""
+        labels = self._fetch_normalized(include_all=include_all)
+
+        header = LabelHeader(
+            pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        content = format_labels_file(header, labels)
+        path.write_text(content, encoding="utf-8")
+        logger.info(f"Labels: {len(labels)}")
+
+    def list(self, out, **kw) -> None:
+        """List Gmail labels as TSV to file descriptor."""
+        api_labels = fetch_labels()
+
+        system = [lbl for lbl in api_labels if lbl.get("type") == "system"]
+        user = [lbl for lbl in api_labels if lbl.get("type") == "user"]
+        system.sort(key=lambda x: x.get("name", ""))
+        user.sort(key=lambda x: x.get("name", ""))
+
+        out.write("id\tname\ttype\n")
+        for lbl in system + user:
+            out.write(
+                f"{lbl.get('id', '')}\t{lbl.get('name', '')}\t{lbl.get('type', '')}\n"
+            )
+
+    def diff(self, path: Path, *, allow_delete: bool = False, **kw) -> str | None:
+        """Preview changes between local labels file and Gmail."""
+        _, desired_labels = parse_labels_file(path)
+
+        api_labels = fetch_labels()
+        current_map = {lbl["name"]: lbl for lbl in api_labels}
+
+        changes = compute_changes(
+            desired_labels, current_map, allow_delete=allow_delete
+        )
+
+        # Count skipped deletions
+        skipped = 0
+        if not allow_delete:
+            desired_names = {lbl["name"] for lbl in desired_labels}
+            rename_sources = {
+                lbl.get("rename_from") for lbl in desired_labels if "rename_from" in lbl
+            }
+            for name, current in current_map.items():
+                if current.get("type") == "system":
+                    continue
+                if name not in desired_names and name not in rename_sources:
+                    skipped += 1
+
+        summary = format_diff_summary(changes, skipped_deletes=skipped)
+        return summary or None
+
+    def push(self, path: Path, *, allow_delete: bool = False, **kw) -> None:
+        """Push local label changes to Gmail. Unconditional."""
+        _, desired_labels = parse_labels_file(path)
+
+        service = get_service()
+        api_labels = fetch_labels(service=service)
+        current_map = {lbl["name"]: lbl for lbl in api_labels}
+
+        changes = compute_changes(
+            desired_labels, current_map, allow_delete=allow_delete
+        )
+
+        creates = changes["create"]
+        renames = changes["rename"]
+        updates = changes["update"]
+        deletes = changes["delete"]
+
+        if not creates and not renames and not updates and not deletes:
+            logger.info("No changes to apply")
+            return
+
+        # 1. Create (parents first for nesting)
+        created = set()
+        for item in sorted(creates, key=lambda x: x["name"].count("/")):
+            self._create_with_parents(
+                service, item["name"], item["settings"], current_map, created
+            )
+
+        # 2. Rename
+        for item in renames:
+            logger.info(f"Renaming: {item['from']} -> {item['to']}")
+            body = {"name": item["to"]}
+            body.update(label_to_api_body(item["settings"]))
+            service.users().labels().patch(
+                userId="me", id=item["id"], body=body
+            ).execute()
+
+        # 3. Update
+        for item in updates:
+            logger.info(f"Updating: {item['name']}")
+            body = label_to_api_body(item["settings"])
+            service.users().labels().patch(
+                userId="me", id=item["id"], body=body
+            ).execute()
+
+        # 4. Delete
+        for item in deletes:
+            logger.info(f"Deleting: {item['name']}")
+            service.users().labels().delete(userId="me", id=item["id"]).execute()
+
+        logger.info(
+            f"Applied: {len(creates)} created, {len(renames)} renamed, "
+            f"{len(updates)} updated, {len(deletes)} deleted"
+        )
+
+    def _fetch_normalized(self, *, include_all: bool = False) -> list[dict]:
+        """Fetch labels and normalize to local format."""
+        api_labels = fetch_labels()
+        labels = []
+        for lbl in sorted(api_labels, key=lambda x: x["name"]):
+            if lbl.get("type") == "system" and not include_all:
+                continue
+            labels.append(api_to_label(lbl))
+        return labels
+
+    def _create_with_parents(
+        self, service, name: str, settings: dict, current_labels: dict, created: set
+    ):
+        """Create label, ensuring parent labels exist first."""
+        if name in created or name in current_labels:
+            return
+
+        if "/" in name:
+            parts = name.split("/")
+            for i in range(len(parts) - 1):
+                parent = "/".join(parts[: i + 1])
+                if parent not in current_labels and parent not in created:
+                    body = {"name": parent, "labelListVisibility": "labelShow"}
+                    result = (
+                        service.users()
+                        .labels()
+                        .create(userId="me", body=body)
+                        .execute()
+                    )
+                    current_labels[parent] = result
+                    created.add(parent)
+                    logger.info(f"Created parent: {parent}")
+
+        body = {"name": name}
+        body.update(label_to_api_body(settings))
+        result = service.users().labels().create(userId="me", body=body).execute()
+        current_labels[name] = result
+        created.add(name)
+        logger.info(f"Created: {name}")

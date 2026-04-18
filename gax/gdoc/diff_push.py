@@ -90,14 +90,19 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 HEADING_STYLES = {
-    "HEADING_1": 1, "HEADING_2": 2, "HEADING_3": 3,
-    "HEADING_4": 4, "HEADING_5": 5, "HEADING_6": 6,
+    "HEADING_1": 1,
+    "HEADING_2": 2,
+    "HEADING_3": 3,
+    "HEADING_4": 4,
+    "HEADING_5": 5,
+    "HEADING_6": 6,
 }
 
 
 @dataclass
 class DocElement:
     """A classified Google Doc body element."""
+
     type: str  # 'heading', 'paragraph', 'list_item', 'table', 'empty'
     text: str
     start_index: int
@@ -109,6 +114,7 @@ class DocElement:
 @dataclass
 class AlignedNode:
     """A markdown AST node aligned to one or more Google Doc elements."""
+
     node: Node
     doc_elements: list[DocElement]
     # Convenience: overall index range in the Google Doc
@@ -147,7 +153,9 @@ def classify_doc_element(elem: dict) -> DocElement:
         )
 
     if "paragraph" not in elem:
-        return DocElement(type="other", text="", start_index=start, end_index=end, raw=elem)
+        return DocElement(
+            type="other", text="", start_index=start, end_index=end, raw=elem
+        )
 
     para = elem["paragraph"]
     style = para.get("paragraphStyle", {})
@@ -161,24 +169,40 @@ def classify_doc_element(elem: dict) -> DocElement:
     text_stripped = text.strip()
 
     if not text_stripped:
-        return DocElement(type="empty", text="", start_index=start, end_index=end, raw=elem)
+        return DocElement(
+            type="empty", text="", start_index=start, end_index=end, raw=elem
+        )
 
     if named_style in HEADING_STYLES:
         return DocElement(
-            type="heading", text=text_stripped, start_index=start, end_index=end,
-            details={"level": HEADING_STYLES[named_style]}, raw=elem,
+            type="heading",
+            text=text_stripped,
+            start_index=start,
+            end_index=end,
+            details={"level": HEADING_STYLES[named_style]},
+            raw=elem,
         )
 
     if bullet is not None:
         return DocElement(
-            type="list_item", text=text_stripped, start_index=start, end_index=end,
-            details={"nesting": bullet.get("nestingLevel", 0), "list_id": bullet.get("listId", "")},
+            type="list_item",
+            text=text_stripped,
+            start_index=start,
+            end_index=end,
+            details={
+                "nesting": bullet.get("nestingLevel", 0),
+                "list_id": bullet.get("listId", ""),
+            },
             raw=elem,
         )
 
     return DocElement(
-        type="paragraph", text=text_stripped, start_index=start, end_index=end,
-        details={}, raw=elem,
+        type="paragraph",
+        text=text_stripped,
+        start_index=start,
+        end_index=end,
+        details={},
+        raw=elem,
     )
 
 
@@ -257,12 +281,14 @@ def align(doc_elements: list[DocElement], ast_nodes: list[Node]) -> list[Aligned
 
         # Direct match
         if d.type == ntype and d.text.strip() == ntext.strip():
-            result.append(AlignedNode(
-                node=node,
-                doc_elements=[d],
-                start_index=d.start_index,
-                end_index=d.end_index,
-            ))
+            result.append(
+                AlignedNode(
+                    node=node,
+                    doc_elements=[d],
+                    start_index=d.start_index,
+                    end_index=d.end_index,
+                )
+            )
             di += 1
             ai += 1
             continue
@@ -291,12 +317,14 @@ def align(doc_elements: list[DocElement], ast_nodes: list[Node]) -> list[Aligned
             len_match = abs(acc_len - ast_len) <= 2
 
             if text_match or (len_match and len(accumulated) > 1):
-                result.append(AlignedNode(
-                    node=node,
-                    doc_elements=accumulated,
-                    start_index=accumulated[0].start_index,
-                    end_index=accumulated[-1].end_index,
-                ))
+                result.append(
+                    AlignedNode(
+                        node=node,
+                        doc_elements=accumulated,
+                        start_index=accumulated[0].start_index,
+                        end_index=accumulated[-1].end_index,
+                    )
+                )
                 di = di_peek
                 ai += 1
                 continue
@@ -326,12 +354,14 @@ def align(doc_elements: list[DocElement], ast_nodes: list[Node]) -> list[Aligned
             f"vs ast[{ai}]={ntype}:{ntext[:30]!r} — "
             "downstream mutations for this node may target wrong indices"
         )
-        result.append(AlignedNode(
-            node=node,
-            doc_elements=[d],
-            start_index=d.start_index,
-            end_index=d.end_index,
-        ))
+        result.append(
+            AlignedNode(
+                node=node,
+                doc_elements=[d],
+                start_index=d.start_index,
+                end_index=d.end_index,
+            )
+        )
         di += 1
         ai += 1
 
@@ -347,9 +377,11 @@ def align(doc_elements: list[DocElement], ast_nodes: list[Node]) -> list[Aligned
 # AST Diff: compare base AST against edited AST
 # =============================================================================
 
+
 @dataclass
 class EditOp:
     """A single edit operation between base and edited AST."""
+
     type: str  # 'update', 'insert', 'delete'
     base_idx: int | None  # index in base AST (None for inserts)
     edit_idx: int | None  # index in edited AST (None for deletes)
@@ -390,21 +422,39 @@ def ast_diff(base_nodes: list[Node], edited_nodes: list[Node]) -> list[EditOp]:
                 if _node_key(base_nodes[bi]) == _node_key(edited_nodes[ei]):
                     # Text matches — but check if formatting differs
                     if _formatting_differs(base_nodes[bi], edited_nodes[ei]):
-                        ops.append(EditOp("update", bi, ei, base_nodes[bi], edited_nodes[ei]))
+                        ops.append(
+                            EditOp("update", bi, ei, base_nodes[bi], edited_nodes[ei])
+                        )
                     # else: truly equal, no op needed
         elif tag == "replace":
             # Pair up replacements, then handle length differences
             pairs = min(i2 - i1, j2 - j1)
             for k in range(pairs):
-                ops.append(EditOp("update", i1 + k, j1 + k, base_nodes[i1 + k], edited_nodes[j1 + k]))
+                ops.append(
+                    EditOp(
+                        "update",
+                        i1 + k,
+                        j1 + k,
+                        base_nodes[i1 + k],
+                        edited_nodes[j1 + k],
+                    )
+                )
             # Extra base nodes → deletes
             for k in range(pairs, i2 - i1):
                 ops.append(EditOp("delete", i1 + k, None, base_nodes[i1 + k], None))
             # Extra edited nodes → inserts (after last base node in this block)
             insert_after = i1 + pairs - 1 if pairs > 0 else i1 - 1
             for k in range(pairs, j2 - j1):
-                ops.append(EditOp("insert", None, j1 + k, None, edited_nodes[j1 + k],
-                                  insert_after=insert_after if insert_after >= 0 else None))
+                ops.append(
+                    EditOp(
+                        "insert",
+                        None,
+                        j1 + k,
+                        None,
+                        edited_nodes[j1 + k],
+                        insert_after=insert_after if insert_after >= 0 else None,
+                    )
+                )
         elif tag == "delete":
             for k in range(i1, i2):
                 ops.append(EditOp("delete", k, None, base_nodes[k], None))
@@ -412,8 +462,16 @@ def ast_diff(base_nodes: list[Node], edited_nodes: list[Node]) -> list[EditOp]:
             # Insert before base position i1 → after base node i1-1
             insert_after = i1 - 1 if i1 > 0 else None
             for k in range(j1, j2):
-                ops.append(EditOp("insert", None, k, None, edited_nodes[k],
-                                  insert_after=insert_after))
+                ops.append(
+                    EditOp(
+                        "insert",
+                        None,
+                        k,
+                        None,
+                        edited_nodes[k],
+                        insert_after=insert_after,
+                    )
+                )
 
     return ops
 
@@ -446,8 +504,13 @@ def _spans_differ(a: list[Text], b: list[Text]) -> bool:
     if len(a) != len(b):
         return True
     for sa, sb in zip(a, b):
-        if (sa.text != sb.text or sa.bold != sb.bold or sa.italic != sb.italic
-                or sa.strikethrough != sb.strikethrough or sa.url != sb.url):
+        if (
+            sa.text != sb.text
+            or sa.bold != sb.bold
+            or sa.italic != sb.italic
+            or sa.strikethrough != sb.strikethrough
+            or sa.url != sb.url
+        ):
             return True
     return False
 
@@ -455,6 +518,7 @@ def _spans_differ(a: list[Text], b: list[Text]) -> bool:
 # =============================================================================
 # Mutation translator: diff ops → Docs API requests
 # =============================================================================
+
 
 def diff_to_mutations(
     ops: list[EditOp],
@@ -485,24 +549,22 @@ def diff_to_mutations(
     for op in ops:
         if op.type == "update":
             if op.base_idx is None or op.base_idx >= len(alignment):
-                raise ValueError(f"Update op references unaligned base node {op.base_idx}")
+                raise ValueError(
+                    f"Update op references unaligned base node {op.base_idx}"
+                )
 
             aligned = alignment[op.base_idx]
             base = op.base_node
             edit = op.edit_node
 
-            if isinstance(base, (Paragraph, Heading)) and isinstance(edit, (Paragraph, Heading)):
-                requests.extend(
-                    _update_paragraph_requests(aligned, edit, tab_id)
-                )
+            if isinstance(base, (Paragraph, Heading)) and isinstance(
+                edit, (Paragraph, Heading)
+            ):
+                requests.extend(_update_paragraph_requests(aligned, edit, tab_id))
             elif isinstance(base, ListItem) and isinstance(edit, ListItem):
-                requests.extend(
-                    _update_paragraph_requests(aligned, edit, tab_id)
-                )
+                requests.extend(_update_paragraph_requests(aligned, edit, tab_id))
             elif isinstance(base, Table) and isinstance(edit, Table):
-                requests.extend(
-                    _update_table_requests(aligned, base, edit, tab_id)
-                )
+                requests.extend(_update_table_requests(aligned, base, edit, tab_id))
             else:
                 raise ValueError(
                     f"Cannot translate update for {_node_type(base)} → {_node_type(edit)}"
@@ -520,24 +582,24 @@ def diff_to_mutations(
             else:
                 insert_idx = 1  # start of document
 
-            requests.extend(
-                _insert_node_requests(op.edit_node, insert_idx, tab_id)
-            )
+            requests.extend(_insert_node_requests(op.edit_node, insert_idx, tab_id))
 
         elif op.type == "delete":
             if op.base_idx is None or op.base_idx >= len(alignment):
                 continue
             aligned = alignment[op.base_idx]
             # Delete the full range including the trailing newline
-            requests.append({
-                "deleteContentRange": {
-                    "range": {
-                        "startIndex": aligned.start_index,
-                        "endIndex": aligned.end_index,
-                        "tabId": tab_id,
+            requests.append(
+                {
+                    "deleteContentRange": {
+                        "range": {
+                            "startIndex": aligned.start_index,
+                            "endIndex": aligned.end_index,
+                            "tabId": tab_id,
+                        }
                     }
                 }
-            })
+            )
 
     # Apply requests in descending start-index order, so each request only
     # shifts content at indices BELOW the ones we've already processed — the
@@ -600,15 +662,17 @@ def _update_paragraph_requests(
         return requests
 
     # Step 1: Delete existing text (preserve trailing newline)
-    requests.append({
-        "deleteContentRange": {
-            "range": {
-                "startIndex": start,
-                "endIndex": end,
-                "tabId": tab_id,
+    requests.append(
+        {
+            "deleteContentRange": {
+                "range": {
+                    "startIndex": start,
+                    "endIndex": end,
+                    "tabId": tab_id,
+                }
             }
         }
-    })
+    )
 
     # Step 2: Insert new text
     if isinstance(new_node, Heading):
@@ -620,69 +684,101 @@ def _update_paragraph_requests(
     else:
         return requests
 
-    requests.append({
-        "insertText": {
-            "text": new_text,
-            "location": {"index": start, "tabId": tab_id},
+    requests.append(
+        {
+            "insertText": {
+                "text": new_text,
+                "location": {"index": start, "tabId": tab_id},
+            }
         }
-    })
+    )
 
     # Step 3: Apply heading style if it's a heading (or changed level)
     if isinstance(new_node, Heading):
         style_map = {
-            1: "HEADING_1", 2: "HEADING_2", 3: "HEADING_3",
-            4: "HEADING_4", 5: "HEADING_5", 6: "HEADING_6",
+            1: "HEADING_1",
+            2: "HEADING_2",
+            3: "HEADING_3",
+            4: "HEADING_4",
+            5: "HEADING_5",
+            6: "HEADING_6",
         }
-        requests.append({
-            "updateParagraphStyle": {
-                "range": {
-                    "startIndex": start,
-                    "endIndex": start + _utf16_len(new_text),
-                    "tabId": tab_id,
-                },
-                "paragraphStyle": {
-                    "namedStyleType": style_map.get(new_node.level, "HEADING_1"),
-                },
-                "fields": "namedStyleType",
+        requests.append(
+            {
+                "updateParagraphStyle": {
+                    "range": {
+                        "startIndex": start,
+                        "endIndex": start + _utf16_len(new_text),
+                        "tabId": tab_id,
+                    },
+                    "paragraphStyle": {
+                        "namedStyleType": style_map.get(new_node.level, "HEADING_1"),
+                    },
+                    "fields": "namedStyleType",
+                }
             }
-        })
+        )
 
     # Step 4: Apply inline formatting (bold, italic, strikethrough, links)
     offset = start
     for span in children:
         span_end = offset + _utf16_len(span.text)
         if span.bold:
-            requests.append({
-                "updateTextStyle": {
-                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                    "textStyle": {"bold": True},
-                    "fields": "bold",
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": {"bold": True},
+                        "fields": "bold",
+                    }
                 }
-            })
+            )
         if span.italic:
-            requests.append({
-                "updateTextStyle": {
-                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                    "textStyle": {"italic": True},
-                    "fields": "italic",
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": {"italic": True},
+                        "fields": "italic",
+                    }
                 }
-            })
+            )
         if span.strikethrough:
-            requests.append({
-                "updateTextStyle": {
-                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                    "textStyle": {"strikethrough": True},
-                    "fields": "strikethrough",
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": {"strikethrough": True},
+                        "fields": "strikethrough",
+                    }
                 }
-            })
+            )
         if span.url:
-            requests.append({
-                "updateTextStyle": {
-                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                    "textStyle": {"link": {"url": span.url}},
-                    "fields": "link",
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": {"link": {"url": span.url}},
+                        "fields": "link",
+                    }
                 }
-            })
+            )
         offset = span_end
 
     return requests
@@ -775,61 +871,89 @@ def _update_table_requests(
             # Delete old content (preserve trailing newline)
             content_end = cell_end - 1
             if content_end > cell_start:
-                requests.append({
-                    "deleteContentRange": {
-                        "range": {
-                            "startIndex": cell_start,
-                            "endIndex": content_end,
-                            "tabId": tab_id,
+                requests.append(
+                    {
+                        "deleteContentRange": {
+                            "range": {
+                                "startIndex": cell_start,
+                                "endIndex": content_end,
+                                "tabId": tab_id,
+                            }
                         }
                     }
-                })
+                )
 
             # Insert new text
             if edit_text:
-                requests.append({
-                    "insertText": {
-                        "text": edit_text,
-                        "location": {"index": cell_start, "tabId": tab_id},
+                requests.append(
+                    {
+                        "insertText": {
+                            "text": edit_text,
+                            "location": {"index": cell_start, "tabId": tab_id},
+                        }
                     }
-                })
+                )
 
             # Apply inline formatting
             offset = cell_start
             for span in edit_spans:
                 span_end = offset + _utf16_len(span.text)
                 if span.bold:
-                    requests.append({
-                        "updateTextStyle": {
-                            "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                            "textStyle": {"bold": True},
-                            "fields": "bold",
+                    requests.append(
+                        {
+                            "updateTextStyle": {
+                                "range": {
+                                    "startIndex": offset,
+                                    "endIndex": span_end,
+                                    "tabId": tab_id,
+                                },
+                                "textStyle": {"bold": True},
+                                "fields": "bold",
+                            }
                         }
-                    })
+                    )
                 if span.italic:
-                    requests.append({
-                        "updateTextStyle": {
-                            "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                            "textStyle": {"italic": True},
-                            "fields": "italic",
+                    requests.append(
+                        {
+                            "updateTextStyle": {
+                                "range": {
+                                    "startIndex": offset,
+                                    "endIndex": span_end,
+                                    "tabId": tab_id,
+                                },
+                                "textStyle": {"italic": True},
+                                "fields": "italic",
+                            }
                         }
-                    })
+                    )
                 if span.strikethrough:
-                    requests.append({
-                        "updateTextStyle": {
-                            "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                            "textStyle": {"strikethrough": True},
-                            "fields": "strikethrough",
+                    requests.append(
+                        {
+                            "updateTextStyle": {
+                                "range": {
+                                    "startIndex": offset,
+                                    "endIndex": span_end,
+                                    "tabId": tab_id,
+                                },
+                                "textStyle": {"strikethrough": True},
+                                "fields": "strikethrough",
+                            }
                         }
-                    })
+                    )
                 if span.url:
-                    requests.append({
-                        "updateTextStyle": {
-                            "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                            "textStyle": {"link": {"url": span.url}},
-                            "fields": "link",
+                    requests.append(
+                        {
+                            "updateTextStyle": {
+                                "range": {
+                                    "startIndex": offset,
+                                    "endIndex": span_end,
+                                    "tabId": tab_id,
+                                },
+                                "textStyle": {"link": {"url": span.url}},
+                                "fields": "link",
+                            }
                         }
-                    })
+                    )
                 offset = span_end
 
     return requests
@@ -867,84 +991,120 @@ def _insert_node_requests(
         return requests
 
     # Insert text
-    requests.append({
-        "insertText": {
-            "text": text,
-            "location": {"index": insert_idx, "tabId": tab_id},
+    requests.append(
+        {
+            "insertText": {
+                "text": text,
+                "location": {"index": insert_idx, "tabId": tab_id},
+            }
         }
-    })
+    )
 
     # Apply heading style
     if isinstance(node, Heading):
         style_map = {
-            1: "HEADING_1", 2: "HEADING_2", 3: "HEADING_3",
-            4: "HEADING_4", 5: "HEADING_5", 6: "HEADING_6",
+            1: "HEADING_1",
+            2: "HEADING_2",
+            3: "HEADING_3",
+            4: "HEADING_4",
+            5: "HEADING_5",
+            6: "HEADING_6",
         }
-        requests.append({
-            "updateParagraphStyle": {
-                "range": {
-                    "startIndex": insert_idx,
-                    "endIndex": insert_idx + _utf16_len(node.text),
-                    "tabId": tab_id,
-                },
-                "paragraphStyle": {
-                    "namedStyleType": style_map.get(node.level, "HEADING_1"),
-                },
-                "fields": "namedStyleType",
+        requests.append(
+            {
+                "updateParagraphStyle": {
+                    "range": {
+                        "startIndex": insert_idx,
+                        "endIndex": insert_idx + _utf16_len(node.text),
+                        "tabId": tab_id,
+                    },
+                    "paragraphStyle": {
+                        "namedStyleType": style_map.get(node.level, "HEADING_1"),
+                    },
+                    "fields": "namedStyleType",
+                }
             }
-        })
+        )
 
     # Apply bullet style
     if isinstance(node, ListItem):
         text_len = _utf16_len(text)
-        preset = "NUMBERED_DECIMAL_NESTED" if node.ordered else "BULLET_DISC_CIRCLE_SQUARE"
-        requests.append({
-            "createParagraphBullets": {
-                "range": {
-                    "startIndex": insert_idx,
-                    "endIndex": insert_idx + text_len - 1,
-                    "tabId": tab_id,
-                },
-                "bulletPreset": preset,
+        preset = (
+            "NUMBERED_DECIMAL_NESTED" if node.ordered else "BULLET_DISC_CIRCLE_SQUARE"
+        )
+        requests.append(
+            {
+                "createParagraphBullets": {
+                    "range": {
+                        "startIndex": insert_idx,
+                        "endIndex": insert_idx + text_len - 1,
+                        "tabId": tab_id,
+                    },
+                    "bulletPreset": preset,
+                }
             }
-        })
+        )
 
     # Apply inline formatting
     offset = insert_idx
     for span in children:
         span_end = offset + _utf16_len(span.text)
         if span.bold:
-            requests.append({
-                "updateTextStyle": {
-                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                    "textStyle": {"bold": True},
-                    "fields": "bold",
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": {"bold": True},
+                        "fields": "bold",
+                    }
                 }
-            })
+            )
         if span.italic:
-            requests.append({
-                "updateTextStyle": {
-                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                    "textStyle": {"italic": True},
-                    "fields": "italic",
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": {"italic": True},
+                        "fields": "italic",
+                    }
                 }
-            })
+            )
         if span.strikethrough:
-            requests.append({
-                "updateTextStyle": {
-                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                    "textStyle": {"strikethrough": True},
-                    "fields": "strikethrough",
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": {"strikethrough": True},
+                        "fields": "strikethrough",
+                    }
                 }
-            })
+            )
         if span.url:
-            requests.append({
-                "updateTextStyle": {
-                    "range": {"startIndex": offset, "endIndex": span_end, "tabId": tab_id},
-                    "textStyle": {"link": {"url": span.url}},
-                    "fields": "link",
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": {"link": {"url": span.url}},
+                        "fields": "link",
+                    }
                 }
-            })
+            )
         offset = span_end
 
     return requests
@@ -954,9 +1114,11 @@ def _insert_node_requests(
 # Preview
 # =============================================================================
 
+
 @dataclass
 class DiffPreview:
     """Result of a dry-run diff computation for user preview."""
+
     ops: list[EditOp]
     summary_lines: list[str]
     warnings: list[str]
@@ -996,7 +1158,7 @@ def preview_diff(
     """Compute the diff without applying it. Returns a preview for the user."""
     from . import native_md
     from googleapiclient.discovery import build
-    from .auth import get_authenticated_credentials
+    from ..auth import get_authenticated_credentials
 
     if docs_service is None or drive_service is None:
         creds = get_authenticated_credentials()
@@ -1009,7 +1171,8 @@ def preview_diff(
 
     # Pull + parse
     base_markdown = native_md.export_tab_markdown(
-        document_id, tab_name,
+        document_id,
+        tab_name,
         docs_service=docs_service,
         drive_service=drive_service,
     )
@@ -1021,8 +1184,11 @@ def preview_diff(
 
     if not ops:
         return DiffPreview(
-            ops=[], summary_lines=[], warnings=["No differences found."],
-            docs_service=docs_service, drive_service=drive_service,
+            ops=[],
+            summary_lines=[],
+            warnings=["No differences found."],
+            docs_service=docs_service,
+            drive_service=drive_service,
         )
 
     # Dry-run the mutation translator so unsupported ops (table shape
@@ -1083,6 +1249,7 @@ def preview_diff(
 # Top-level orchestrator
 # =============================================================================
 
+
 def diff_push(
     document_id: str,
     tab_name: str,
@@ -1111,7 +1278,7 @@ def diff_push(
     """
     from . import native_md
     from googleapiclient.discovery import build
-    from .auth import get_authenticated_credentials
+    from ..auth import get_authenticated_credentials
 
     if docs_service is None or drive_service is None:
         creds = get_authenticated_credentials()
@@ -1124,7 +1291,8 @@ def diff_push(
 
     # Step 1: Pull current markdown (base state)
     base_markdown = native_md.export_tab_markdown(
-        document_id, tab_name,
+        document_id,
+        tab_name,
         docs_service=docs_service,
         drive_service=drive_service,
     )
@@ -1174,7 +1342,9 @@ def diff_push(
     inserts = [op for op in ops if op.type == "insert"]
     deletes = [op for op in ops if op.type == "delete"]
 
-    logger.info(f"Diff: {len(updates)} updates, {len(inserts)} inserts, {len(deletes)} deletes")
+    logger.info(
+        f"Diff: {len(updates)} updates, {len(inserts)} inserts, {len(deletes)} deletes"
+    )
 
     # Step 6: Translate to mutations (will raise ValueError for unsupported ops)
     mutations = diff_to_mutations(ops, alignment, tab_id)

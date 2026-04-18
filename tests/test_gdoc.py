@@ -11,9 +11,9 @@ from gax.gdoc import (
     pull_doc,
     format_multipart,
     format_section,
-    get_tabs_list,
     pull_single_tab,
 )
+from gax.gdoc.native_md import get_doc_tabs
 
 
 # Load fixtures
@@ -35,7 +35,7 @@ def make_mock_service(doc_response: dict):
 class TestPullDoc:
     """Tests for pull_doc function."""
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_multi_tab_document(self, mock_native_md):
         """Test pulling a document with multiple tabs."""
         # Mock native_md functions
@@ -77,7 +77,7 @@ class TestPullDoc:
         assert sections[1].section_title == "Timeline"
         assert "Key Milestones" in sections[1].content
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_single_tab_document(self, mock_native_md):
         """Test pulling a document with a single tab."""
         mock_native_md.get_doc_tabs.return_value = [
@@ -101,7 +101,7 @@ class TestPullDoc:
         assert sections[0].title == "Simple Doc"
         assert "Hello World" in sections[0].content
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_document_without_tabs(self, mock_native_md):
         """Test pulling a legacy document without tabs array."""
         # No tabs returned means fallback to default
@@ -127,7 +127,7 @@ class TestPullDoc:
 class TestFormatMultipart:
     """Tests for multipart format output."""
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_format_multi_tab_to_file(self, mock_native_md, tmp_path):
         """Test formatting a multi-tab document and writing to file."""
         mock_native_md.get_doc_tabs.return_value = [
@@ -170,7 +170,7 @@ class TestFormatMultipart:
         # Content should be present
         assert "Key Milestones" in written
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_sections_are_self_contained(self, mock_native_md, tmp_path):
         """Test that each section can be extracted as a standalone file."""
         mock_native_md.get_doc_tabs.return_value = [
@@ -214,7 +214,7 @@ class TestFormatMultipart:
 class TestHeadingConversion:
     """Tests for heading style conversion (native API handles this)."""
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_heading_levels(self, mock_native_md):
         """Test that headings from native export are preserved."""
         # Native API returns markdown directly with headings
@@ -245,22 +245,21 @@ class TestHeadingConversion:
         assert "Normal text" in content
 
 
-class TestGetTabsList:
-    """Tests for get_tabs_list function."""
+class TestGetDocTabs:
+    """Tests for get_doc_tabs function."""
 
     def test_multi_tab_document(self):
         """Test getting tabs from a multi-tab document."""
         doc_response = json.loads(load_fixture("sample_doc_response.json"))
         service = make_mock_service(doc_response)
 
-        info = get_tabs_list("test-doc-123", service=service)
+        tabs = get_doc_tabs("test-doc-123", docs_service=service)
 
-        assert info["title"] == "Project Plan"
-        assert len(info["tabs"]) == 2
-        assert info["tabs"][0]["title"] == "Overview"
-        assert info["tabs"][0]["index"] == 0
-        assert info["tabs"][1]["title"] == "Timeline"
-        assert info["tabs"][1]["index"] == 1
+        assert len(tabs) == 2
+        assert tabs[0]["title"] == "Overview"
+        assert tabs[0]["index"] == 0
+        assert tabs[1]["title"] == "Timeline"
+        assert tabs[1]["index"] == 1
 
     def test_single_tab_document(self):
         """Test getting tabs from a single-tab document."""
@@ -276,12 +275,11 @@ class TestGetTabsList:
         }
         service = make_mock_service(doc_response)
 
-        info = get_tabs_list("single-doc", service=service)
+        tabs = get_doc_tabs("single-doc", docs_service=service)
 
-        assert info["title"] == "Simple Doc"
-        assert len(info["tabs"]) == 1
-        assert info["tabs"][0]["title"] == "Simple Doc"
-        assert info["tabs"][0]["id"] == "t.123"
+        assert len(tabs) == 1
+        assert tabs[0]["title"] == "Simple Doc"
+        assert tabs[0]["id"] == "t.123"
 
     def test_legacy_document_no_tabs(self):
         """Test getting tabs from a legacy document without tabs array."""
@@ -292,18 +290,15 @@ class TestGetTabsList:
         }
         service = make_mock_service(doc_response)
 
-        info = get_tabs_list("legacy-doc", service=service)
+        tabs = get_doc_tabs("legacy-doc", docs_service=service)
 
-        assert info["title"] == "Legacy Doc"
-        assert len(info["tabs"]) == 1
-        assert info["tabs"][0]["title"] == "Legacy Doc"
-        assert info["tabs"][0]["id"] == ""
+        assert len(tabs) == 0
 
 
 class TestPullSingleTab:
     """Tests for pull_single_tab function."""
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_pull_specific_tab(self, mock_native_md):
         """Test pulling a specific tab by name."""
         mock_native_md.export_tab_markdown.return_value = (
@@ -324,7 +319,7 @@ class TestPullSingleTab:
         assert section.section_title == "Timeline"
         assert "Key Milestones" in section.content
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_pull_first_tab(self, mock_native_md):
         """Test pulling the first tab."""
         mock_native_md.export_tab_markdown.return_value = "Overview content here"
@@ -342,7 +337,7 @@ class TestPullSingleTab:
         assert section.section_title == "Overview"
         assert "Overview content" in section.content
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_pull_tab_not_found(self, mock_native_md):
         """Test pulling a non-existent tab raises error."""
         mock_native_md.export_tab_markdown.side_effect = ValueError(
@@ -362,7 +357,7 @@ class TestPullSingleTab:
                 docs_service=docs_service,
             )
 
-    @patch("gax.gdoc.native_md")
+    @patch("gax.gdoc.doc.native_md")
     def test_pull_legacy_document(self, mock_native_md):
         """Test pulling from a legacy document."""
         mock_native_md.export_tab_markdown.return_value = "Legacy content"

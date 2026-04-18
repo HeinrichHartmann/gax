@@ -1,8 +1,18 @@
-"""Google Sheets client and operations"""
+"""Google Sheets sync for gax.
 
-from .client import GSheetClient
-from .pull import pull
-from .push import push
-from .clone import clone_all, pull_all
+Re-exports from submodules. CLI commands live in cli.py.
+"""
 
-__all__ = ["GSheetClient", "pull", "push", "clone_all", "pull_all"]
+from .client import GSheetClient  # noqa: F401
+from .frontmatter import SheetConfig  # noqa: F401
+from .sheet import (  # noqa: F401
+    SheetTab,
+    Sheet,
+    _extract_spreadsheet_id,
+    clone_all,
+    pull_all,
+    pull_single_tab,
+    pull_single_tab as pull,
+    push_single_tab,
+    push_single_tab as push,
+)

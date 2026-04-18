@@ -1,34 +1,86 @@
 """Gmail draft management for gax.
 
+Reference resource module — intended as a template for new resources.
+
 Implements push/pull for email drafts as markdown files (.draft.gax.md).
 See ADR 006 for design details.
+
+Module structure
+================
+
+  DraftHeader          — dataclass for .draft.gax.md frontmatter
+  File format          — parse/format .draft.gax.md files
+  Gmail API helpers    — wrappers around Gmail API quirks
+  Draft(Resource)  — resource class (the public interface for cli.py)
+
+Design decisions
+================
+
+Separation of concerns:
+  This module contains ONLY business logic. No Click, no sys.exit(), no
+  UI imports. The CLI layer (cli.py) owns all command definitions, argument
+  parsing, confirmation prompts, and user-facing output. cli.py imports only
+  the Draft class — never module-level functions.
+
+Resource class as public interface:
+  The Draft class is what cli.py calls. All core operations (new, clone,
+  list, pull, diff, push) are methods on this class. The class is stateless —
+  just a namespace conforming to the Resource interface.
+
+Communication conventions:
+  - logging.info()  — status messages (picked up by the spinner)
+  - ValueError      — user-fixable errors (cli.py catches and formats)
+  - Return values   — results for cli.py to format (e.g. Path from clone)
+  - File descriptor  — for streaming output (e.g. list writes TSV to `out`)
+
+Module-level functions:
+  Shared helpers extracted from the class to reduce duplication and keep
+  methods readable. NOT an additional abstraction layer — just factoring.
+  No underscores: everything in this module is internal to the resource
+  except DraftHeader, parse_draft, and format_draft (used by mail.py).
+
+What we chose NOT to abstract:
+  - No separate API client class. The Gmail API calls live directly in the
+    class methods and helpers. An API layer would add indirection without
+    real benefit at this scale.
+  - No base class for .gax.md file handling. parse_draft/format_draft could
+    generalize (every resource has frontmatter + body), but we avoid
+    premature abstraction. If a pattern emerges across 3+ resources, then
+    extract.
+  - No caching or service reuse across methods. diff() then push() will
+    auth and fetch twice. Acceptable cost for simplicity — optimize later
+    if profiling shows it matters.
 """
 
 import base64
 import difflib
 import logging
 import re
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import click
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
 from . import multipart
-from .ui import operation, success, error
-from . import docs as doc
+from .resource import Resource
 
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# Data class — shared between file format functions and the resource class.
+# Defined first because Python needs it before type annotations that use it.
+# =============================================================================
+
+
 @dataclass
-class DraftConfig:
-    """Configuration/metadata for a draft file."""
+class DraftHeader:
+    """Frontmatter of a .draft.gax.md file."""
 
     draft_id: str = ""
     message_id: str = ""
@@ -42,203 +94,126 @@ class DraftConfig:
     time: str = ""
 
 
-def parse_draft(content: str) -> tuple[DraftConfig, str]:
-    """Parse a .draft.gax.md file into config and body.
+# =============================================================================
+# File format — parse/format .draft.gax.md files.
+# Public: parse_draft, format_draft are used by mail.py for reply drafts.
+# parse_draft_id is URL/ID parsing, only used by Draft.clone().
+# =============================================================================
+
+
+def parse_draft(content: str) -> tuple[DraftHeader, str]:
+    """Parse a .draft.gax.md file into header and body.
 
     Returns:
-        Tuple of (DraftConfig, body_content)
+        Tuple of (DraftHeader, body_content)
     """
     sections = multipart.parse_multipart(content)
     if not sections:
         raise ValueError("No content found in draft file")
 
     section = sections[0]
-    headers = section.headers
+    h = section.headers
 
-    config = DraftConfig(
-        draft_id=headers.get("draft_id", ""),
-        message_id=headers.get("message_id", ""),
-        subject=headers.get("subject", ""),
-        to=headers.get("to", ""),
-        cc=headers.get("cc", ""),
-        bcc=headers.get("bcc", ""),
-        thread_id=headers.get("thread_id", ""),
-        in_reply_to=headers.get("in_reply_to", ""),
-        source=headers.get("source", ""),
-        time=headers.get("time", ""),
+    header = DraftHeader(
+        draft_id=h.get("draft_id", ""),
+        message_id=h.get("message_id", ""),
+        subject=h.get("subject", ""),
+        to=h.get("to", ""),
+        cc=h.get("cc", ""),
+        bcc=h.get("bcc", ""),
+        thread_id=h.get("thread_id", ""),
+        in_reply_to=h.get("in_reply_to", ""),
+        source=h.get("source", ""),
+        time=h.get("time", ""),
     )
 
-    return config, section.content
+    return header, section.content
 
 
-def format_draft(config: DraftConfig, body: str) -> str:
-    """Format a draft config and body as .draft.gax.md content."""
-    headers: dict[str, Any] = {"type": "gax/draft"}
+def format_draft(header: DraftHeader, body: str) -> str:
+    """Format a draft header and body as .draft.gax.md content."""
+    h: dict[str, Any] = {"type": "gax/draft"}
 
-    # Add headers in consistent order
-    if config.draft_id:
-        headers["draft_id"] = config.draft_id
-    if config.message_id:
-        headers["message_id"] = config.message_id
-    if config.thread_id:
-        headers["thread_id"] = config.thread_id
-    if config.in_reply_to:
-        headers["in_reply_to"] = config.in_reply_to
+    if header.draft_id:
+        h["draft_id"] = header.draft_id
+    if header.message_id:
+        h["message_id"] = header.message_id
+    if header.thread_id:
+        h["thread_id"] = header.thread_id
+    if header.in_reply_to:
+        h["in_reply_to"] = header.in_reply_to
 
-    headers["subject"] = config.subject
-    headers["to"] = config.to
+    h["subject"] = header.subject
+    h["to"] = header.to
 
-    if config.cc:
-        headers["cc"] = config.cc
-    if config.bcc:
-        headers["bcc"] = config.bcc
-    if config.source:
-        headers["source"] = config.source
-    if config.time:
-        headers["time"] = config.time
+    if header.cc:
+        h["cc"] = header.cc
+    if header.bcc:
+        h["bcc"] = header.bcc
+    if header.source:
+        h["source"] = header.source
+    if header.time:
+        h["time"] = header.time
 
-    return multipart.format_section(headers, body)
+    return multipart.format_section(h, body)
+
+
+def parse_draft_id(url_or_id: str) -> str:
+    """Extract draft ID from Gmail URL or return as-is."""
+    from urllib.parse import unquote
+
+    url_or_id = unquote(url_or_id)
+
+    match = re.search(r"#drafts/([A-Za-z0-9-]+)$", url_or_id)
+    if match:
+        return match.group(1)
+
+    if re.fullmatch(r"r?[A-Za-z0-9-]+", url_or_id):
+        return url_or_id
+
+    raise ValueError(f"Cannot extract draft ID from: {url_or_id}")
 
 
 # =============================================================================
-# Gmail Drafts API functions
+# Gmail API helpers — simplify the quirky Gmail API response format.
+# These are module-internal: extracted from class methods to reduce
+# duplication, not to build an API abstraction layer.
 # =============================================================================
 
 
-def _create_message(
-    to: str,
-    subject: str,
-    body: str,
-    cc: str = "",
-    bcc: str = "",
-    thread_id: str = "",
-    in_reply_to: str = "",
-) -> dict:
-    """Create RFC 2822 message for Gmail API."""
+def get_header(headers_list: list[dict], name: str) -> str:
+    """Get a header value by name from Gmail API headers list."""
+    for h in headers_list:
+        if h["name"].lower() == name.lower():
+            return h["value"]
+    return ""
+
+
+def build_message(header: DraftHeader, body: str) -> dict:
+    """Build RFC 2822 message dict for Gmail API."""
     message = MIMEText(body, "plain", "utf-8")
-    message["to"] = to
-    message["subject"] = subject
+    message["to"] = header.to
+    message["subject"] = header.subject
 
-    if cc:
-        message["cc"] = cc
-    if bcc:
-        message["bcc"] = bcc
-    if in_reply_to:
-        message["In-Reply-To"] = in_reply_to
-        message["References"] = in_reply_to
+    if header.cc:
+        message["cc"] = header.cc
+    if header.bcc:
+        message["bcc"] = header.bcc
+    if header.in_reply_to:
+        message["In-Reply-To"] = header.in_reply_to
+        message["References"] = header.in_reply_to
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
     result: dict[str, Any] = {"raw": raw}
-    if thread_id:
-        result["threadId"] = thread_id
+    if header.thread_id:
+        result["threadId"] = header.thread_id
 
     return result
 
 
-def create_draft(config: DraftConfig, body: str, *, service=None) -> dict:
-    """Create a new draft in Gmail.
-
-    Returns:
-        Gmail API response with draft info
-    """
-    if service is None:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-    message = _create_message(
-        to=config.to,
-        subject=config.subject,
-        body=body,
-        cc=config.cc,
-        bcc=config.bcc,
-        thread_id=config.thread_id,
-        in_reply_to=config.in_reply_to,
-    )
-
-    return (
-        service.users()
-        .drafts()
-        .create(userId="me", body={"message": message})
-        .execute()
-    )
-
-
-def update_draft(
-    draft_id: str, config: DraftConfig, body: str, *, service=None
-) -> dict:
-    """Update an existing draft in Gmail.
-
-    Returns:
-        Gmail API response with updated draft info
-    """
-    if service is None:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-    message = _create_message(
-        to=config.to,
-        subject=config.subject,
-        body=body,
-        cc=config.cc,
-        bcc=config.bcc,
-        thread_id=config.thread_id,
-        in_reply_to=config.in_reply_to,
-    )
-
-    return (
-        service.users()
-        .drafts()
-        .update(userId="me", id=draft_id, body={"message": message})
-        .execute()
-    )
-
-
-def get_draft(draft_id: str, *, service=None) -> tuple[DraftConfig, str]:
-    """Fetch a draft from Gmail.
-
-    Returns:
-        Tuple of (DraftConfig, body_content)
-    """
-    if service is None:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-    result = (
-        service.users().drafts().get(userId="me", id=draft_id, format="full").execute()
-    )
-
-    message = result.get("message", {})
-    payload = message.get("payload", {})
-    headers_list = payload.get("headers", [])
-
-    def get_header(name: str) -> str:
-        for h in headers_list:
-            if h["name"].lower() == name.lower():
-                return h["value"]
-        return ""
-
-    # Extract body
-    body = _extract_body(payload)
-
-    config = DraftConfig(
-        draft_id=result.get("id", ""),
-        message_id=message.get("id", ""),
-        subject=get_header("Subject"),
-        to=get_header("To"),
-        cc=get_header("Cc"),
-        bcc=get_header("Bcc"),
-        thread_id=message.get("threadId", ""),
-        in_reply_to=get_header("In-Reply-To"),
-        source=f"https://mail.google.com/mail/u/0/#drafts/{result.get('id', '')}",
-        time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    )
-
-    return config, body
-
-
-def _extract_body(payload: dict) -> str:
-    """Extract plain text body from message payload."""
+def extract_body(payload: dict) -> str:
+    """Extract plain text body from Gmail message payload."""
     mime_type = payload.get("mimeType", "")
 
     if mime_type == "text/plain":
@@ -256,428 +231,241 @@ def _extract_body(payload: dict) -> str:
                     return base64.urlsafe_b64decode(data).decode(
                         "utf-8", errors="replace"
                     )
-        # Fallback: recurse into parts
         for part in parts:
-            result = _extract_body(part)
+            result = extract_body(part)
             if result:
                 return result
 
     return ""
 
 
-def list_drafts(*, limit: int = 100, service=None) -> list[dict]:
-    """List drafts from Gmail.
-
-    Returns:
-        List of draft info dicts with id field
-    """
-    if service is None:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-    drafts = []
-    page_token = None
-
-    while len(drafts) < limit:
-        batch_size = min(100, limit - len(drafts))
-        result = (
-            service.users()
-            .drafts()
-            .list(userId="me", maxResults=batch_size, pageToken=page_token)
-            .execute()
-        )
-
-        batch = result.get("drafts", [])
-        drafts.extend(batch)
-
-        page_token = result.get("nextPageToken")
-        if not page_token or not batch:
-            break
-
-    return drafts[:limit]
-
-
-def get_draft_summary(draft_id: str, *, service=None) -> dict:
-    """Get summary info for a draft (metadata only)."""
+def fetch_draft(draft_id: str, *, service=None) -> tuple[DraftHeader, str]:
+    """Fetch a draft from Gmail. Returns (DraftHeader, body)."""
     if service is None:
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
 
     result = (
-        service.users()
-        .drafts()
-        .get(
-            userId="me",
-            id=draft_id,
-            format="metadata",
-        )
-        .execute()
+        service.users().drafts().get(userId="me", id=draft_id, format="full").execute()
     )
 
     message = result.get("message", {})
-    headers_list = message.get("payload", {}).get("headers", [])
+    payload = message.get("payload", {})
+    headers_list = payload.get("headers", [])
 
-    def get_header(name: str) -> str:
-        for h in headers_list:
-            if h["name"].lower() == name.lower():
-                return h["value"]
-        return ""
-
-    # Parse date
-    date_str = get_header("Date")
-    try:
-        from email.utils import parsedate_to_datetime
-
-        dt = parsedate_to_datetime(date_str)
-        date_short = dt.strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        date_short = date_str[:10] if date_str else ""
-
-    return {
-        "draft_id": result.get("id", ""),
-        "thread_id": message.get("threadId", ""),
-        "date": date_short,
-        "to": get_header("To")[:40],
-        "subject": get_header("Subject")[:60],
-    }
-
-
-def extract_draft_id(url_or_id: str) -> str:
-    """Extract draft ID from Gmail URL or return as-is."""
-    from urllib.parse import unquote
-
-    url_or_id = unquote(url_or_id)
-
-    # Gmail drafts URL: https://mail.google.com/mail/u/0/#drafts/r1234567890
-    match = re.search(r"#drafts/([A-Za-z0-9-]+)$", url_or_id)
-    if match:
-        return match.group(1)
-
-    # Already an ID
-    if re.fullmatch(r"r?[A-Za-z0-9-]+", url_or_id):
-        return url_or_id
-
-    raise ValueError(f"Cannot extract draft ID from: {url_or_id}")
-
-
-# =============================================================================
-# CLI commands
-# =============================================================================
-
-
-@doc.section("resource")
-@click.group()
-def draft():
-    """Draft operations"""
-    pass
-
-
-@draft.command("new")
-@click.option(
-    "--output",
-    "-o",
-    type=click.Path(path_type=Path),
-    help="Output file (default: <subject>.draft.gax.md)",
-)
-@click.option("--to", "to_addr", default="", help="Recipient email address")
-@click.option("--subject", default="", help="Email subject")
-def draft_new(output: Optional[Path], to_addr: str, subject: str):
-    """Create a new local draft file.
-
-    Creates a .draft.gax.md file that can be edited and pushed to Gmail.
-
-    Examples:
-
-        gax mail draft new
-        gax mail draft new --to alice@example.com --subject "Hello"
-        gax mail draft new -o my_draft.draft.gax.md
-    """
-    # Prompt for required fields if not provided
-    if not to_addr:
-        to_addr = click.prompt("To")
-    if not subject:
-        subject = click.prompt("Subject")
-
-    config = DraftConfig(
-        subject=subject,
-        to=to_addr,
+    header = DraftHeader(
+        draft_id=result.get("id", ""),
+        message_id=message.get("id", ""),
+        subject=get_header(headers_list, "Subject"),
+        to=get_header(headers_list, "To"),
+        cc=get_header(headers_list, "Cc"),
+        bcc=get_header(headers_list, "Bcc"),
+        thread_id=message.get("threadId", ""),
+        in_reply_to=get_header(headers_list, "In-Reply-To"),
+        source=f"https://mail.google.com/mail/u/0/#drafts/{result.get('id', '')}",
         time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
-    body = "\n"  # Empty body with newline
-
-    content = format_draft(config, body)
-
-    if output:
-        file_path = output
-    else:
-        # Generate filename from subject
-        safe_subject = re.sub(r'[<>:"/\\|?*]', "-", subject)
-        safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-        file_path = Path(f"{safe_subject}.draft.gax.md")
-
-    if file_path.exists():
-        error(f"File already exists: {file_path}")
-        sys.exit(1)
-
-    file_path.write_text(content, encoding="utf-8")
-    success(f"Created: {file_path}")
-    click.echo(f"Edit the file, then run: gax mail draft push {file_path}")
+    return header, extract_body(payload)
 
 
-@draft.command("clone")
-@click.argument("draft_id_or_url")
-@click.option(
-    "--output",
-    "-o",
-    type=click.Path(path_type=Path),
-    help="Output file (default: <subject>.draft.gax.md)",
-)
-def draft_clone(draft_id_or_url: str, output: Optional[Path]):
-    """Clone an existing draft from Gmail.
+# =============================================================================
+# Resource class — the public interface for cli.py.
+# All core operations are methods here. The class is stateless (no __init__).
+# cli.py calls Draft().clone(), Draft().push(), etc.
+# =============================================================================
 
-    Examples:
 
-        gax mail draft clone r-1234567890123456789
-        gax mail draft clone "https://mail.google.com/mail/u/0/#drafts/..."
-        gax mail draft clone r-1234567890 -o my_draft.draft.gax.md
-    """
-    try:
-        draft_id = extract_draft_id(draft_id_or_url)
-        logger.info(f"Fetching draft: {draft_id}")
+class Draft(Resource):
+    """Gmail draft resource."""
 
-        config, body = get_draft(draft_id)
-        content = format_draft(config, body)
+    name = "draft"
 
+    def _output_path(self, subject: str, output: Path | None) -> Path:
         if output:
-            file_path = output
-        else:
-            # Generate filename from subject
-            safe_subject = re.sub(r'[<>:"/\\|?*]', "-", config.subject or "untitled")
-            safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-            file_path = Path(f"{safe_subject}.draft.gax.md")
+            return output
+        safe = re.sub(r'[<>:"/\\|?*]', "-", subject or "untitled")
+        safe = re.sub(r"\s+", "_", safe)[:50]
+        return Path(f"{safe}.draft.gax.md")
 
+    def new(self, to: str, subject: str, output: Path | None = None) -> Path:
+        """Create a new local draft file. Returns path created."""
+        header = DraftHeader(
+            subject=subject,
+            to=to,
+            time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        content = format_draft(header, "\n")
+
+        file_path = self._output_path(subject, output)
         if file_path.exists():
-            error(f"File already exists: {file_path}")
-            sys.exit(1)
+            raise ValueError(f"File already exists: {file_path}")
 
         file_path.write_text(content, encoding="utf-8")
-        success(f"Created: {file_path}")
-        click.echo(f"Subject: {config.subject}")
-        click.echo(f"To: {config.to}")
+        return file_path
 
-    except Exception as e:
-        error(f"{e}")
-        sys.exit(1)
-
-
-@draft.command("list")
-@click.option("--limit", default=100, help="Maximum results (default: 100)")
-def draft_list(limit: int):
-    """List Gmail drafts (TSV output).
-
-    Output columns: draft_id, thread_id, date, to, subject
-    """
-    try:
+    def list(self, out, *, limit: int = 100) -> None:
+        """List Gmail drafts as TSV to file descriptor."""
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
 
-        drafts = list_drafts(limit=limit, service=service)
+        # Fetch draft ID list
+        drafts = []
+        page_token = None
+        while len(drafts) < limit:
+            batch_size = min(100, limit - len(drafts))
+            result = (
+                service.users()
+                .drafts()
+                .list(userId="me", maxResults=batch_size, pageToken=page_token)
+                .execute()
+            )
+            batch = result.get("drafts", [])
+            drafts.extend(batch)
+            page_token = result.get("nextPageToken")
+            if not page_token or not batch:
+                break
+        drafts = drafts[:limit]
 
         if not drafts:
-            click.echo("No drafts found.", err=True)
             return
 
-        # Print header
-        click.echo("draft_id\tthread_id\tdate\tto\tsubject")
-
-        with operation("Fetching draft details", total=len(drafts)) as op:
-            for draft_info in drafts:
-                draft_id = draft_info["id"]
-                logger.info(f"Fetching: {draft_id}")
-                try:
-                    summary = get_draft_summary(draft_id, service=service)
-                    click.echo(
-                        f"{summary['draft_id']}\t{summary['thread_id']}\t"
-                        f"{summary['date']}\t{summary['to']}\t{summary['subject']}"
-                    )
-                except Exception as e:
-                    click.echo(f"# Error fetching {draft_id}: {e}", err=True)
-                op.advance()
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@draft.command("push")
-@click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-def draft_push(file: Path, yes: bool):
-    """Push local draft to Gmail.
-
-    If the draft doesn't exist in Gmail yet, creates it.
-    If it exists, shows diff and updates it (with confirmation).
-
-    Examples:
-
-        gax mail draft push my_draft.draft.gax.md
-        gax mail draft push my_draft.draft.gax.md -y
-    """
-    try:
-        content = file.read_text(encoding="utf-8")
-        config, body = parse_draft(content)
-
-        # Validate required fields
-        if not config.to:
-            error("'to' field is required")
-            sys.exit(1)
-        if not config.subject:
-            error("'subject' field is required")
-            sys.exit(1)
-
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        if not config.draft_id:
-            # Create new draft
-            logger.info(f"Creating draft: {config.subject}")
-            result = create_draft(config, body, service=service)
-
-            # Update local file with draft_id
-            config.draft_id = result["id"]
-            config.message_id = result.get("message", {}).get("id", "")
-            config.source = (
-                f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
-            )
-            config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-            new_content = format_draft(config, body)
-            file.write_text(new_content, encoding="utf-8")
-
-            success(f"Created draft: {config.draft_id}")
-            success(f"Updated: {file}")
-
-        else:
-            # Update existing draft - show diff first
+        out.write("draft_id\tthread_id\tdate\tto\tsubject\n")
+        for draft_info in drafts:
+            did = draft_info["id"]
+            logger.info(f"Fetching: {did}")
             try:
-                remote_config, remote_body = get_draft(config.draft_id, service=service)
+                result = (
+                    service.users()
+                    .drafts()
+                    .get(userId="me", id=did, format="metadata")
+                    .execute()
+                )
+                message = result.get("message", {})
+                hl = message.get("payload", {}).get("headers", [])
+
+                date_str = get_header(hl, "Date")
+                try:
+                    date_short = parsedate_to_datetime(date_str).strftime("%Y-%m-%d")
+                except (ValueError, TypeError):
+                    date_short = date_str[:10] if date_str else ""
+
+                out.write(
+                    f"{result.get('id', '')}\t"
+                    f"{message.get('threadId', '')}\t"
+                    f"{date_short}\t"
+                    f"{get_header(hl, 'To')[:40]}\t"
+                    f"{get_header(hl, 'Subject')[:60]}\n"
+                )
             except Exception as e:
-                if "404" in str(e) or "not found" in str(e).lower():
-                    error(f"Draft {config.draft_id} no longer exists in Gmail.")
-                    error(
-                        "Clear draft_id in the file and push again to create a new draft."
-                    )
-                    sys.exit(1)
-                raise
+                logger.warning(f"Error fetching {did}: {e}")
 
-            # Compare local vs remote
-            local_lines = body.splitlines(keepends=True)
-            remote_lines = remote_body.splitlines(keepends=True)
+    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+        """Clone a draft from Gmail to a local file."""
+        draft_id = parse_draft_id(url)
+        logger.info(f"Fetching draft: {draft_id}")
 
-            diff = list(
-                difflib.unified_diff(
-                    remote_lines,
-                    local_lines,
-                    fromfile="remote",
-                    tofile="local",
-                    lineterm="",
-                )
+        header, body = fetch_draft(draft_id)
+        content = format_draft(header, body)
+
+        file_path = self._output_path(header.subject, output)
+        if file_path.exists():
+            raise ValueError(f"File already exists: {file_path}")
+
+        file_path.write_text(content, encoding="utf-8")
+        logger.info(f"Subject: {header.subject}, To: {header.to}")
+        return file_path
+
+    def pull(self, path: Path, **kw) -> None:
+        """Pull latest draft content from Gmail."""
+        content = path.read_text(encoding="utf-8")
+        header, _ = parse_draft(content)
+
+        if not header.draft_id:
+            raise ValueError("No draft_id in file")
+
+        remote_header, remote_body = fetch_draft(header.draft_id)
+        new_content = format_draft(remote_header, remote_body)
+        path.write_text(new_content, encoding="utf-8")
+        logger.info(f"Subject: {remote_header.subject}, To: {remote_header.to}")
+
+    def diff(self, path: Path, **kw) -> str | None:
+        """Preview changes between local draft and remote.
+
+        Returns a human-readable diff string, or None if no changes.
+        For new drafts (no draft_id), returns a summary of what will be created.
+        """
+        content = path.read_text(encoding="utf-8")
+        header, body = parse_draft(content)
+
+        if not header.to:
+            raise ValueError("'to' field is required")
+        if not header.subject:
+            raise ValueError("'subject' field is required")
+
+        if not header.draft_id:
+            return f"New draft: {header.subject}\nTo: {header.to}"
+
+        remote_header, remote_body = fetch_draft(header.draft_id)
+
+        lines = []
+
+        if header.to != remote_header.to:
+            lines.append(f"to: {remote_header.to} -> {header.to}")
+        if header.subject != remote_header.subject:
+            lines.append(f"subject: {remote_header.subject} -> {header.subject}")
+        if header.cc != remote_header.cc:
+            lines.append(f"cc: {remote_header.cc} -> {header.cc}")
+
+        body_diff = list(
+            difflib.unified_diff(
+                remote_body.splitlines(keepends=True),
+                body.splitlines(keepends=True),
+                fromfile="remote",
+                tofile="local",
+                lineterm="",
             )
+        )
+        if body_diff:
+            lines.append("")
+            lines.extend(line.rstrip("\n") for line in body_diff)
 
-            # Also check header changes
-            header_changes = []
-            if config.to != remote_config.to:
-                header_changes.append(f"to: {remote_config.to} -> {config.to}")
-            if config.subject != remote_config.subject:
-                header_changes.append(
-                    f"subject: {remote_config.subject} -> {config.subject}"
-                )
-            if config.cc != remote_config.cc:
-                header_changes.append(f"cc: {remote_config.cc} -> {config.cc}")
+        return "\n".join(lines) if lines else None
 
-            if not diff and not header_changes:
-                click.echo("No differences to push.")
-                return
+    def push(self, path: Path, **kw) -> None:
+        """Push local draft to Gmail. Unconditional — caller handles confirmation."""
+        content = path.read_text(encoding="utf-8")
+        header, body = parse_draft(content)
 
-            # Show changes
-            if header_changes:
-                click.echo("Header changes:")
-                for change in header_changes:
-                    click.echo(f"  {change}")
-
-            if diff:
-                click.echo("Body changes:")
-                click.echo("-" * 40)
-                for line in diff:
-                    click.echo(line.rstrip("\n"))
-                click.echo("-" * 40)
-
-            # Confirm
-            if not yes:
-                if not click.confirm("Push these changes?"):
-                    click.echo("Aborted.")
-                    return
-
-            # Update draft
-            logger.info(f"Updating draft: {config.draft_id}")
-            update_draft(config.draft_id, config, body, service=service)
-
-            # Update local file with new timestamp
-            config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            new_content = format_draft(config, body)
-            file.write_text(new_content, encoding="utf-8")
-
-            success("Pushed successfully.")
-
-    except Exception as e:
-        error(f"{e}")
-        sys.exit(1)
-
-
-@draft.command("pull")
-@click.argument("file", type=click.Path(exists=True, path_type=Path))
-def draft_pull(file: Path):
-    """Pull latest content from Gmail draft.
-
-    Updates the local .draft.gax.md file with the remote draft content.
-
-    Example:
-
-        gax mail draft pull my_draft.draft.gax.md
-    """
-    try:
-        content = file.read_text(encoding="utf-8")
-        config, local_body = parse_draft(content)
-
-        if not config.draft_id:
-            error("No draft_id in file. Use 'push' first to create a draft.")
-            sys.exit(1)
+        if not header.to:
+            raise ValueError("'to' field is required")
+        if not header.subject:
+            raise ValueError("'subject' field is required")
 
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
+        message = build_message(header, body)
 
-        try:
-            remote_config, remote_body = get_draft(config.draft_id, service=service)
-        except Exception as e:
-            if "404" in str(e) or "not found" in str(e).lower():
-                error(f"Draft {config.draft_id} no longer exists in Gmail.")
-                error("The draft may have been sent or deleted.")
-                sys.exit(1)
-            raise
+        if not header.draft_id:
+            logger.info(f"Creating draft: {header.subject}")
+            result = (
+                service.users()
+                .drafts()
+                .create(userId="me", body={"message": message})
+                .execute()
+            )
+            header.draft_id = result["id"]
+            header.message_id = result.get("message", {}).get("id", "")
+            header.source = (
+                f"https://mail.google.com/mail/u/0/#drafts/{header.draft_id}"
+            )
+        else:
+            logger.info(f"Updating draft: {header.draft_id}")
+            service.users().drafts().update(
+                userId="me", id=header.draft_id, body={"message": message}
+            ).execute()
 
-        # Check for local changes that would be overwritten
-        if local_body.strip() != remote_body.strip():
-            logger.warning("Local changes will be overwritten.")
-
-        # Update local file with remote content
-        new_content = format_draft(remote_config, remote_body)
-        file.write_text(new_content, encoding="utf-8")
-
-        success(f"Updated: {file}")
-        click.echo(f"Subject: {remote_config.subject}")
-        click.echo(f"To: {remote_config.to}")
-
-    except Exception as e:
-        error(f"{e}")
-        sys.exit(1)
+        header.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        new_content = format_draft(header, body)
+        path.write_text(new_content, encoding="utf-8")
+        logger.info("Pushed successfully")
