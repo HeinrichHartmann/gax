@@ -74,18 +74,18 @@ Later this should be converted into an automated smoke test.
 
 ## Mail labels
 
-- [ ] `gax mail-label clone` -- creates `label.mail.gax.md` snapshot of current labels
+- [ ] `gax mail-label clone` -- creates `labels.mail.gax.md` snapshot
 - [ ] `gax mail-label plan <file>` -- shows plan with no changes
 
 ## Mail filters
 
-- [ ] `gax mail-filter clone` -- creates `filter.mail.gax.md` snapshot of current filters
+- [ ] `gax mail-filter clone` -- creates `filters.mail.gax.md` snapshot
 - [ ] `gax mail-filter plan <file>` -- shows plan with no changes
 
 ## Calendar
 
 - [ ] `gax cal calendars` -- lists calendars
-- [ ] `gax cal clone primary` -- creates `primary.cal.gax.md` with events
+- [ ] `gax cal clone primary` -- creates `calendar.cal.gax.md` with events
 
 ## Error handling
 

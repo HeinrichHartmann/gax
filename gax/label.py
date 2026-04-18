@@ -376,7 +376,7 @@ class Label(Resource):
         )
         content = format_labels_file(header, labels)
 
-        file_path = output or Path("mail-labels.gax.md")
+        file_path = output or Path("labels.mail.gax.md")
         if file_path.exists():
             raise ValueError(f"File already exists: {file_path}")
 

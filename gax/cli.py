@@ -1519,7 +1519,7 @@ def label_list():
     "-o",
     "--output",
     type=click.Path(path_type=Path),
-    help="Output file (default: mail-labels.gax.md)",
+    help="Output file (default: labels.mail.gax.md)",
 )
 @click.option("--all", "include_all", is_flag=True, help="Include system labels")
 def label_clone(output, include_all):
@@ -1637,7 +1637,7 @@ def filter_list():
     "-o",
     "--output",
     type=click.Path(path_type=Path),
-    help="Output file (default: mail-filters.gax.md)",
+    help="Output file (default: filters.mail.gax.md)",
 )
 def filter_clone(output):
     """Clone Gmail filters to a .gax.md file."""

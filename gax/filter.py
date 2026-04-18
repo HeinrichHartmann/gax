@@ -445,7 +445,7 @@ class Filter(Resource):
         )
         content = format_filters_file(header, filters)
 
-        file_path = output or Path("mail-filters.gax.md")
+        file_path = output or Path("filters.mail.gax.md")
         if file_path.exists():
             raise ValueError(f"File already exists: {file_path}")
 

@@ -233,7 +233,7 @@ COMMANDS
           -y, --yes: Skip confirmation
       gax mail-filter clone
           Clone Gmail filters to a .gax.md file.
-          -o, --output: Output file (default: mail-filters.gax.md)
+          -o, --output: Output file (default: filters.mail.gax.md)
       gax mail-filter list
           List Gmail filters (TSV output).
       gax mail-filter plan [FILE]
@@ -248,7 +248,7 @@ COMMANDS
           -y, --yes: Skip confirmation
       gax mail-label clone
           Clone Gmail labels to a .gax.md file.
-          -o, --output: Output file (default: mail-labels.gax.md)
+          -o, --output: Output file (default: labels.mail.gax.md)
           --all: Include system labels (read-only)
       gax mail-label list
           List Gmail labels (TSV output).
@@ -409,7 +409,7 @@ GAX requires OAuth 2.0 credentials from Google Cloud Platform to access your Goo
 #### 2. Enable Required APIs
 
 1. In the Google Cloud Console, go to **APIs & Services** → **Library**
-   
+
    [Go to API Library](https://console.cloud.google.com/apis/library)
 
 2. Search for and enable these APIs (click each, then click **ENABLE**):
@@ -424,7 +424,7 @@ GAX requires OAuth 2.0 credentials from Google Cloud Platform to access your Goo
 #### 3. Configure OAuth Consent Screen
 
 1. Go to **APIs & Services** → **OAuth consent screen**
-   
+
    [Go to OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)
 
 2. Choose **External** user type and click **CREATE**
@@ -451,7 +451,7 @@ GAX requires OAuth 2.0 credentials from Google Cloud Platform to access your Goo
 #### 4. Create OAuth Client ID
 
 1. Go to **APIs & Services** → **Credentials**
-   
+
    [Go to Credentials](https://console.cloud.google.com/apis/credentials)
 
 2. Click **CREATE CREDENTIALS** → **OAuth client ID**
