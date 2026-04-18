@@ -156,6 +156,51 @@ class Thread(Resource):
             old_count, new_count = _pull_single_file(path)
             logger.info(f"Messages: {old_count} -> {new_count}")
 
+    def diff(self, path: Path, **kw) -> str | None:
+        """Compare local file with remote thread.
+
+        Returns human-readable summary of differences, or None if unchanged.
+        For threads this means checking for new messages in the conversation.
+        """
+        content = path.read_text(encoding="utf-8")
+
+        match = re.search(r"^thread_id:\s*(\S+)", content, re.MULTILINE)
+        if not match:
+            raise ValueError(f"No thread_id found in {path}")
+        thread_id = match.group(1)
+
+        local_sections = multipart.parse_multipart(content)
+        remote_sections = pull_thread(thread_id)
+
+        local_count = len(local_sections)
+        remote_count = len(remote_sections)
+
+        lines: list[str] = []
+
+        if remote_count != local_count:
+            lines.append(f"Messages: {local_count} -> {remote_count}")
+
+        # Preview new messages
+        if remote_count > local_count:
+            lines.append("")
+            for section in remote_sections[local_count:]:
+                lines.append(f"  From: {section.from_addr}")
+                lines.append(f"  Date: {section.date}")
+                preview = section.content.strip()
+                if len(preview) > 200:
+                    preview = preview[:200] + "..."
+                lines.append(f"  {preview}")
+                lines.append("")
+
+        # Check for content changes in existing messages (rare for Gmail)
+        for i, (local_sec, remote_sec) in enumerate(
+            zip(local_sections, remote_sections)
+        ):
+            if local_sec.content.strip() != remote_sec.content.strip():
+                lines.append(f"Message {i + 1}: content changed")
+
+        return "\n".join(lines).rstrip() if lines else None
+
     def reply(self, file_or_url: str, output: Path | None = None) -> Path:
         """Create a reply draft from a thread file or URL. Returns path created."""
         file_path = Path(file_or_url)
