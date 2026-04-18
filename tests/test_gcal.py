@@ -104,7 +104,12 @@ class TestEventApiRoundTrip:
         assert body["summary"] == ""
 
     def test_no_conference(self):
-        api = {"id": "simple", "summary": "Meeting", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"}}
+        api = {
+            "id": "simple",
+            "summary": "Meeting",
+            "start": {"date": "2026-01-01"},
+            "end": {"date": "2026-01-02"},
+        }
         event = api_event_to_dataclass(api, "primary", "Primary")
         assert event.conference is None
 
@@ -115,7 +120,6 @@ class TestEventApiRoundTrip:
 
 
 class TestEventYamlRoundTrip:
-
     def test_round_trip(self):
         original = CalendarEvent(
             id="evt123",
@@ -130,7 +134,9 @@ class TestEventYamlRoundTrip:
             description="Daily sync",
             attendees=["alice@x.com"],
             status="confirmed",
-            conference=Conference(type="hangoutsMeet", uri="https://meet.google.com/abc"),
+            conference=Conference(
+                type="hangoutsMeet", uri="https://meet.google.com/abc"
+            ),
         )
 
         yaml_content = event_to_yaml(original)
@@ -150,8 +156,13 @@ class TestEventYamlRoundTrip:
 
     def test_minimal_event(self):
         event = CalendarEvent(
-            id="", calendar="primary", source="", synced="",
-            title="Minimal", start="2026-01-01", end="2026-01-02",
+            id="",
+            calendar="primary",
+            source="",
+            synced="",
+            title="Minimal",
+            start="2026-01-01",
+            end="2026-01-02",
             timezone="UTC",
         )
         yaml_content = event_to_yaml(event)
@@ -176,7 +187,6 @@ class TestEventYamlRoundTrip:
 
 
 class TestExtractEventId:
-
     def test_plain_id(self):
         event_id, cal_id = extract_event_id("evt123abc")
         assert event_id == "evt123abc"
@@ -186,7 +196,11 @@ class TestExtractEventId:
         # The URL contains base64-encoded "eventId calendarId"
         import base64
 
-        encoded = base64.urlsafe_b64encode(b"evt123 cal@group.calendar.google.com").decode().rstrip("=")
+        encoded = (
+            base64.urlsafe_b64encode(b"evt123 cal@group.calendar.google.com")
+            .decode()
+            .rstrip("=")
+        )
         url = f"https://calendar.google.com/calendar/event?eid={encoded}"
         event_id, cal_id = extract_event_id(url)
         assert event_id == "evt123"
@@ -199,7 +213,6 @@ class TestExtractEventId:
 
 
 class TestResolveTimeRange:
-
     def test_default_7_days(self):
         t_min, t_max = resolve_time_range(None, None, None)
         diff = t_max - t_min
@@ -235,7 +248,6 @@ class TestResolveTimeRange:
 
 
 class TestFormatFunctions:
-
     def _make_event(self, **overrides):
         event = {
             "summary": "Test Event",
@@ -267,11 +279,13 @@ class TestFormatFunctions:
         assert "Afternoon" in result
 
     def test_markdown_all_day(self):
-        events = [self._make_event(
-            summary="Holiday",
-            start={"date": "2026-03-20"},
-            end={"date": "2026-03-21"},
-        )]
+        events = [
+            self._make_event(
+                summary="Holiday",
+                start={"date": "2026-03-20"},
+                end={"date": "2026-03-21"},
+            )
+        ]
         result = format_events_markdown(events)
         assert "all-day" in result
         assert "Holiday" in result
@@ -296,15 +310,19 @@ class TestFormatFunctions:
         assert "Some notes" in result
 
     def test_rsvp_status(self):
-        event = self._make_event(attendees=[
-            {"email": "me@x.com", "self": True, "responseStatus": "declined"},
-        ])
+        event = self._make_event(
+            attendees=[
+                {"email": "me@x.com", "self": True, "responseStatus": "declined"},
+            ]
+        )
         assert _get_rsvp_status(event) == "declined"
 
     def test_rsvp_no_self(self):
-        event = self._make_event(attendees=[
-            {"email": "other@x.com", "responseStatus": "accepted"},
-        ])
+        event = self._make_event(
+            attendees=[
+                {"email": "other@x.com", "responseStatus": "accepted"},
+            ]
+        )
         assert _get_rsvp_status(event) == ""
 
     def test_rsvp_no_attendees(self):

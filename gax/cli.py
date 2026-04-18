@@ -42,7 +42,7 @@ from .mail import thread as mail_group, mailbox
 from .label import Label
 from .filter import Filter
 from .gcal import Cal
-from .form import form
+from .form import Form
 from .draft import Draft
 from .contacts import Contacts
 from .gdrive import file as gdrive_file
@@ -764,37 +764,11 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
                 return False, str(e)
 
         elif file_type == "gax/form":
-            from .form import (
-                parse_form_file,
-                get_form,
-                form_to_yaml,
-                form_to_markdown,
-                extract_form_id,
-            )
-
-            header = parse_form_file(file_path)
-            form_id = header.get("id")
-            if not form_id:
-                source = header.get("source", "")
-                if source:
-                    form_id = extract_form_id(source)
-                else:
-                    return False, "No form ID found"
-            source_url = header.get(
-                "source", f"https://docs.google.com/forms/d/{form_id}/edit"
-            )
-            content_type = header.get("content-type", "text/markdown")
-            form_data = get_form(form_id)
-            if content_type == "application/yaml":
-                content = form_to_yaml(form_data, source_url)
-            else:
-                content = form_to_markdown(form_data, source_url)
-            file_path.write_text(content, encoding="utf-8")
-            items = form_data.get("items", [])
-            questions = sum(
-                1 for i in items if "questionItem" in i or "questionGroupItem" in i
-            )
-            return True, f"{questions} questions"
+            try:
+                Form().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/contacts":
             try:
@@ -1078,7 +1052,7 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
 
     # Google Forms
     elif re.search(r"docs\.google\.com/forms/d/", url):
-        ctx.invoke(form.commands["clone"], url=url, output=output, fmt=fmt)
+        ctx.invoke(form_clone, url=url, output=output, fmt=fmt)
 
     # Gmail drafts (must come before general mail pattern)
     elif re.search(r"mail\.google\.com/mail/[^#]*#drafts/", url):
@@ -2433,7 +2407,9 @@ def cal_calendars_cmd():
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
 @click.option(
-    "--format", "-f", "fmt",
+    "--format",
+    "-f",
+    "fmt",
     type=click.Choice(["md", "tsv"]),
     default="md",
     help="Output format (default: md)",
@@ -2461,8 +2437,11 @@ def cal_list_cmd(
         gax cal list -f tsv           # TSV output
     """
     from .gcal import (
-        resolve_time_range, resolve_calendar_id,
-        list_events, format_events_tsv, format_events_markdown,
+        resolve_time_range,
+        resolve_calendar_id,
+        list_events,
+        format_events_tsv,
+        format_events_markdown,
     )
 
     try:
@@ -2475,9 +2454,7 @@ def cal_list_cmd(
         if fmt == "tsv":
             click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
         else:
-            click.echo(
-                format_events_markdown(events, include_desc=verbose), nl=False
-            )
+            click.echo(format_events_markdown(events, include_desc=verbose), nl=False)
     except ValueError as e:
         from .ui import error
 
@@ -2488,7 +2465,8 @@ def cal_list_cmd(
 @cal_group.command(name="clone")
 @click.argument("calendar", required=False)
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(path_type=Path),
     help="Output file (default: calendar.cal.gax.md)",
 )
@@ -2521,8 +2499,11 @@ def cal_clone_cmd(
         from .ui import success
 
         file_path = Cal().clone(
-            output=output, calendar=calendar,
-            days=days, date_from=date_from, date_to=date_to,
+            output=output,
+            calendar=calendar,
+            days=days,
+            date_from=date_from,
+            date_to=date_to,
             verbose=verbose,
         )
         success(f"Created: {file_path}")
@@ -2557,7 +2538,8 @@ def cal_pull_cmd(file: Path):
 @cal_group.command(name="checkout")
 @click.argument("calendar", required=False)
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     default="calendar.cal.gax.md.d",
     type=click.Path(path_type=Path),
     help="Output folder (default: calendar.cal.gax.md.d)",
@@ -2589,8 +2571,11 @@ def cal_checkout_cmd(
         from .ui import success
 
         cloned, skipped = Cal().checkout(
-            output=output, calendar=calendar,
-            days=days, date_from=date_from, date_to=date_to,
+            output=output,
+            calendar=calendar,
+            days=days,
+            date_from=date_from,
+            date_to=date_to,
         )
         success(f"Checked out: {cloned}, Skipped: {skipped} (already present)")
     except ValueError as e:
@@ -2611,16 +2596,19 @@ def cal_event_group():
 @click.option(
     "--cal", "-c", "calendar", default="primary", help="Calendar ID (default: primary)"
 )
-@click.option("-o", "--output", "output_path", type=click.Path(path_type=Path),
-              help="Output file path")
+@click.option(
+    "-o",
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    help="Output file path",
+)
 def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None):
     """Clone an event to a local .cal.gax.md file."""
     try:
         from .ui import success
 
-        file_path = Cal().event_clone(
-            id_or_url, calendar=calendar, output=output_path
-        )
+        file_path = Cal().event_clone(id_or_url, calendar=calendar, output=output_path)
         success(f"Cloned event to {file_path}")
     except ValueError as e:
         from .ui import error
@@ -2633,8 +2621,13 @@ def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None)
 @click.option(
     "--cal", "-c", "calendar", default="primary", help="Calendar ID (default: primary)"
 )
-@click.option("-o", "--output", "output_path", type=click.Path(path_type=Path),
-              help="Output file path")
+@click.option(
+    "-o",
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    help="Output file path",
+)
 def cal_event_new_cmd(calendar: str, output_path: Path | None):
     """Create a new event file (edit and push to create upstream)."""
     try:
@@ -2717,6 +2710,122 @@ def cal_event_delete_cmd(file_path: Path, yes: bool):
 
         title = Cal().event_delete(file_path)
         success(f"Deleted event '{title}'")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+# =============================================================================
+# Form commands
+# =============================================================================
+
+
+@docs.section("resource")
+@docs.maturity("unstable")
+@click.group()
+def form():
+    """Google Forms operations"""
+    pass
+
+
+@form.command("clone")
+@click.argument("url")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help="Output file (default: <title>.form.gax.md)",
+)
+@click.option(
+    "-f",
+    "--format",
+    "fmt",
+    type=click.Choice(["md", "yaml"]),
+    default="md",
+    help="Content format: md (readable, default) or yaml (round-trip safe)",
+)
+def form_clone(url, output, fmt):
+    """Clone a Google Form to a local .form.gax.md file.
+
+    By default, creates a human-readable markdown representation.
+    Use --format yaml for faithful round-trip representation (required for push).
+    """
+    try:
+        from .ui import success
+
+        file_path = Form().clone(url=url, output=output, format=fmt)
+        success(f"Created: {file_path}")
+        if fmt == "md":
+            click.echo("Note: Use --format yaml for round-trip safe format")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@form.command("pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def form_pull(file):
+    """Pull latest form definition from Google Forms."""
+    try:
+        from .ui import success
+
+        Form().pull(file)
+        success(f"Updated: {file}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@form.command("plan")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default="form.plan.yaml",
+    help="Output plan file",
+)
+def form_plan(file, output):
+    """Preview form changes (diff)."""
+    try:
+        diff_text = Form().diff(file)
+        if diff_text is None:
+            click.echo("No changes to apply.")
+            return
+        click.echo(diff_text)
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@form.command("apply")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def form_apply(file, yes):
+    """Apply form changes to Google Forms."""
+    try:
+        from .ui import success
+
+        f = Form()
+        diff_text = f.diff(file)
+        if diff_text is None:
+            click.echo("No changes to apply.")
+            return
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Apply these changes?"):
+                click.echo("Aborted.")
+                return
+        f.push(file)
+        success("Done.")
     except ValueError as e:
         from .ui import error
 

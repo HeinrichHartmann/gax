@@ -1219,3 +1219,115 @@ class TestLabelE2E:
 
         finally:
             _cleanup_test_labels()
+
+
+# =============================================================================
+# Form E2E Tests
+# =============================================================================
+
+
+def _get_test_form_id() -> str:
+    """Get test form ID from environment."""
+    form_id = os.environ.get("GAX_TEST_FORM")
+    if not form_id:
+        pytest.skip(
+            "GAX_TEST_FORM not set. Add to .envrc:\n"
+            '  export GAX_TEST_FORM="<your-test-form-id>"'
+        )
+    return form_id
+
+
+@pytest.mark.e2e
+class TestFormE2E:
+    """End-to-end tests for Google Forms operations."""
+
+    def test_clone_md(self, check_auth, temp_dir):
+        """Test: clone form as markdown -> verify content."""
+        form_id = _get_test_form_id()
+        form_url = f"https://docs.google.com/forms/d/{form_id}/edit"
+
+        output_file = temp_dir / "test.form.gax.md"
+        result = _run_gax("form", "clone", form_url, "-o", str(output_file))
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+        assert output_file.exists()
+
+        content = output_file.read_text()
+        assert "type: gax/form" in content
+        assert "content-type: text/markdown" in content
+        assert form_id in content
+
+    def test_clone_yaml(self, check_auth, temp_dir):
+        """Test: clone form as yaml -> verify round-trip format."""
+        form_id = _get_test_form_id()
+        form_url = f"https://docs.google.com/forms/d/{form_id}/edit"
+
+        output_file = temp_dir / "test.form.gax.md"
+        result = _run_gax(
+            "form", "clone", form_url, "-f", "yaml", "-o", str(output_file)
+        )
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+        assert output_file.exists()
+
+        content = output_file.read_text()
+        assert "content-type: application/yaml" in content
+        assert "items:" in content
+
+    def test_clone_pull_cycle(self, check_auth, temp_dir):
+        """Test: clone form -> pull -> verify content updated."""
+        form_id = _get_test_form_id()
+        form_url = f"https://docs.google.com/forms/d/{form_id}/edit"
+
+        output_file = temp_dir / "test.form.gax.md"
+        result = _run_gax(
+            "form", "clone", form_url, "-f", "yaml", "-o", str(output_file)
+        )
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        # Pull should succeed and update synced timestamp
+        result = _run_gax("form", "pull", str(output_file))
+        assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+        content = output_file.read_text()
+        assert "type: gax/form" in content
+        assert form_id in content
+
+    def test_plan_no_changes(self, check_auth, temp_dir):
+        """Test: clone yaml -> plan -> should report no changes."""
+        form_id = _get_test_form_id()
+        form_url = f"https://docs.google.com/forms/d/{form_id}/edit"
+
+        output_file = temp_dir / "test.form.gax.md"
+        result = _run_gax(
+            "form", "clone", form_url, "-f", "yaml", "-o", str(output_file)
+        )
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        # Plan should show no changes on freshly cloned form
+        result = _run_gax("form", "plan", str(output_file))
+        assert result.returncode == 0, f"Plan failed: {result.stderr}"
+        assert "no changes" in result.stdout.lower()
+
+    def test_unified_clone(self, check_auth, temp_dir):
+        """Test: unified clone command dispatches to form clone."""
+        form_id = _get_test_form_id()
+        form_url = f"https://docs.google.com/forms/d/{form_id}/edit"
+
+        output_file = temp_dir / "test.form.gax.md"
+        result = _run_gax("clone", form_url, "-o", str(output_file))
+        assert result.returncode == 0, f"Unified clone failed: {result.stderr}"
+        assert output_file.exists()
+
+        content = output_file.read_text()
+        assert "type: gax/form" in content
+
+    def test_unified_pull(self, check_auth, temp_dir):
+        """Test: unified pull command works on form files."""
+        form_id = _get_test_form_id()
+        form_url = f"https://docs.google.com/forms/d/{form_id}/edit"
+
+        output_file = temp_dir / "test.form.gax.md"
+        result = _run_gax("form", "clone", form_url, "-o", str(output_file))
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        result = _run_gax("pull", str(output_file))
+        assert result.returncode == 0, f"Unified pull failed: {result.stderr}"
