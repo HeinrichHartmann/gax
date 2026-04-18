@@ -540,10 +540,18 @@ def _push_file(
                 )
 
         elif file_type == "gax/draft":
-            from .draft import Draft as DraftResource
+            from .draft import Draft
 
             try:
-                DraftResource().push(file_path, yes=yes)
+                d = Draft()
+                diff_text = d.diff(file_path)
+                if diff_text is None:
+                    return True, "no changes"
+                if not yes:
+                    click.echo(diff_text)
+                    if not click.confirm("Push these changes?"):
+                        return False, "cancelled"
+                d.push(file_path)
                 return True, "pushed"
             except ValueError as e:
                 return False, str(e)

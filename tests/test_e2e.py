@@ -818,3 +818,71 @@ class TestNestedTabE2E:
         # Verify the change survived the round-trip
         pulled = (folder / "Design" / "Frontend.tab.gax.md").read_text()
         assert "Vue components" in pulled
+
+
+# =============================================================================
+# Draft E2E Tests
+# =============================================================================
+
+
+def _delete_draft(draft_id: str):
+    """Delete a draft via the Gmail API directly."""
+    creds = get_authenticated_credentials()
+    service = build("gmail", "v1", credentials=creds)
+    service.users().drafts().delete(userId="me", id=draft_id).execute()
+
+
+@pytest.mark.e2e
+class TestDraftE2E:
+    """End-to-end smoke tests for Gmail draft operations."""
+
+    def test_new_push_pull_cycle(self, check_auth, temp_dir):
+        """Test: new -> push -> modify -> push (diff) -> pull -> verify."""
+        draft_file = temp_dir / "test.draft.gax.md"
+
+        # Create new draft file
+        result = _run_gax(
+            "draft", "new",
+            "--to", "test@example.com",
+            "--subject", "gax e2e test draft",
+            "-o", str(draft_file),
+        )
+        assert result.returncode == 0, f"New failed: {result.stderr}"
+        assert draft_file.exists()
+
+        # Push to create in Gmail
+        result = _run_gax("push", str(draft_file), "-y")
+        assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+        # Verify draft_id was written back
+        content = draft_file.read_text()
+        assert "draft_id:" in content
+
+        # Extract draft_id for cleanup
+        from gax.draft import parse_draft
+        config, _ = parse_draft(content)
+        draft_id = config.draft_id
+        assert draft_id
+
+        try:
+            # Modify body
+            content = draft_file.read_text()
+            draft_file.write_text(content.rstrip() + "\nHello from e2e test.\n")
+
+            # Push update (with -y to skip confirm)
+            result = _run_gax("push", str(draft_file), "-y")
+            assert result.returncode == 0, f"Update push failed: {result.stderr}"
+
+            # Pull back
+            result = _run_gax("pull", str(draft_file))
+            assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+            pulled = draft_file.read_text()
+            assert "Hello from e2e test." in pulled
+
+            # Push with no changes should report no changes
+            result = _run_gax("push", str(draft_file))
+            assert "no changes" in result.stdout.lower() or result.returncode == 0
+
+        finally:
+            _delete_draft(draft_id)

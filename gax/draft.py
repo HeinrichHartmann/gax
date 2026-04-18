@@ -407,8 +407,53 @@ class Draft(ResourceItem):
         path.write_text(new_content, encoding="utf-8")
         logger.info(f"Subject: {remote_config.subject}, To: {remote_config.to}")
 
-    def push(self, path: Path, yes: bool = False, **kw) -> None:
-        """Push local draft to Gmail."""
+    def diff(self, path: Path, **kw) -> str | None:
+        """Preview changes between local draft and remote.
+
+        Returns a human-readable diff string, or None if no changes.
+        For new drafts (no draft_id), returns a summary of what will be created.
+        """
+        content = path.read_text(encoding="utf-8")
+        config, body = parse_draft(content)
+
+        if not config.to:
+            raise ValueError("'to' field is required")
+        if not config.subject:
+            raise ValueError("'subject' field is required")
+
+        if not config.draft_id:
+            return f"New draft: {config.subject}\nTo: {config.to}"
+
+        remote_config, remote_body = get_draft(config.draft_id)
+
+        lines = []
+
+        # Header changes
+        if config.to != remote_config.to:
+            lines.append(f"to: {remote_config.to} -> {config.to}")
+        if config.subject != remote_config.subject:
+            lines.append(f"subject: {remote_config.subject} -> {config.subject}")
+        if config.cc != remote_config.cc:
+            lines.append(f"cc: {remote_config.cc} -> {config.cc}")
+
+        # Body diff
+        body_diff = list(
+            difflib.unified_diff(
+                remote_body.splitlines(keepends=True),
+                body.splitlines(keepends=True),
+                fromfile="remote",
+                tofile="local",
+                lineterm="",
+            )
+        )
+        if body_diff:
+            lines.append("")
+            lines.extend(line.rstrip("\n") for line in body_diff)
+
+        return "\n".join(lines) if lines else None
+
+    def push(self, path: Path, **kw) -> None:
+        """Push local draft to Gmail. Unconditional — caller handles confirmation."""
         content = path.read_text(encoding="utf-8")
         config, body = parse_draft(content)
 
@@ -427,21 +472,15 @@ class Draft(ResourceItem):
             config.source = (
                 f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
             )
-            config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-            new_content = format_draft(config, body)
-            path.write_text(new_content, encoding="utf-8")
-            logger.info(f"Created draft: {config.draft_id}")
         else:
             # Update existing draft
-            remote_config, remote_body = get_draft(config.draft_id)
-
+            logger.info(f"Updating draft: {config.draft_id}")
             update_draft(config.draft_id, config, body)
 
-            config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            new_content = format_draft(config, body)
-            path.write_text(new_content, encoding="utf-8")
-            logger.info("Pushed successfully")
+        config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        new_content = format_draft(config, body)
+        path.write_text(new_content, encoding="utf-8")
+        logger.info("Pushed successfully")
 
 
 # =============================================================================
