@@ -64,9 +64,20 @@ MESSAGE_LIST_VISIBILITY = {
 }
 
 SYSTEM_LABELS = {
-    "INBOX", "SPAM", "TRASH", "UNREAD", "STARRED", "IMPORTANT",
-    "SENT", "DRAFT", "CHAT", "CATEGORY_PERSONAL", "CATEGORY_SOCIAL",
-    "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_FORUMS",
+    "INBOX",
+    "SPAM",
+    "TRASH",
+    "UNREAD",
+    "STARRED",
+    "IMPORTANT",
+    "SENT",
+    "DRAFT",
+    "CHAT",
+    "CATEGORY_PERSONAL",
+    "CATEGORY_SOCIAL",
+    "CATEGORY_PROMOTIONS",
+    "CATEGORY_UPDATES",
+    "CATEGORY_FORUMS",
 }
 
 
@@ -127,11 +138,13 @@ def format_labels_file(header: LabelHeader, labels: list[dict]) -> str:
         "# Rename: add 'rename_from: OldName'\n",
         "# Delete: remove from list, use --delete flag\n",
         "---\n",
-        yaml.dump(file_header, default_flow_style=False,
-                  allow_unicode=True, sort_keys=False),
+        yaml.dump(
+            file_header, default_flow_style=False, allow_unicode=True, sort_keys=False
+        ),
         "---\n",
-        yaml.dump(labels, default_flow_style=False,
-                  allow_unicode=True, sort_keys=False),
+        yaml.dump(
+            labels, default_flow_style=False, allow_unicode=True, sort_keys=False
+        ),
     ]
     return "".join(parts)
 
@@ -261,12 +274,14 @@ def compute_changes(
         if "rename_from" in desired:
             old_name = desired["rename_from"]
             if old_name in current_labels:
-                renames.append({
-                    "from": old_name,
-                    "to": name,
-                    "id": current_labels[old_name]["id"],
-                    "settings": desired,
-                })
+                renames.append(
+                    {
+                        "from": old_name,
+                        "to": name,
+                        "id": current_labels[old_name]["id"],
+                        "settings": desired,
+                    }
+                )
             elif name not in current_labels:
                 creates.append({"name": name, "settings": desired})
         elif name not in current_labels:
@@ -274,11 +289,13 @@ def compute_changes(
         else:
             current = current_labels[name]
             if needs_update(current, desired):
-                updates.append({
-                    "name": name,
-                    "id": current["id"],
-                    "settings": desired,
-                })
+                updates.append(
+                    {
+                        "name": name,
+                        "id": current["id"],
+                        "settings": desired,
+                    }
+                )
 
     if allow_delete:
         for name, current in current_labels.items():
@@ -343,8 +360,14 @@ class Label(Resource):
 
     name = "label"
 
-    def clone(self, url: str = "", output: Path | None = None, *,
-              include_all: bool = False, **kw) -> Path:
+    def clone(
+        self,
+        url: str = "",
+        output: Path | None = None,
+        *,
+        include_all: bool = False,
+        **kw,
+    ) -> Path:
         """Clone Gmail labels to a local file."""
         labels = self._fetch_normalized(include_all=include_all)
 
@@ -383,7 +406,9 @@ class Label(Resource):
 
         out.write("id\tname\ttype\n")
         for lbl in system + user:
-            out.write(f"{lbl.get('id', '')}\t{lbl.get('name', '')}\t{lbl.get('type', '')}\n")
+            out.write(
+                f"{lbl.get('id', '')}\t{lbl.get('name', '')}\t{lbl.get('type', '')}\n"
+            )
 
     def diff(self, path: Path, *, allow_delete: bool = False, **kw) -> str | None:
         """Preview changes between local labels file and Gmail."""
@@ -392,13 +417,17 @@ class Label(Resource):
         api_labels = fetch_labels()
         current_map = {lbl["name"]: lbl for lbl in api_labels}
 
-        changes = compute_changes(desired_labels, current_map, allow_delete=allow_delete)
+        changes = compute_changes(
+            desired_labels, current_map, allow_delete=allow_delete
+        )
 
         # Count skipped deletions
         skipped = 0
         if not allow_delete:
             desired_names = {lbl["name"] for lbl in desired_labels}
-            rename_sources = {lbl.get("rename_from") for lbl in desired_labels if "rename_from" in lbl}
+            rename_sources = {
+                lbl.get("rename_from") for lbl in desired_labels if "rename_from" in lbl
+            }
             for name, current in current_map.items():
                 if current.get("type") == "system":
                     continue
@@ -416,7 +445,9 @@ class Label(Resource):
         api_labels = fetch_labels(service=service)
         current_map = {lbl["name"]: lbl for lbl in api_labels}
 
-        changes = compute_changes(desired_labels, current_map, allow_delete=allow_delete)
+        changes = compute_changes(
+            desired_labels, current_map, allow_delete=allow_delete
+        )
 
         creates = changes["create"]
         renames = changes["rename"]
@@ -472,8 +503,7 @@ class Label(Resource):
         return labels
 
     def _create_with_parents(
-        self, service, name: str, settings: dict,
-        current_labels: dict, created: set
+        self, service, name: str, settings: dict, current_labels: dict, created: set
     ):
         """Create label, ensuring parent labels exist first."""
         if name in created or name in current_labels:
@@ -482,12 +512,15 @@ class Label(Resource):
         if "/" in name:
             parts = name.split("/")
             for i in range(len(parts) - 1):
-                parent = "/".join(parts[:i + 1])
+                parent = "/".join(parts[: i + 1])
                 if parent not in current_labels and parent not in created:
                     body = {"name": parent, "labelListVisibility": "labelShow"}
-                    result = service.users().labels().create(
-                        userId="me", body=body
-                    ).execute()
+                    result = (
+                        service.users()
+                        .labels()
+                        .create(userId="me", body=body)
+                        .execute()
+                    )
                     current_labels[parent] = result
                     created.add(parent)
                     logger.info(f"Created parent: {parent}")
