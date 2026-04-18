@@ -44,7 +44,7 @@ from .filter import filter_group as mail_filter
 from .gcal import cal_cli
 from .form import form
 from .draft import Draft
-from .contacts import contacts
+from .contacts import Contacts
 from .gdrive import file as gdrive_file
 
 
@@ -926,20 +926,11 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             return True, f"{questions} questions"
 
         elif file_type == "gax/contacts":
-            from .contacts import parse_contacts_file, list_contacts
-            from .contacts import contacts_to_jsonl, contacts_to_markdown, format_header
-
-            header = parse_contacts_file(file_path)
-            fmt = header.get("format", "md")
-            all_contacts, groups = list_contacts()
-            if fmt == "jsonl":
-                body = contacts_to_jsonl(all_contacts, groups)
-            else:
-                body = contacts_to_markdown(all_contacts, groups)
-            new_header = format_header(fmt, len(all_contacts))
-            content = f"{new_header}\n{body}\n"
-            file_path.write_text(content, encoding="utf-8")
-            return True, f"{len(all_contacts)} contacts"
+            try:
+                Contacts().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
 
         else:
             return False, f"Unsupported type: {file_type}"
@@ -2211,6 +2202,100 @@ def draft_pull(file):
 
         Draft().pull(file)
         success(f"Updated: {file}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+# =============================================================================
+# Contacts commands
+# =============================================================================
+
+
+@docs.section("resource")
+@click.group()
+def contacts():
+    """Google Contacts operations."""
+    pass
+
+
+@contacts.command("clone")
+@click.option(
+    "-f", "--format", "fmt",
+    type=click.Choice(["md", "jsonl"]),
+    default="md",
+    help="Output format: md (view-only) or jsonl (editable)",
+)
+@click.option(
+    "-o", "--output",
+    type=click.Path(path_type=Path),
+    help="Output file (default: contacts.<format>)",
+)
+def contacts_clone(fmt, output):
+    """Clone all contacts to a local file.
+
+    \b
+    Formats:
+      md     Human-readable markdown (default, view-only)
+      jsonl  JSON Lines format (editable, scriptable)
+    """
+    try:
+        from .ui import success
+
+        file_path = Contacts().clone(fmt=fmt, output=output)
+        success(f"Created: {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@contacts.command("pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def contacts_pull(file):
+    """Pull latest contacts from Google.
+
+    Updates the file with current contact data, preserving format.
+    """
+    try:
+        from .ui import success
+
+        Contacts().pull(file)
+        success(f"Updated: {file}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@contacts.command("push")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def contacts_push(file, yes):
+    """Push local JSONL contacts to Google.
+
+    Compares local contacts with remote, shows diff, and applies changes.
+    Only works with JSONL format files.
+    """
+    try:
+        from .ui import success
+
+        c = Contacts()
+        diff_text = c.diff(file)
+        if diff_text is None:
+            click.echo("No changes to push.")
+            return
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Push these changes?"):
+                click.echo("Aborted.")
+                return
+        c.push(file)
+        success("Pushed successfully.")
     except ValueError as e:
         from .ui import error
 

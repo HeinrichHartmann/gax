@@ -3,8 +3,9 @@ CLI Pattern Tests
 
 Validates that gax commands follow consistent design patterns:
 1. Readonly pattern: clone + pull
-2. Writable pattern: plan + apply
-3. Checkout pattern: checkout/fetch for multipart resources
+2. Writable pattern: push with -y/--yes flag (uses diff+confirm)
+3. Legacy writable: plan + apply (being phased out)
+4. Checkout pattern: checkout/fetch for multipart resources
 """
 
 import click
@@ -64,10 +65,15 @@ READONLY_RESOURCES = [
     "sheet",
 ]
 
-# Resources that follow plan + apply pattern
+# Resources that follow push pattern (diff + confirm + push)
+PUSH_RESOURCES = [
+    "draft",
+    "contacts",
+]
+
+# Resources that follow legacy plan + apply pattern
 WRITABLE_RESOURCES = [
     "mailbox",
-    "contacts",
     "mail-label",
     "mail-filter",
     "form",
@@ -126,7 +132,41 @@ class TestReadonlyPattern:
 
 
 # =============================================================================
-# Pattern 2: Writable (plan + apply)
+# Pattern 2a: Push (diff + confirm + push)
+# =============================================================================
+
+
+class TestPushPattern:
+    """Resources with push must have push command with -y/--yes flag."""
+
+    @pytest.mark.parametrize("resource", PUSH_RESOURCES)
+    def test_has_push_command(self, resource):
+        """Push resources must have push subcommand."""
+        cmd = get_command([resource])
+        assert cmd is not None, f"Resource '{resource}' not found"
+        assert isinstance(cmd, click.Group)
+        assert "push" in cmd.commands, f"'{resource}' missing 'push' subcommand"
+
+    @pytest.mark.parametrize("resource", PUSH_RESOURCES)
+    def test_push_has_file_argument(self, resource):
+        """Push must accept a file argument."""
+        cmd = get_command([resource])
+        push = cmd.commands["push"]
+        args = [p for p in push.params if isinstance(p, click.Argument)]
+        assert len(args) > 0, f"'{resource} push' missing file argument"
+
+    @pytest.mark.parametrize("resource", PUSH_RESOURCES)
+    def test_push_has_yes_flag(self, resource):
+        """Push must have -y/--yes flag to skip confirmation."""
+        cmd = get_command([resource])
+        push = cmd.commands["push"]
+        assert has_option(push, "yes", "-y", "--yes", is_flag=True), (
+            f"'{resource} push' missing -y/--yes flag"
+        )
+
+
+# =============================================================================
+# Pattern 2b: Writable (plan + apply) — legacy pattern
 # =============================================================================
 
 
