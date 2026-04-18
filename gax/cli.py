@@ -45,7 +45,7 @@ from .gcal import Cal
 from .form import Form
 from .draft import Draft
 from .contacts import Contacts
-from .gdrive import file as gdrive_file
+from .gdrive import File
 
 
 @click.group()
@@ -578,7 +578,7 @@ def _push_file(
 
         elif file_type == "gax/file":
             # This is a tracking file, find the actual file
-            from .gdrive import read_tracking_file, update_file, create_tracking_file
+            from .gdrive import read_tracking_file
 
             tracking_data = read_tracking_file(file_path)
             file_id = tracking_data.get("file_id")
@@ -589,7 +589,6 @@ def _push_file(
             # Find the actual file (tracking file without .gax.md suffix)
             actual_file = file_path.with_suffix("")
             if not actual_file.exists():
-                # Try removing the .gax.md to find base file
                 name = file_path.name
                 if name.endswith(".gax.md"):
                     base_name = name[:-7]  # Remove .gax.md
@@ -603,10 +602,8 @@ def _push_file(
                 if not click.confirm("Proceed?"):
                     return False, "cancelled"
 
-            metadata = update_file(file_id, actual_file)
-            create_tracking_file(actual_file, metadata)
-
-            return True, f"pushed to {metadata.get('webViewLink', file_id)}"
+            File().push(actual_file)
+            return True, "pushed to Drive"
 
         elif file_type == "gax/sheet":
             return (
@@ -940,23 +937,12 @@ def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
                 if not path.name.endswith(".gax.md"):
                     tracking_path = path.with_suffix(path.suffix + ".gax.md")
                     if tracking_path.exists():
-                        from .gdrive import (
-                            download_file,
-                            read_tracking_file,
-                            create_tracking_file,
-                        )
-
                         try:
-                            tracking_data = read_tracking_file(tracking_path)
-                            file_id = tracking_data.get("file_id")
-
-                            if file_id:
-                                logger.info(f"Pulling Drive file {path}")
-                                metadata = download_file(file_id, path)
-                                create_tracking_file(path, metadata)
-                                results.append((path, True, "updated"))
-                                op.advance()
-                                continue
+                            logger.info(f"Pulling Drive file {path}")
+                            File().pull(path)
+                            results.append((path, True, "updated"))
+                            op.advance()
+                            continue
                         except Exception as e:
                             results.append((path, False, str(e)))
                             op.advance()
@@ -1064,33 +1050,24 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
             if not path.name.endswith(".gax.md"):
                 tracking_path = path.with_suffix(path.suffix + ".gax.md")
                 if tracking_path.exists():
-                    # This is a tracked Drive file - push using the tracking file
-                    from .gdrive import (
-                        read_tracking_file,
-                        update_file,
-                        create_tracking_file,
-                    )
-
                     try:
-                        tracking_data = read_tracking_file(tracking_path)
-                        file_id = tracking_data.get("file_id")
+                        if not yes:
+                            from .gdrive import read_tracking_file
 
-                        if file_id:
-                            if not yes:
-                                click.echo(
-                                    f"Update Drive file: {tracking_data.get('name')}"
-                                )
-                                click.echo(f"From local file: {path}")
-                                if not click.confirm("Proceed?"):
-                                    click.echo("Cancelled.")
-                                    continue
+                            tracking_data = read_tracking_file(tracking_path)
+                            click.echo(
+                                f"Update Drive file: {tracking_data.get('name')}"
+                            )
+                            click.echo(f"From local file: {path}")
+                            if not click.confirm("Proceed?"):
+                                click.echo("Cancelled.")
+                                continue
 
-                            metadata = update_file(file_id, path)
-                            create_tracking_file(path, metadata)
+                        File().push(path)
 
-                            click.echo(f"Pushed {path} to Drive")
-                            success_count += 1
-                            continue
+                        click.echo(f"Pushed {path} to Drive")
+                        success_count += 1
+                        continue
                     except Exception as e:
                         click.echo(f"Error pushing Drive file {path}: {e}", err=True)
                         continue
@@ -2248,6 +2225,120 @@ def contacts_push(file, yes):
 
 
 # =============================================================================
+# File commands (Google Drive)
+# =============================================================================
+
+
+@docs.section("resource")
+@docs.maturity("unstable")
+@click.group("file")
+def file_group():
+    """Google Drive file operations."""
+    pass
+
+
+@file_group.command("clone")
+@click.argument("url_or_id")
+@click.option(
+    "-o", "--output", type=click.Path(path_type=Path), help="Output file path"
+)
+def file_clone(url_or_id, output):
+    """Clone a file from Google Drive.
+
+    Downloads the file and creates a tracking .gax.md file.
+
+    Examples:
+
+        gax file clone https://drive.google.com/file/d/abc123/view
+        gax file clone abc123 -o report.pdf
+    """
+    try:
+        from .ui import success
+
+        file_path = File().clone(url=url_or_id, output=output)
+        success(f"Created: {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@file_group.command("pull")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+def file_pull(file_path):
+    """Pull latest version of a file from Google Drive.
+
+    Requires a .gax.md tracking file (created by 'gax file clone').
+
+    Example:
+
+        gax file pull report.pdf
+    """
+    try:
+        from .ui import success
+
+        File().pull(file_path)
+        success(f"Updated: {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@file_group.command("push")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--public", is_flag=True, help="Make file publicly accessible")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def file_push(file_path, public, yes):
+    """Push local file to Google Drive.
+
+    If file has a .gax.md tracking file, updates existing file.
+    Otherwise, uploads as a new file.
+
+    Examples:
+
+        gax file push report.pdf
+        gax file push report.pdf --public
+        gax file push report.pdf -y
+    """
+    try:
+        from .ui import success
+
+        tracking_path = file_path.with_suffix(file_path.suffix + ".gax.md")
+
+        if tracking_path.exists():
+            from .gdrive import read_tracking_file
+
+            tracking_data = read_tracking_file(tracking_path)
+            if not yes:
+                click.echo(f"Will update Drive file: {tracking_data.get('name')}")
+                click.echo(f"Local file: {file_path}")
+                if public:
+                    click.echo("Will make publicly accessible")
+                if not click.confirm("Push these changes?"):
+                    click.echo("Aborted.")
+                    return
+        else:
+            if not yes:
+                click.echo(f"Will upload new file: {file_path.name}")
+                if public:
+                    click.echo("Will make publicly accessible")
+                if not click.confirm("Upload this file?"):
+                    click.echo("Aborted.")
+                    return
+
+        File().push(file_path, public=public)
+        success("Pushed successfully.")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+# =============================================================================
 # Label commands
 # =============================================================================
 
@@ -2934,7 +3025,7 @@ main.add_command(cal_group)
 main.add_command(form)
 main.add_command(draft)  # Flattened from mail.draft (ADR 020)
 main.add_command(contacts)
-main.add_command(gdrive_file, name="file")
+main.add_command(file_group, name="file")
 
 
 REPO = "HeinrichHartmann/gax"
