@@ -61,6 +61,17 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class TabInfo:
+    """Metadata for a single tab in a Google Doc."""
+
+    id: str
+    title: str
+    index: int
+    depth: int = 0
+    has_children: bool = False
+
+
+@dataclass
 class DocSection:
     """A section of a Google Doc."""
 
@@ -71,6 +82,9 @@ class DocSection:
     section_title: str  # Title of this section/tab
     content: str  # Markdown content
     section_type: Optional[str] = None  # 'comments' for comment sections
+    tab_depth: int = 0  # 0 = top-level, 1 = child, etc.
+    tab_has_children: bool = False  # True if tab has child tabs
+    tab_id: str = ""  # Google Docs tabId
 
 
 @dataclass
@@ -188,6 +202,29 @@ def _tab_content_to_markdown(doc: dict, tab: dict) -> str:
     return md
 
 
+def _flatten_tabs(
+    tabs: list[dict], depth: int = 0
+) -> list[tuple[dict, TabInfo]]:
+    """Recursively flatten a nested tabs structure from the Docs API.
+
+    Returns list of (raw_tab_dict, TabInfo) pairs in document order.
+    """
+    result = []
+    for tab in tabs:
+        props = tab.get("tabProperties", {})
+        children = tab.get("childTabs", [])
+        info = TabInfo(
+            id=props.get("tabId", ""),
+            title=props.get("title", "Tab"),
+            index=0,  # assigned by caller after flattening
+            depth=depth,
+            has_children=bool(children),
+        )
+        result.append((tab, info))
+        result.extend(_flatten_tabs(children, depth + 1))
+    return result
+
+
 def pull_doc(
     document_id: str,
     source_url: str,
@@ -206,19 +243,21 @@ def pull_doc(
         num_retries=num_retries,
     )
     doc_title = doc.get("title", "Untitled")
-    raw_tabs = doc.get("tabs", [])
+    flat = _flatten_tabs(doc.get("tabs", []))
 
-    if not raw_tabs:
+    if not flat:
         return []
+
+    # Assign sequential indices
+    for i, (_tab, info) in enumerate(flat):
+        info.index = i
 
     time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     sections = []
 
-    with operation("Processing tabs", total=len(raw_tabs)) as op:
-        for i, tab in enumerate(raw_tabs, start=1):
-            props = tab.get("tabProperties", {})
-            tab_title = props.get("title", f"Tab {i}")
-            logger.info(f"Processing tab: {tab_title}")
+    with operation("Processing tabs", total=len(flat)) as op:
+        for i, (tab, info) in enumerate(flat, start=1):
+            logger.info(f"Processing tab: {info.title}")
 
             content = _tab_content_to_markdown(doc, tab)
 
@@ -228,8 +267,11 @@ def pull_doc(
                     source=source_url,
                     time=time_str,
                     section=i,
-                    section_title=tab_title,
+                    section_title=info.title,
                     content=content,
+                    tab_depth=info.depth,
+                    tab_has_children=info.has_children,
+                    tab_id=info.id,
                 )
             )
             op.advance()
@@ -247,7 +289,9 @@ def pull_single_tab(
 ) -> DocSection:
     """Pull a single tab from a document.
 
-    Reads directly from the Docs API JSON.
+    Searches recursively through nested tabs.
+    Supports both simple name ("Details") and path-qualified ("Overview/Details").
+    Raises ValueError if ambiguous or not found.
     """
     doc = _fetch_doc(
         document_id,
@@ -255,23 +299,42 @@ def pull_single_tab(
         num_retries=num_retries,
     )
     doc_title = doc.get("title", "Untitled")
+    flat = _flatten_tabs(doc.get("tabs", []))
 
-    # Find the tab by name
-    for tab in doc.get("tabs", []):
-        props = tab.get("tabProperties", {})
-        if props.get("title") == tab_name:
-            content = _tab_content_to_markdown(doc, tab)
-            time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            return DocSection(
-                title=doc_title,
-                source=source_url,
-                time=time_str,
-                section=1,
-                section_title=tab_name,
-                content=content,
-            )
+    # Build path for each tab (e.g. "Overview/Details")
+    matches = []
+    ancestor_stack: list[str] = []
+    for tab, info in flat:
+        ancestor_stack = ancestor_stack[: info.depth]
+        ancestor_stack.append(info.title)
+        tab_path = "/".join(ancestor_stack)
 
-    raise ValueError(f"Tab not found: {tab_name}")
+        if tab_name == info.title or tab_name == tab_path:
+            matches.append((tab, info, tab_path))
+
+    if not matches:
+        raise ValueError(f"Tab not found: {tab_name}")
+    if len(matches) > 1:
+        paths = [m[2] for m in matches]
+        raise ValueError(
+            f"Ambiguous tab name '{tab_name}'. "
+            f"Use full path: {', '.join(paths)}"
+        )
+
+    tab, info, _path = matches[0]
+    content = _tab_content_to_markdown(doc, tab)
+    time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return DocSection(
+        title=doc_title,
+        source=source_url,
+        time=time_str,
+        section=1,
+        section_title=info.title,
+        content=content,
+        tab_depth=info.depth,
+        tab_has_children=info.has_children,
+        tab_id=info.id,
+    )
 
 
 # =============================================================================
@@ -280,10 +343,10 @@ def pull_single_tab(
 
 
 def get_tabs_list(document_id: str, *, service=None) -> dict:
-    """Get document title and list of tabs.
+    """Get document title and list of tabs (including nested).
 
     Returns:
-        Dict with 'title' and 'tabs' (list of {id, title, index})
+        Dict with 'title' and 'tabs' (list of TabInfo)
     """
     if service is None:
         creds = get_authenticated_credentials()
@@ -296,22 +359,16 @@ def get_tabs_list(document_id: str, *, service=None) -> dict:
     )
 
     doc_title = document.get("title", "Untitled")
-    raw_tabs = document.get("tabs", [])
+    flat = _flatten_tabs(document.get("tabs", []))
 
     tabs = []
-    for i, t in enumerate(raw_tabs):
-        props = t.get("tabProperties", {})
-        tabs.append(
-            {
-                "id": props.get("tabId", ""),
-                "title": props.get("title", f"Tab {i}"),
-                "index": i,
-            }
-        )
+    for i, (_tab, info) in enumerate(flat):
+        info.index = i
+        tabs.append(info)
 
     # If no tabs, document itself is the only "tab"
     if not tabs:
-        tabs = [{"id": "", "title": doc_title, "index": 0}]
+        tabs = [TabInfo(id="", title=doc_title, index=0)]
 
     return {"title": doc_title, "tabs": tabs}
 
@@ -832,6 +889,84 @@ def _parse_tab_file(path: Path) -> DocSection:
     return sections[0]
 
 
+def _compute_tab_paths(
+    sections: list[DocSection], folder: Path
+) -> list[Path]:
+    """Compute filesystem paths for sections based on tab nesting.
+
+    A tab with children gets a subdirectory; its content goes inside.
+    A leaf tab is a file in its parent's directory.
+
+    Example layout:
+        folder/
+          Overview.doc.gax.md                    # leaf tab
+          Design/Design.doc.gax.md               # parent tab content
+          Design/Frontend.doc.gax.md             # child tab (leaf)
+          Design/Backend/Backend.doc.gax.md      # nested parent
+          Design/Backend/API.doc.gax.md           # grandchild
+    """
+    ancestor_stack: list[str] = []  # safe names at each depth
+    paths = []
+
+    for section in sections:
+        if section.section_type == "comments":
+            paths.append(Path(""))  # placeholder — skipped later
+            continue
+
+        safe = _safe_filename(section.section_title)
+        depth = section.tab_depth
+
+        # Trim ancestor stack to current depth
+        ancestor_stack = ancestor_stack[:depth]
+
+        if section.tab_has_children:
+            # Parent tab: create subdir, content lives inside
+            rel = Path(*ancestor_stack, safe) if ancestor_stack else Path(safe)
+            file_path = folder / rel / f"{safe}.doc.gax.md"
+            ancestor_stack.append(safe)
+        else:
+            # Leaf tab: file in current ancestor directory
+            if ancestor_stack:
+                file_path = folder / Path(*ancestor_stack) / f"{safe}.doc.gax.md"
+            else:
+                file_path = folder / f"{safe}.doc.gax.md"
+
+        paths.append(file_path)
+
+    return paths
+
+
+def _walk_tab_files(folder: Path) -> list[Path]:
+    """Recursively find all .doc.gax.md tab files in a checkout folder."""
+    return sorted(folder.rglob("*.doc.gax.md"))
+
+
+def _read_checkout_metadata(path: Path) -> dict:
+    """Read and validate .gax.yaml metadata from a checkout folder."""
+    metadata_path = path / ".gax.yaml"
+    if not metadata_path.exists():
+        raise ValueError(f"No .gax.yaml found in {path}")
+
+    with open(metadata_path) as f:
+        metadata = yaml.safe_load(f)
+
+    if not metadata.get("document_id") or not metadata.get("url"):
+        raise ValueError("No document_id or url in .gax.yaml")
+
+    return metadata
+
+
+def _known_tab_files(path: Path, metadata: dict) -> list[Path]:
+    """Return tab file paths listed in .gax.yaml metadata.
+
+    Falls back to recursive glob if no tabs list is present (legacy checkouts).
+    """
+    tabs = metadata.get("tabs")
+    if not tabs:
+        return _walk_tab_files(path)
+    return [path / entry["path"] for entry in tabs if (path / entry["path"]).exists()]
+
+
 # =============================================================================
 # Tab(Resource) — single tab, single file
 # =============================================================================
@@ -863,13 +998,12 @@ class Tab(Resource):
             # Clone first tab via full document fetch
             doc = _fetch_doc(document_id)
             doc_title = doc.get("title", "Untitled")
-            raw_tabs = doc.get("tabs", [])
+            flat = _flatten_tabs(doc.get("tabs", []))
 
-            if not raw_tabs:
+            if not flat:
                 raise ValueError("Document has no tabs")
 
-            first_tab = raw_tabs[0]
-            first_title = first_tab.get("tabProperties", {}).get("title", "Document")
+            first_tab, first_info = flat[0]
             content = _tab_content_to_markdown(doc, first_tab)
 
             time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -878,9 +1012,20 @@ class Tab(Resource):
                 source=source_url,
                 time=time_str,
                 section=1,
-                section_title=first_title,
+                section_title=first_info.title,
                 content=content,
+                tab_depth=first_info.depth,
+                tab_has_children=first_info.has_children,
+                tab_id=first_info.id,
             )
+
+            # Warn about nested tabs
+            has_nested = any(info.depth > 0 for _tab, info in flat)
+            if not kw.get("quiet") and has_nested:
+                logger.warning(
+                    "Document has nested tabs. "
+                    "Use 'gax doc checkout' for full structure."
+                )
 
         if with_comments:
             sections = _add_comments_to_sections([section], document_id)
@@ -1008,7 +1153,7 @@ class Doc(Resource):
     name = "doc"
 
     def clone(self, url: str, output: Path | None = None, **kw) -> Path:
-        """Clone all tabs into a folder."""
+        """Clone all tabs into a folder (supports nested tabs)."""
         document_id = extract_doc_id(url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
@@ -1027,13 +1172,30 @@ class Doc(Resource):
 
         folder.mkdir(parents=True, exist_ok=True)
 
-        # Write .gax.yaml metadata
+        # Compute filesystem paths based on tab nesting
+        tab_paths = _compute_tab_paths(sections, folder)
+
+        # Build tab tree for .gax.yaml metadata
+        tab_tree = []
+        for section, fpath in zip(sections, tab_paths):
+            if section.section_type == "comments":
+                continue
+            tab_tree.append(
+                {
+                    "id": section.tab_id,
+                    "title": section.section_title,
+                    "path": str(fpath.relative_to(folder)),
+                    "depth": section.tab_depth,
+                }
+            )
+
         metadata = {
             "type": "gax/doc-checkout",
             "document_id": document_id,
             "url": source_url,
             "title": title,
             "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "tabs": tab_tree,
         }
         metadata_path = folder / ".gax.yaml"
         with open(metadata_path, "w") as f:
@@ -1048,46 +1210,57 @@ class Doc(Resource):
         created = 0
         skipped = 0
 
-        for section in sections:
+        for section, file_path in zip(sections, tab_paths):
             if section.section_type == "comments":
                 continue
-
-            file_path = folder / f"{_safe_filename(section.section_title)}.doc.gax.md"
 
             if file_path.exists():
                 skipped += 1
                 continue
 
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             content = format_section(section)
             file_path.write_text(content, encoding="utf-8")
-            logger.info(f"Created: {file_path.name}")
+            logger.info(f"Created: {file_path.relative_to(folder)}")
             created += 1
 
         logger.info(f"Checked out: {created}, Skipped: {skipped}")
         return folder
 
     def pull(self, path: Path, **kw) -> None:
-        """Pull all tabs in a checkout folder."""
+        """Pull all tabs in a checkout folder (supports nested tabs)."""
+        metadata = _read_checkout_metadata(path)
         metadata_path = path / ".gax.yaml"
-        if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
 
-        with open(metadata_path) as f:
-            metadata = yaml.safe_load(f)
-
-        document_id = metadata.get("document_id")
-        url = metadata.get("url")
-        if not document_id or not url:
-            raise ValueError("No document_id or url in .gax.yaml")
+        document_id = metadata["document_id"]
+        url = metadata["url"]
 
         logger.info(f"Pulling: {document_id}")
         sections = pull_doc(document_id, url)
+
+        # Compute filesystem paths based on tab nesting
+        tab_paths = _compute_tab_paths(sections, path)
+
+        # Build tab tree for metadata
+        tab_tree = []
+        for section, fpath in zip(sections, tab_paths):
+            if section.section_type == "comments":
+                continue
+            tab_tree.append(
+                {
+                    "id": section.tab_id,
+                    "title": section.section_title,
+                    "path": str(fpath.relative_to(path)),
+                    "depth": section.tab_depth,
+                }
+            )
 
         # Update metadata
         metadata["checked_out"] = datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
         metadata["title"] = sections[0].title if sections else metadata.get("title", "")
+        metadata["tabs"] = tab_tree
         with open(metadata_path, "w") as f:
             yaml.dump(
                 metadata,
@@ -1098,52 +1271,39 @@ class Doc(Resource):
             )
 
         # Write tab files
-        for section in sections:
+        for section, file_path in zip(sections, tab_paths):
             if section.section_type == "comments":
                 continue
 
-            file_path = path / f"{_safe_filename(section.section_title)}.doc.gax.md"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             content = format_section(section)
             file_path.write_text(content, encoding="utf-8")
-            logger.info(f"Updated: {file_path.name}")
+            logger.info(f"Updated: {file_path.relative_to(path)}")
 
     def diff(self, path: Path, **kw) -> str | None:
         """Diff all tabs in a checkout folder against remote."""
-        metadata_path = path / ".gax.yaml"
-        if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
-
-        with open(metadata_path) as f:
-            metadata = yaml.safe_load(f)
-
-        document_id = metadata.get("document_id")
-        url = metadata.get("url")
-        if not document_id or not url:
-            raise ValueError("No document_id or url in .gax.yaml")
+        metadata = _read_checkout_metadata(path)
 
         all_diffs = []
         tab = Tab()
 
-        # Diff each tab file in the folder
-        for tab_file in sorted(path.glob("*.doc.gax.md")):
+        for tab_file in _known_tab_files(path, metadata):
             tab_diff = tab.diff(tab_file)
             if tab_diff:
-                all_diffs.append(f"--- {tab_file.name} ---")
+                all_diffs.append(f"--- {tab_file.relative_to(path)} ---")
                 all_diffs.append(tab_diff)
 
         return "\n".join(all_diffs) if all_diffs else None
 
     def push(self, path: Path, **kw) -> None:
         """Push all changed tabs in a checkout folder."""
-        metadata_path = path / ".gax.yaml"
-        if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
+        metadata = _read_checkout_metadata(path)
 
         tab = Tab()
 
-        for tab_file in sorted(path.glob("*.doc.gax.md")):
+        for tab_file in _known_tab_files(path, metadata):
             if tab.diff(tab_file) is not None:
-                logger.info(f"Pushing: {tab_file.name}")
+                logger.info(f"Pushing: {tab_file.relative_to(path)}")
                 tab.push(tab_file, **kw)
 
     # Non-standard operations
@@ -1156,7 +1316,8 @@ class Doc(Resource):
         out.write(f"# {info['title']}\n")
         out.write("index\tid\ttitle\n")
         for t in info["tabs"]:
-            out.write(f"{t['index']}\t{t['id']}\t{t['title']}\n")
+            indent = "  " * t.depth
+            out.write(f"{t.index}\t{t.id}\t{indent}{t.title}\n")
 
     def tab_import(self, url: str, file: Path, output: Path | None = None) -> Path:
         """Import a markdown file as a new tab in a document.
