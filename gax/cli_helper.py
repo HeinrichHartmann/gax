@@ -6,15 +6,12 @@ commands (pull, push, diff) and will shrink as each resource takes
 ownership of its own dispatch.
 """
 
-import re
 import click
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .multipart import parse_multipart
-from .gsheet import pull as gsheet_pull, push as gsheet_push, pull_all
-from .gsheet.frontmatter import parse_content, SheetConfig, format_content
-from .formats import get_format
+from .gsheet import pull_all
+from .gsheet.frontmatter import parse_content
 from .label import Label
 from .filter import Filter
 from .gcal import Cal
@@ -159,59 +156,9 @@ def _pull_folder(
                 return False, "No URL in .gax.yaml"
             fmt = metadata.get("format", "md")
 
-            # Import sheet checkout logic
-            spreadsheet_id = metadata.get("spreadsheet_id")
-            if not spreadsheet_id:
-                return False, "No spreadsheet_id in .gax.yaml"
+            from .gsheet import Sheet
 
-            # Run checkout to scratch dir
-            from .gsheet.client import GSheetClient
-
-            client = GSheetClient()
-            info = client.get_spreadsheet_info(spreadsheet_id)
-            tabs = info["tabs"]
-
-            scratch_path.mkdir(parents=True, exist_ok=True)
-
-            # Write metadata
-            new_metadata = {
-                "type": "gax/sheet-checkout",
-                "spreadsheet_id": spreadsheet_id,
-                "url": url,
-                "title": info["title"],
-                "format": fmt,
-                "checked_out": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
-            }
-            with open(scratch_path / ".gax.yaml", "w") as f:
-                yaml.dump(
-                    new_metadata,
-                    f,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    sort_keys=False,
-                )
-
-            # Create tab files
-            for tab_info in tabs:
-                tab_name = tab_info["title"]
-                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
-                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-                file_name = f"{safe_tab_name}.tab.sheet.gax.md"
-
-                df = client.read(spreadsheet_id, tab_name)
-                formatter = get_format(fmt)
-                data = formatter.write(df)
-
-                config = SheetConfig(
-                    spreadsheet_id=spreadsheet_id,
-                    tab=tab_name,
-                    format=fmt,
-                    url=url,
-                )
-                content = format_content(config, data)
-                (scratch_path / file_name).write_text(content, encoding="utf-8")
+            Sheet().clone(url, output=scratch_path, fmt=fmt)
 
         elif checkout_type == "gax/doc-checkout":
             url = metadata.get("url")
@@ -375,22 +322,27 @@ def _push_file(
 
     try:
         if file_type == "gax/sheet-tab":
-            # Push single sheet tab
-            from .gsheet.frontmatter import parse_file
-            from .formats import get_format as get_fmt
+            try:
+                from .gsheet import SheetTab
+                from .gsheet.frontmatter import parse_file
+                from .formats import get_format as get_fmt
 
-            config, data = parse_file(file_path)
-            fmt = get_fmt(config.format)
-            df = fmt.read(data)
-            row_count = len(df)
+                config, data = parse_file(file_path)
+                fmt = get_fmt(config.format)
+                df = fmt.read(data)
+                row_count = len(df)
 
-            if not yes:
-                click.echo(f"Push {row_count} rows from {file_path} to {config.tab}?")
-                if not click.confirm("Proceed?"):
-                    return False, "cancelled"
+                if not yes:
+                    click.echo(
+                        f"Push {row_count} rows from {file_path} to {config.tab}?"
+                    )
+                    if not click.confirm("Proceed?"):
+                        return False, "cancelled"
 
-            rows = gsheet_push(file_path, with_formulas=with_formulas)
-            return True, f"pushed {rows} rows"
+                SheetTab().push(file_path, with_formulas=with_formulas)
+                return True, f"pushed {row_count} rows"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/doc":
             try:
@@ -512,12 +464,18 @@ def _push_folder(
 
     try:
         if checkout_type == "gax/sheet-checkout":
-            from .gsheet.folder_push import push_folder
+            from .gsheet import Sheet
 
-            success_result, message = push_folder(
-                folder_path, with_formulas=with_formulas, auto_approve=yes
-            )
-            return success_result, message
+            s = Sheet()
+            diff_text = s.diff(folder_path)
+            if diff_text is None:
+                return True, "no changes"
+            if not yes:
+                click.echo("\n" + diff_text)
+                if not click.confirm("\nPush these changes?"):
+                    return False, "cancelled"
+            s.push(folder_path, with_formulas=with_formulas)
+            return True, "pushed"
 
         elif checkout_type == "gax/doc-checkout":
             return (
@@ -564,12 +522,20 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
                 return False, str(e)
 
         elif file_type == "gax/sheet":
-            rows = pull_all(file_path)
-            return True, f"{rows} rows"
+            try:
+                rows = pull_all(file_path)
+                return True, f"{rows} rows"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/sheet-tab":
-            rows = gsheet_pull(file_path)
-            return True, f"{rows} rows"
+            try:
+                from .gsheet import SheetTab
+
+                SheetTab().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/mail":
             try:

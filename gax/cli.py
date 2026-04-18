@@ -27,14 +27,9 @@ import glob
 import re
 import sys
 import click
-from datetime import datetime, timezone
 from pathlib import Path
 
-from .gsheet import pull as gsheet_pull, push as gsheet_push, pull_all
-from .gsheet.client import GSheetClient
-from .multipart import Section, format_section
-from .gsheet.frontmatter import SheetConfig, format_content
-from .formats import get_format
+from .gsheet import pull_all
 from . import auth
 from . import docs
 from .mail import Thread, Mailbox
@@ -493,6 +488,17 @@ def _extract_spreadsheet_id(url: str) -> str:
     raise ValueError(f"Could not parse spreadsheet ID from: {url}")
 
 
+def _find_sheet_folder() -> Path:
+    """Find a .sheet.gax.md.d folder in the current directory."""
+    candidates = list(Path.cwd().glob("*.sheet.gax.md.d"))
+    if len(candidates) == 0:
+        raise ValueError("No .sheet.gax.md.d folder found in current directory")
+    elif len(candidates) > 1:
+        names = ", ".join(c.name for c in candidates)
+        raise ValueError(f"Multiple .sheet.gax.md.d folders found: {names}")
+    return candidates[0]
+
+
 @docs.section("resource")
 @main.group()
 def sheet():
@@ -526,57 +532,22 @@ def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
 
     For all tabs, use 'gax sheet checkout'.
     """
+    from .gsheet import SheetTab, _extract_spreadsheet_id
+    from .gsheet.client import GSheetClient
+
     try:
-        spreadsheet_id = _extract_spreadsheet_id(url)
-        click.echo(f"Fetching spreadsheet: {spreadsheet_id}")
-
-        client = GSheetClient()
-        info = client.get_spreadsheet_info(spreadsheet_id)
-        title = info["title"]
-        all_tabs = info["tabs"]
-        first_tab = all_tabs[0]
-
-        # Fetch only the first tab
-        formatter = get_format(fmt)
-        df = client.read(spreadsheet_id, first_tab["title"])
-        data = formatter.write(df)
-
-        from .formats import get_content_type
-
-        section = Section(
-            headers={
-                "type": "gax/sheet",
-                "title": title,
-                "source": url,
-                "tab": first_tab["title"],
-                "content-type": get_content_type(fmt),
-            },
-            content=data,
-        )
-
-        if output:
-            file_path = output
-        else:
-            safe_name = re.sub(r'[<>:"/\\|?*]', "-", title)
-            safe_name = re.sub(r"\s+", "_", safe_name)
-            file_path = Path(f"{safe_name}.sheet.gax.md")
-
-        if file_path.exists():
-            click.echo(f"Error: File already exists: {file_path}", err=True)
-            sys.exit(1)
-
-        content = format_section(section.headers, section.content)
-        file_path.write_text(content, encoding="utf-8")
-
-        rows = len(data.strip().split("\n")) - 1
+        file_path = SheetTab().clone(url, output=output, fmt=fmt)
         click.echo(f"Created: {file_path}")
-        click.echo(f"Rows: {rows}")
 
-        if not quiet and len(all_tabs) > 1:
-            click.echo(
-                f'  Tab "{first_tab["title"]}" cloned (1 of {len(all_tabs)} tabs).\n'
-                f"  For all tabs: gax sheet checkout {url}"
-            )
+        if not quiet:
+            spreadsheet_id = _extract_spreadsheet_id(url)
+            info = GSheetClient().get_spreadsheet_info(spreadsheet_id)
+            if len(info["tabs"]) > 1:
+                first_tab = info["tabs"][0]["title"]
+                click.echo(
+                    f'  Tab "{first_tab}" cloned (1 of {len(info["tabs"])} tabs).\n'
+                    f"  For all tabs: gax sheet checkout {url}"
+                )
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -591,12 +562,10 @@ def sheet_pull(file: Path):
 
     try:
         if file.is_dir():
-            ok, message = _pull_folder(file)
-            if ok:
-                ui_success(message)
-            else:
-                click.echo(f"Error: {message}", err=True)
-                sys.exit(1)
+            from .gsheet import Sheet
+
+            Sheet().pull(file)
+            ui_success(f"Pulled: {file}")
         else:
             rows = pull_all(file)
             ui_success(f"Pulled {rows} rows to {file}")
@@ -632,101 +601,13 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
         gax sheet checkout <url> -o MyBudget/
         gax sheet checkout <url> -f csv
     """
+    from .gsheet import Sheet
+
     try:
-        spreadsheet_id = _extract_spreadsheet_id(url)
-        client = GSheetClient()
-        info = client.get_spreadsheet_info(spreadsheet_id)
+        from .ui import success as ui_success
 
-        title = info["title"]
-        tabs = info["tabs"]
-
-        # Determine output folder
-        if output:
-            folder = output
-        else:
-            safe_name = re.sub(r'[<>:"/\\|?*]', "-", title)
-            safe_name = re.sub(r"\s+", "_", safe_name)
-            folder = Path(f"{safe_name}.sheet.gax.md.d")
-
-        # Create folder
-        folder.mkdir(parents=True, exist_ok=True)
-
-        # Write .gax.yaml metadata file
-        import yaml
-
-        metadata = {
-            "type": "gax/sheet-checkout",
-            "spreadsheet_id": spreadsheet_id,
-            "url": url,
-            "title": title,
-            "format": fmt,
-            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        metadata_path = folder / ".gax.yaml"
-        with open(metadata_path, "w") as f:
-            yaml.dump(
-                metadata,
-                f,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False,
-            )
-
-        import logging
-        from .ui import operation, success as ui_success
-
-        _logger = logging.getLogger(__name__)
-
-        click.echo(f"Checking out {len(tabs)} tabs to {folder}/")
-
-        created = 0
-        skipped = 0
-
-        with operation("Checking out tabs", total=len(tabs)) as op:
-            for tab_info in tabs:
-                tab_name = tab_info["title"]
-
-                # Generate filename
-                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
-                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
-                file_path = folder / f"{safe_tab_name}.tab.sheet.gax.md"
-
-                # Skip if exists
-                if file_path.exists():
-                    skipped += 1
-                    op.advance()
-                    continue
-
-                try:
-                    _logger.info(f"Fetching tab: {tab_name}")
-                    # Read tab data
-                    df = client.read(spreadsheet_id, tab_name)
-
-                    # Format data
-                    formatter = get_format(fmt)
-                    data = formatter.write(df)
-
-                    # Create config
-                    config = SheetConfig(
-                        spreadsheet_id=spreadsheet_id,
-                        tab=tab_name,
-                        format=fmt,
-                        url=url,
-                    )
-
-                    # Write file
-                    content = format_content(config, data)
-                    file_path.write_text(content, encoding="utf-8")
-
-                    created += 1
-
-                except Exception as e:
-                    click.echo(f"  Error with tab '{tab_name}': {e}", err=True)
-
-                op.advance()
-
-        ui_success(f"Checked out: {created}, Skipped: {skipped} (already present)")
-
+        folder = Sheet().clone(url, output=output, fmt=fmt)
+        ui_success(f"Checked out to: {folder}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -749,17 +630,21 @@ def sheet_push(folder: Path, with_formulas: bool, yes: bool):
         gax sheet push Budget.sheet.gax.md.d -y
         gax sheet push Budget.sheet.gax.md.d --with-formulas
     """
-    from .gsheet.folder_push import push_folder
+    from .gsheet import Sheet
 
     try:
-        success, message = push_folder(
-            folder, with_formulas=with_formulas, auto_approve=yes
-        )
-        if success:
-            click.echo(message)
-        else:
-            click.echo(f"Error: {message}", err=True)
-            sys.exit(1)
+        s = Sheet()
+        diff_text = s.diff(folder)
+        if diff_text is None:
+            click.echo("No changes to push.")
+            return
+        if not yes:
+            click.echo("\n" + diff_text)
+            if not click.confirm("\nPush these changes?"):
+                click.echo("Cancelled.")
+                return
+        s.push(folder, with_formulas=with_formulas)
+        click.echo("Pushed successfully.")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -778,33 +663,17 @@ def sheet_plan(folder):
         gax sheet plan
         gax sheet plan Budget.sheet.gax.md.d
     """
-    from .gsheet.folder_push import create_push_plan
+    from .gsheet import Sheet
 
     try:
-        # If no folder specified, find .sheet.gax.md.d in current directory
         if folder is None:
-            candidates = list(Path.cwd().glob("*.sheet.gax.md.d"))
-            if len(candidates) == 0:
-                click.echo(
-                    "Error: No .sheet.gax.md.d folder found in current directory",
-                    err=True,
-                )
-                sys.exit(1)
-            elif len(candidates) > 1:
-                click.echo(
-                    "Error: Multiple .sheet.gax.md.d folders found. Please specify one:",
-                    err=True,
-                )
-                for c in candidates:
-                    click.echo(f"  {c.name}")
-                sys.exit(1)
-            folder = candidates[0]
+            folder = _find_sheet_folder()
 
-        # Create and display plan
-        plan = create_push_plan(folder)
-        click.echo("\n" + plan.format_summary())
-
-        if plan.has_changes:
+        diff_text = Sheet().diff(folder)
+        if diff_text is None:
+            click.echo("No changes to push.")
+        else:
+            click.echo("\n" + diff_text)
             click.echo(
                 "\nRun 'gax sheet apply' to push these changes, or 'gax sheet push <folder>' with confirmation."
             )
@@ -832,44 +701,26 @@ def sheet_apply(folder, with_formulas: bool, yes: bool):
         gax sheet apply Budget.sheet.gax.md.d
         gax sheet apply Budget.sheet.gax.md.d --with-formulas
     """
-    from .gsheet.folder_push import create_push_plan, apply_push_plan
+    from .gsheet import Sheet
 
     try:
-        # If no folder specified, find .sheet.gax.md.d in current directory
         if folder is None:
-            candidates = list(Path.cwd().glob("*.sheet.gax.md.d"))
-            if len(candidates) == 0:
-                click.echo(
-                    "Error: No .sheet.gax.md.d folder found in current directory",
-                    err=True,
-                )
-                sys.exit(1)
-            elif len(candidates) > 1:
-                click.echo(
-                    "Error: Multiple .sheet.gax.md.d folders found. Please specify one:",
-                    err=True,
-                )
-                for c in candidates:
-                    click.echo(f"  {c.name}")
-                sys.exit(1)
-            folder = candidates[0]
+            folder = _find_sheet_folder()
 
-        # Create and display plan
-        plan = create_push_plan(folder)
-        click.echo("\n" + plan.format_summary())
-
-        if not plan.has_changes:
+        s = Sheet()
+        diff_text = s.diff(folder)
+        if diff_text is None:
             click.echo("Nothing to apply.")
             return
 
-        # Confirm
+        click.echo("\n" + diff_text)
+
         if not yes and not click.confirm("\nApply these changes?"):
             click.echo("Cancelled.")
             return
 
-        # Apply
-        total_rows = apply_push_plan(plan, with_formulas=with_formulas)
-        click.echo(f"\nPushed {len(plan.changes)} tab(s), {total_rows} rows total")
+        s.push(folder, with_formulas=with_formulas)
+        click.echo("Applied successfully.")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -886,16 +737,10 @@ def tab():
 @click.argument("url")
 def tab_list(url: str):
     """List tabs in a spreadsheet (TSV output)."""
+    from .gsheet import Sheet
+
     try:
-        spreadsheet_id = _extract_spreadsheet_id(url)
-        client = GSheetClient()
-        info = client.get_spreadsheet_info(spreadsheet_id)
-
-        click.echo(f"# {info['title']}")
-        click.echo("index\tid\ttitle")
-        for t in info["tabs"]:
-            click.echo(f"{t['index']}\t{t['id']}\t{t['title']}")
-
+        Sheet().tab_list(url, sys.stdout)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -919,40 +764,14 @@ def tab_list(url: str):
 )
 def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
     """Clone a single tab to a .sheet.gax.md file."""
+    from .gsheet import SheetTab
+
     try:
-        spreadsheet_id = _extract_spreadsheet_id(url)
-        click.echo(f"Fetching: {tab_name}")
-
-        client = GSheetClient()
-        df = client.read(spreadsheet_id, tab_name)
-
-        formatter = get_format(fmt)
-        data = formatter.write(df)
-
-        config = SheetConfig(
-            spreadsheet_id=spreadsheet_id,
-            tab=tab_name,
-            format=fmt,
-            url=url,
-        )
-
-        content = format_content(config, data)
-
-        if output:
-            file_path = output
-        else:
-            safe_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
-            safe_name = re.sub(r"\s+", "_", safe_name)
-            file_path = Path(f"{safe_name}.sheet.gax.md")
-
-        if file_path.exists():
-            click.echo(f"Error: File already exists: {file_path}", err=True)
-            sys.exit(1)
-
-        file_path.write_text(content, encoding="utf-8")
+        file_path = SheetTab().clone(url, output=output, tab_name=tab_name, fmt=fmt)
         click.echo(f"Created: {file_path}")
-        click.echo(f"Rows: {len(df)}")
-
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -962,9 +781,11 @@ def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def tab_pull(file: Path):
     """Pull latest data for a single tab."""
+    from .gsheet import SheetTab
+
     try:
-        rows = gsheet_pull(file)
-        click.echo(f"Pulled {rows} rows to {file}")
+        SheetTab().pull(file)
+        click.echo(f"Pulled: {file}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -978,13 +799,13 @@ def tab_pull(file: Path):
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
 def tab_push(file: Path, with_formulas: bool, yes: bool):
     """Push local data to a single tab."""
-    try:
-        # Preview: count rows in local file
-        from .gsheet.frontmatter import parse_file
-        from .formats import get_format
+    from .gsheet import SheetTab
+    from .gsheet.frontmatter import parse_file
+    from .formats import get_format as get_fmt
 
+    try:
         config, data = parse_file(file)
-        fmt = get_format(config.format)
+        fmt = get_fmt(config.format)
         df = fmt.read(data)
         row_count = len(df)
 
@@ -993,8 +814,8 @@ def tab_push(file: Path, with_formulas: bool, yes: bool):
             click.echo("Aborted.")
             return
 
-        rows = gsheet_push(file, with_formulas=with_formulas)
-        click.echo(f"Pushed {rows} rows")
+        SheetTab().push(file, with_formulas=with_formulas)
+        click.echo(f"Pushed {row_count} rows")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
