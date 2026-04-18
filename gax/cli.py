@@ -145,7 +145,9 @@ def _detect_file_type(file_path: Path) -> str | None:
     return None
 
 
-def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
+def _pull_folder(
+    folder_path: Path, verbose: bool = False, yes: bool = False
+) -> tuple[bool, str]:
     """Pull a .gax.d folder. Returns (success, message).
 
     Performs a checkout to a scratch directory, shows diff, and asks for confirmation.
@@ -390,7 +392,7 @@ def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
         click.echo("-" * 60)
 
         # Prompt for confirmation
-        if not click.confirm(f"\nApply these changes to {folder_path}?"):
+        if not yes and not click.confirm(f"\nApply these changes to {folder_path}?"):
             shutil.rmtree(scratch_path)
             return False, "cancelled"
 
@@ -762,7 +764,8 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
 @main.command("pull")
 @click.argument("files", nargs=-1, required=True)
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-def unified_pull(files: tuple[str, ...], verbose: bool):
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
+def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
     """Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
 
     Automatically detects file type from YAML header and calls
@@ -816,7 +819,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool):
                     continue
 
                 logger.info(f"Pulling {path}/")
-                ok, message = _pull_folder(path, verbose)
+                ok, message = _pull_folder(path, verbose, yes=yes)
                 results.append((path, ok, message))
             else:
                 # Check if this is a file with a .gax.md tracking file (Drive file)
