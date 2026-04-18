@@ -15,12 +15,12 @@ from typing import Optional
 import click
 from googleapiclient.discovery import build
 
-from .auth import get_authenticated_credentials
-from .ui import operation, success, error
-from .store import store_blob
-from . import multipart
-from . import draft as draft_module
-from . import docs as doc
+from ..auth import get_authenticated_credentials
+from ..ui import operation, success, error
+from ..store import store_blob
+from .. import multipart
+from .. import draft as draft_module
+from .. import docs as doc
 
 logger = logging.getLogger(__name__)
 # label and filter are now registered in cli.py as top-level commands (ADR 020)
