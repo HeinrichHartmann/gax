@@ -1462,3 +1462,176 @@ class TestFormE2E:
 
         result = _run_gax("pull", str(output_file))
         assert result.returncode == 0, f"Unified pull failed: {result.stderr}"
+
+
+# =============================================================================
+# Mail Thread E2E Tests
+# =============================================================================
+
+
+def _find_a_thread_id() -> str:
+    """Find a thread ID from the user's inbox for testing."""
+    creds = get_authenticated_credentials()
+    service = build("gmail", "v1", credentials=creds)
+    result = service.users().threads().list(userId="me", maxResults=1).execute()
+    threads = result.get("threads", [])
+    if not threads:
+        pytest.skip("No threads found in inbox")
+    return threads[0]["id"]
+
+
+@pytest.mark.e2e
+class TestMailThreadE2E:
+    """End-to-end tests for mail thread operations (clone, pull)."""
+
+    def test_clone_pull_cycle(self, check_auth, temp_dir):
+        """Test: find thread -> clone -> verify file -> pull -> verify update."""
+        thread_id = _find_a_thread_id()
+
+        # Clone thread
+        output_file = temp_dir / "thread.mail.gax.md"
+        result = _run_gax("mail", "clone", thread_id, "-o", str(output_file))
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+        assert output_file.exists()
+
+        content = output_file.read_text()
+        assert "type: gax/mail" in content
+        assert f"thread_id: {thread_id}" in content
+        assert "section: 1" in content
+
+        # Pull to refresh
+        result = _run_gax("mail", "pull", str(output_file))
+        assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+        # Content should still be valid after pull
+        pulled = output_file.read_text()
+        assert "type: gax/mail" in pulled
+        assert f"thread_id: {thread_id}" in pulled
+
+    def test_clone_auto_filename(self, check_auth, temp_dir):
+        """Test: clone without -o generates filename from subject."""
+        thread_id = _find_a_thread_id()
+
+        # Clone without explicit output — runs in temp_dir
+        result = subprocess.run(
+            ["gax", "mail", "clone", thread_id],
+            capture_output=True,
+            text=True,
+            cwd=str(temp_dir),
+        )
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        # Should have created a .mail.gax.md file
+        files = list(temp_dir.glob("*.mail.gax.md"))
+        assert len(files) == 1, f"Expected 1 file, found: {files}"
+
+    def test_pull_folder(self, check_auth, temp_dir):
+        """Test: clone 2 threads -> pull folder -> both updated."""
+        creds = get_authenticated_credentials()
+        service = build("gmail", "v1", credentials=creds)
+        result = service.users().threads().list(userId="me", maxResults=2).execute()
+        threads = result.get("threads", [])
+        if len(threads) < 2:
+            pytest.skip("Need at least 2 threads")
+
+        # Clone two threads into temp_dir
+        for i, t in enumerate(threads):
+            out = temp_dir / f"thread{i}.mail.gax.md"
+            r = _run_gax("mail", "clone", t["id"], "-o", str(out))
+            assert r.returncode == 0, f"Clone {i} failed: {r.stderr}"
+
+        # Pull the folder
+        result = _run_gax("mail", "pull", str(temp_dir))
+        assert result.returncode == 0, f"Pull folder failed: {result.stderr}"
+
+    def test_reply_creates_draft(self, check_auth, temp_dir):
+        """Test: clone thread -> reply -> verify draft file created."""
+        thread_id = _find_a_thread_id()
+
+        # Clone thread first
+        thread_file = temp_dir / "thread.mail.gax.md"
+        result = _run_gax("mail", "clone", thread_id, "-o", str(thread_file))
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        # Reply from the file
+        reply_file = temp_dir / "reply.draft.gax.md"
+        result = _run_gax(
+            "mail", "reply", str(thread_file), "-o", str(reply_file)
+        )
+        assert result.returncode == 0, f"Reply failed: {result.stderr}"
+        assert reply_file.exists()
+
+        reply_content = reply_file.read_text()
+        assert "type: gax/draft" in reply_content
+        assert "Re:" in reply_content or "re:" in reply_content.lower()
+
+
+# =============================================================================
+# Mailbox E2E Tests
+# =============================================================================
+
+
+@pytest.mark.e2e
+class TestMailboxE2E:
+    """End-to-end tests for mailbox operations (list, clone, pull)."""
+
+    def test_list_threads(self, check_auth):
+        """Test: mailbox lists threads as TSV."""
+        result = _run_gax("mailbox", "--limit", "5")
+        assert result.returncode == 0, f"List failed: {result.stderr}"
+
+        # Should have TSV header
+        lines = result.stdout.strip().split("\n")
+        assert len(lines) >= 2, "Expected header + at least 1 thread"
+        assert "thread_id\t" in lines[0]
+
+    def test_clone_pull_cycle(self, check_auth, temp_dir):
+        """Test: mailbox clone -> verify file -> pull -> verify update."""
+        output_file = temp_dir / "test.gax.md"
+
+        # Clone with small limit
+        result = _run_gax(
+            "mailbox",
+            "clone",
+            "-o",
+            str(output_file),
+            "-q",
+            "in:inbox",
+            "--limit",
+            "5",
+        )
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+        assert output_file.exists()
+
+        content = output_file.read_text()
+        assert "type: gax/list" in content
+        assert "query: in:inbox" in content
+        assert "id\tfrom\t" in content  # TSV header in body
+
+        # Pull to refresh
+        result = _run_gax("mailbox", "pull", str(output_file))
+        assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+        pulled = output_file.read_text()
+        assert "type: gax/list" in pulled
+
+    def test_fetch_threads(self, check_auth, temp_dir):
+        """Test: mailbox fetch downloads threads into folder."""
+        output_dir = temp_dir / "fetched"
+
+        result = _run_gax(
+            "mailbox",
+            "fetch",
+            "-o",
+            str(output_dir),
+            "-q",
+            "in:inbox",
+            "--limit",
+            "2",
+        )
+        assert result.returncode == 0, f"Fetch failed: {result.stderr}"
+        assert output_dir.exists()
+
+        # Should have created .mail.gax.md files
+        files = list(output_dir.glob("*.mail.gax.md"))
+        assert len(files) >= 1, f"Expected at least 1 file, found: {files}"
