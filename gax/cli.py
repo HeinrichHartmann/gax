@@ -1,4 +1,22 @@
-"""CLI interface for gax"""
+"""CLI interface for gax.
+
+Policy: All Click command definitions and CLI UX logic live here.
+
+Resource modules (draft.py, gcal.py, etc.) contain pure business logic
+and must not import Click or call sys.exit(). They communicate via:
+
+  - logging.info() / logging.debug()  — status messages (shown in spinner)
+  - ValueError                        — user-fixable errors
+  - Return values                     — results for cli.py to format
+
+Confirmation prompts (--yes, diff display) are handled here in cli.py
+using ResourceItem.diff() to preview changes before calling push/pull.
+
+Output conventions for resource methods:
+  - No output (most ops): return None, cli.py prints success()
+  - Structured result (path, ID): return it, cli.py formats
+  - Tabular/streaming (list, diff): accept a file descriptor, write to it
+"""
 
 import glob
 import re

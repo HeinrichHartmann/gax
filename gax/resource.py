@@ -48,8 +48,16 @@ class ResourceItem:
         """Refresh local file from remote."""
         raise NotImplementedError(f"{self.name} does not support pull")
 
-    def push(self, path: Path, yes: bool = False, **kw) -> None:
-        """Push local file to remote."""
+    def diff(self, path: Path, **kw) -> str | None:
+        """Preview changes between local file and remote.
+
+        Returns a human-readable diff string, or None if no changes.
+        Used by cli.py to display changes before push.
+        """
+        raise NotImplementedError(f"{self.name} does not support diff")
+
+    def push(self, path: Path, **kw) -> None:
+        """Push local file to remote. Unconditional — caller handles confirmation."""
         raise NotImplementedError(f"{self.name} does not support push")
 
 
@@ -77,14 +85,14 @@ class ResourceGroup:
         """Refresh local directory from remote."""
         raise NotImplementedError(f"{self.name} does not support pull")
 
-    def push(self, path: Path, yes: bool = False, **kw) -> None:
-        """Push local directory to remote."""
+    def push(self, path: Path, **kw) -> None:
+        """Push local directory to remote. Unconditional — caller handles confirmation."""
         raise NotImplementedError(f"{self.name} does not support push")
 
     def plan(self, path: Path, **kw) -> Path | None:
         """Preview changes. Returns plan file path, or None."""
         raise NotImplementedError(f"{self.name} does not support plan")
 
-    def apply(self, plan_path: Path, yes: bool = False, **kw) -> None:
-        """Apply a plan."""
+    def apply(self, plan_path: Path, **kw) -> None:
+        """Apply a plan. Unconditional — caller handles confirmation."""
         raise NotImplementedError(f"{self.name} does not support apply")
