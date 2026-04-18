@@ -1,7 +1,7 @@
 """Push command - write local file to Google Sheets"""
 
 from pathlib import Path
-from ..frontmatter import parse_file
+from .frontmatter import parse_file
 from ..formats import get_format
 from .client import GSheetClient
 

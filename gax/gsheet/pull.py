@@ -1,7 +1,7 @@
 """Pull command - fetch from Google Sheets to local file"""
 
 from pathlib import Path
-from ..frontmatter import parse_file, write_file
+from .frontmatter import parse_file, write_file
 from ..formats import get_format
 from .client import GSheetClient
 

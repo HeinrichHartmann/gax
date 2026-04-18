@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 import yaml
 import pandas as pd
-from ..frontmatter import parse_file
+from .frontmatter import parse_file
 from ..formats import get_format
 from ..ui import operation
 from .client import GSheetClient

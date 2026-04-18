@@ -10,7 +10,7 @@ from pathlib import Path
 from .gsheet import pull as gsheet_pull, push as gsheet_push, pull_all
 from .gsheet.client import GSheetClient
 from .multipart import Section, format_section, format_multipart, parse_multipart
-from .frontmatter import SheetConfig, format_content, parse_content
+from .gsheet.frontmatter import SheetConfig, format_content, parse_content
 from .formats import get_format
 from . import auth
 from . import docs
@@ -429,7 +429,7 @@ def _push_file(
     try:
         if file_type == "gax/sheet-tab":
             # Push single sheet tab
-            from .frontmatter import parse_file
+            from .gsheet.frontmatter import parse_file
             from .formats import get_format as get_fmt
 
             config, data = parse_file(file_path)
