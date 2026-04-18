@@ -43,7 +43,7 @@ from .label import label as mail_label
 from .filter import filter_group as mail_filter
 from .gcal import cal_cli
 from .form import form
-from .draft import draft
+from .draft import Draft
 from .contacts import contacts
 from .gdrive import file as gdrive_file
 
@@ -540,8 +540,6 @@ def _push_file(
                 )
 
         elif file_type == "gax/draft":
-            from .draft import Draft
-
             try:
                 d = Draft()
                 diff_text = d.diff(file_path)
@@ -829,10 +827,8 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             return True, f"{len(new_sections)} messages"
 
         elif file_type == "gax/draft":
-            from .draft import Draft as DraftResource
-
             try:
-                DraftResource().pull(file_path)
+                Draft().pull(file_path)
                 return True, "updated"
             except ValueError as e:
                 return False, str(e)
@@ -1225,7 +1221,7 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
 
     # Gmail drafts (must come before general mail pattern)
     elif re.search(r"mail\.google\.com/mail/[^#]*#drafts/", url):
-        ctx.invoke(draft.commands["clone"], draft_id_or_url=url, output=output)
+        ctx.invoke(draft_clone, draft_id_or_url=url, output=output)
 
     # Gmail threads
     elif re.search(r"mail\.google\.com/mail/", url):
@@ -2067,6 +2063,158 @@ def tab_push(file: Path, with_formulas: bool, yes: bool):
         click.echo(f"Pushed {rows} rows")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+# =============================================================================
+# Draft commands
+# =============================================================================
+
+
+@docs.section("resource")
+@click.group()
+def draft():
+    """Draft operations"""
+    pass
+
+
+@draft.command("new")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output file (default: <subject>.draft.gax.md)",
+)
+@click.option("--to", "to_addr", default="", help="Recipient email address")
+@click.option("--subject", default="", help="Email subject")
+def draft_new(output, to_addr, subject):
+    """Create a new local draft file.
+
+    Creates a .draft.gax.md file that can be edited and pushed to Gmail.
+
+    Examples:
+
+        gax draft new
+        gax draft new --to alice@example.com --subject "Hello"
+        gax draft new -o my_draft.draft.gax.md
+    """
+    if not to_addr:
+        to_addr = click.prompt("To")
+    if not subject:
+        subject = click.prompt("Subject")
+
+    try:
+        from .ui import success
+
+        file_path = Draft().new(to=to_addr, subject=subject, output=output)
+        success(f"Created: {file_path}")
+        click.echo(f"Edit the file, then run: gax draft push {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@draft.command("clone")
+@click.argument("draft_id_or_url")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output file (default: <subject>.draft.gax.md)",
+)
+def draft_clone(draft_id_or_url, output):
+    """Clone an existing draft from Gmail.
+
+    Examples:
+
+        gax draft clone r-1234567890123456789
+        gax draft clone "https://mail.google.com/mail/u/0/#drafts/..."
+        gax draft clone r-1234567890 -o my_draft.draft.gax.md
+    """
+    try:
+        from .ui import success
+
+        file_path = Draft().clone(url=draft_id_or_url, output=output)
+        success(f"Created: {file_path}")
+    except (ValueError, Exception) as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@draft.command("list")
+@click.option("--limit", default=100, help="Maximum results (default: 100)")
+def draft_list(limit):
+    """List Gmail drafts (TSV output).
+
+    Output columns: draft_id, thread_id, date, to, subject
+    """
+    try:
+        Draft().list(sys.stdout, limit=limit)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@draft.command("push")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+def draft_push(file, yes):
+    """Push local draft to Gmail.
+
+    If the draft doesn't exist in Gmail yet, creates it.
+    If it exists, shows diff and updates it (with confirmation).
+
+    Examples:
+
+        gax draft push my_draft.draft.gax.md
+        gax draft push my_draft.draft.gax.md -y
+    """
+    try:
+        from .ui import success
+
+        d = Draft()
+        diff_text = d.diff(file)
+        if diff_text is None:
+            click.echo("No differences to push.")
+            return
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Push these changes?"):
+                click.echo("Aborted.")
+                return
+        d.push(file)
+        success("Pushed successfully.")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@draft.command("pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def draft_pull(file):
+    """Pull latest content from Gmail draft.
+
+    Updates the local .draft.gax.md file with the remote draft content.
+
+    Example:
+
+        gax draft pull my_draft.draft.gax.md
+    """
+    try:
+        from .ui import success
+
+        Draft().pull(file)
+        success(f"Updated: {file}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
         sys.exit(1)
 
 

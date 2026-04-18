@@ -8,20 +8,16 @@ import base64
 import difflib
 import logging
 import re
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import click
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
 from . import multipart
-from .ui import operation, success, error
-from . import docs as doc
 from .resource import ResourceItem
 
 logger = logging.getLogger(__name__)
@@ -378,6 +374,44 @@ class Draft(ResourceItem):
         safe = re.sub(r"\s+", "_", safe)[:50]
         return Path(f"{safe}.draft.gax.md")
 
+    def new(self, to: str, subject: str, output: Path | None = None) -> Path:
+        """Create a new local draft file. Returns path created."""
+        config = DraftConfig(
+            subject=subject,
+            to=to,
+            time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        content = format_draft(config, "\n")
+
+        file_path = self._output_path(subject, output)
+        if file_path.exists():
+            raise ValueError(f"File already exists: {file_path}")
+
+        file_path.write_text(content, encoding="utf-8")
+        return file_path
+
+    def list(self, out, *, limit: int = 100) -> None:
+        """List Gmail drafts as TSV to file descriptor."""
+        creds = get_authenticated_credentials()
+        service = build("gmail", "v1", credentials=creds)
+
+        drafts = list_drafts(limit=limit, service=service)
+        if not drafts:
+            return
+
+        out.write("draft_id\tthread_id\tdate\tto\tsubject\n")
+        for draft_info in drafts:
+            draft_id = draft_info["id"]
+            logger.info(f"Fetching: {draft_id}")
+            try:
+                summary = get_draft_summary(draft_id, service=service)
+                out.write(
+                    f"{summary['draft_id']}\t{summary['thread_id']}\t"
+                    f"{summary['date']}\t{summary['to']}\t{summary['subject']}\n"
+                )
+            except Exception as e:
+                logger.warning(f"Error fetching {draft_id}: {e}")
+
     def clone(self, url: str, output: Path | None = None, **kw) -> Path:
         """Clone a draft from Gmail to a local file."""
         draft_id = extract_draft_id(url)
@@ -481,326 +515,3 @@ class Draft(ResourceItem):
         new_content = format_draft(config, body)
         path.write_text(new_content, encoding="utf-8")
         logger.info("Pushed successfully")
-
-
-# =============================================================================
-# CLI commands
-# =============================================================================
-
-
-@doc.section("resource")
-@click.group()
-def draft():
-    """Draft operations"""
-    pass
-
-
-@draft.command("new")
-@click.option(
-    "--output",
-    "-o",
-    type=click.Path(path_type=Path),
-    help="Output file (default: <subject>.draft.gax.md)",
-)
-@click.option("--to", "to_addr", default="", help="Recipient email address")
-@click.option("--subject", default="", help="Email subject")
-def draft_new(output: Optional[Path], to_addr: str, subject: str):
-    """Create a new local draft file.
-
-    Creates a .draft.gax.md file that can be edited and pushed to Gmail.
-
-    Examples:
-
-        gax mail draft new
-        gax mail draft new --to alice@example.com --subject "Hello"
-        gax mail draft new -o my_draft.draft.gax.md
-    """
-    # Prompt for required fields if not provided
-    if not to_addr:
-        to_addr = click.prompt("To")
-    if not subject:
-        subject = click.prompt("Subject")
-
-    config = DraftConfig(
-        subject=subject,
-        to=to_addr,
-        time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    )
-
-    body = "\n"  # Empty body with newline
-
-    content = format_draft(config, body)
-
-    if output:
-        file_path = output
-    else:
-        # Generate filename from subject
-        safe_subject = re.sub(r'[<>:"/\\|?*]', "-", subject)
-        safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-        file_path = Path(f"{safe_subject}.draft.gax.md")
-
-    if file_path.exists():
-        error(f"File already exists: {file_path}")
-        sys.exit(1)
-
-    file_path.write_text(content, encoding="utf-8")
-    success(f"Created: {file_path}")
-    click.echo(f"Edit the file, then run: gax mail draft push {file_path}")
-
-
-@draft.command("clone")
-@click.argument("draft_id_or_url")
-@click.option(
-    "--output",
-    "-o",
-    type=click.Path(path_type=Path),
-    help="Output file (default: <subject>.draft.gax.md)",
-)
-def draft_clone(draft_id_or_url: str, output: Optional[Path]):
-    """Clone an existing draft from Gmail.
-
-    Examples:
-
-        gax mail draft clone r-1234567890123456789
-        gax mail draft clone "https://mail.google.com/mail/u/0/#drafts/..."
-        gax mail draft clone r-1234567890 -o my_draft.draft.gax.md
-    """
-    try:
-        draft_id = extract_draft_id(draft_id_or_url)
-        logger.info(f"Fetching draft: {draft_id}")
-
-        config, body = get_draft(draft_id)
-        content = format_draft(config, body)
-
-        if output:
-            file_path = output
-        else:
-            # Generate filename from subject
-            safe_subject = re.sub(r'[<>:"/\\|?*]', "-", config.subject or "untitled")
-            safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
-            file_path = Path(f"{safe_subject}.draft.gax.md")
-
-        if file_path.exists():
-            error(f"File already exists: {file_path}")
-            sys.exit(1)
-
-        file_path.write_text(content, encoding="utf-8")
-        success(f"Created: {file_path}")
-        click.echo(f"Subject: {config.subject}")
-        click.echo(f"To: {config.to}")
-
-    except Exception as e:
-        error(f"{e}")
-        sys.exit(1)
-
-
-@draft.command("list")
-@click.option("--limit", default=100, help="Maximum results (default: 100)")
-def draft_list(limit: int):
-    """List Gmail drafts (TSV output).
-
-    Output columns: draft_id, thread_id, date, to, subject
-    """
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        drafts = list_drafts(limit=limit, service=service)
-
-        if not drafts:
-            click.echo("No drafts found.", err=True)
-            return
-
-        # Print header
-        click.echo("draft_id\tthread_id\tdate\tto\tsubject")
-
-        with operation("Fetching draft details", total=len(drafts)) as op:
-            for draft_info in drafts:
-                draft_id = draft_info["id"]
-                logger.info(f"Fetching: {draft_id}")
-                try:
-                    summary = get_draft_summary(draft_id, service=service)
-                    click.echo(
-                        f"{summary['draft_id']}\t{summary['thread_id']}\t"
-                        f"{summary['date']}\t{summary['to']}\t{summary['subject']}"
-                    )
-                except Exception as e:
-                    click.echo(f"# Error fetching {draft_id}: {e}", err=True)
-                op.advance()
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@draft.command("push")
-@click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-def draft_push(file: Path, yes: bool):
-    """Push local draft to Gmail.
-
-    If the draft doesn't exist in Gmail yet, creates it.
-    If it exists, shows diff and updates it (with confirmation).
-
-    Examples:
-
-        gax mail draft push my_draft.draft.gax.md
-        gax mail draft push my_draft.draft.gax.md -y
-    """
-    try:
-        content = file.read_text(encoding="utf-8")
-        config, body = parse_draft(content)
-
-        # Validate required fields
-        if not config.to:
-            error("'to' field is required")
-            sys.exit(1)
-        if not config.subject:
-            error("'subject' field is required")
-            sys.exit(1)
-
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        if not config.draft_id:
-            # Create new draft
-            logger.info(f"Creating draft: {config.subject}")
-            result = create_draft(config, body, service=service)
-
-            # Update local file with draft_id
-            config.draft_id = result["id"]
-            config.message_id = result.get("message", {}).get("id", "")
-            config.source = (
-                f"https://mail.google.com/mail/u/0/#drafts/{config.draft_id}"
-            )
-            config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-            new_content = format_draft(config, body)
-            file.write_text(new_content, encoding="utf-8")
-
-            success(f"Created draft: {config.draft_id}")
-            success(f"Updated: {file}")
-
-        else:
-            # Update existing draft - show diff first
-            try:
-                remote_config, remote_body = get_draft(config.draft_id, service=service)
-            except Exception as e:
-                if "404" in str(e) or "not found" in str(e).lower():
-                    error(f"Draft {config.draft_id} no longer exists in Gmail.")
-                    error(
-                        "Clear draft_id in the file and push again to create a new draft."
-                    )
-                    sys.exit(1)
-                raise
-
-            # Compare local vs remote
-            local_lines = body.splitlines(keepends=True)
-            remote_lines = remote_body.splitlines(keepends=True)
-
-            diff = list(
-                difflib.unified_diff(
-                    remote_lines,
-                    local_lines,
-                    fromfile="remote",
-                    tofile="local",
-                    lineterm="",
-                )
-            )
-
-            # Also check header changes
-            header_changes = []
-            if config.to != remote_config.to:
-                header_changes.append(f"to: {remote_config.to} -> {config.to}")
-            if config.subject != remote_config.subject:
-                header_changes.append(
-                    f"subject: {remote_config.subject} -> {config.subject}"
-                )
-            if config.cc != remote_config.cc:
-                header_changes.append(f"cc: {remote_config.cc} -> {config.cc}")
-
-            if not diff and not header_changes:
-                click.echo("No differences to push.")
-                return
-
-            # Show changes
-            if header_changes:
-                click.echo("Header changes:")
-                for change in header_changes:
-                    click.echo(f"  {change}")
-
-            if diff:
-                click.echo("Body changes:")
-                click.echo("-" * 40)
-                for line in diff:
-                    click.echo(line.rstrip("\n"))
-                click.echo("-" * 40)
-
-            # Confirm
-            if not yes:
-                if not click.confirm("Push these changes?"):
-                    click.echo("Aborted.")
-                    return
-
-            # Update draft
-            logger.info(f"Updating draft: {config.draft_id}")
-            update_draft(config.draft_id, config, body, service=service)
-
-            # Update local file with new timestamp
-            config.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            new_content = format_draft(config, body)
-            file.write_text(new_content, encoding="utf-8")
-
-            success("Pushed successfully.")
-
-    except Exception as e:
-        error(f"{e}")
-        sys.exit(1)
-
-
-@draft.command("pull")
-@click.argument("file", type=click.Path(exists=True, path_type=Path))
-def draft_pull(file: Path):
-    """Pull latest content from Gmail draft.
-
-    Updates the local .draft.gax.md file with the remote draft content.
-
-    Example:
-
-        gax mail draft pull my_draft.draft.gax.md
-    """
-    try:
-        content = file.read_text(encoding="utf-8")
-        config, local_body = parse_draft(content)
-
-        if not config.draft_id:
-            error("No draft_id in file. Use 'push' first to create a draft.")
-            sys.exit(1)
-
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        try:
-            remote_config, remote_body = get_draft(config.draft_id, service=service)
-        except Exception as e:
-            if "404" in str(e) or "not found" in str(e).lower():
-                error(f"Draft {config.draft_id} no longer exists in Gmail.")
-                error("The draft may have been sent or deleted.")
-                sys.exit(1)
-            raise
-
-        # Check for local changes that would be overwritten
-        if local_body.strip() != remote_body.strip():
-            logger.warning("Local changes will be overwritten.")
-
-        # Update local file with remote content
-        new_content = format_draft(remote_config, remote_body)
-        file.write_text(new_content, encoding="utf-8")
-
-        success(f"Updated: {file}")
-        click.echo(f"Subject: {remote_config.subject}")
-        click.echo(f"To: {remote_config.to}")
-
-    except Exception as e:
-        error(f"{e}")
-        sys.exit(1)
