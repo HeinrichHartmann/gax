@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 from gax.gcal import (
-    Cal,
+    Event,
     CalendarEvent,
     Conference,
     api_event_to_dataclass,
@@ -367,7 +367,7 @@ class TestEventDiff:
         f = tmp_path / "new.cal.gax.md"
         f.write_text(event_to_yaml(event))
 
-        result = Cal().event_diff(f)
+        result = Event().diff(f)
         assert result is not None
         assert "New event: Launch party" in result
         assert "2026-04-01T18:00:00Z" in result
@@ -382,7 +382,7 @@ class TestEventDiff:
         f = tmp_path / "event.cal.gax.md"
         f.write_text(event_to_yaml(local))
 
-        result = Cal().event_diff(f)
+        result = Event().diff(f)
         assert result is None
         mock_get.assert_called_once_with("evt123", "primary")
 
@@ -400,7 +400,7 @@ class TestEventDiff:
         f = tmp_path / "event.cal.gax.md"
         f.write_text(event_to_yaml(local))
 
-        result = Cal().event_diff(f)
+        result = Event().diff(f)
         assert result is not None
         assert "title: Team standup -> Renamed standup" in result
         assert "location: Room 42 -> Room 99" in result

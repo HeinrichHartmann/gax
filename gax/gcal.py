@@ -805,157 +805,6 @@ class Cal(Resource):
 
         return cloned, skipped
 
-    def event_clone(
-        self, id_or_url: str, *, calendar: str = "primary", output: Path | None = None
-    ) -> Path:
-        """Clone a single event to a .cal.gax.md file."""
-        event_id, cal_id = extract_event_id(id_or_url)
-        if calendar != "primary":
-            cal_id = calendar
-
-        # Get calendar name
-        cals = list_calendars()
-        cal_name = cal_id
-        for cal in cals:
-            if cal["id"] == cal_id:
-                cal_name = cal["name"]
-                break
-
-        api_event = get_event(event_id, cal_id)
-        event = api_event_to_dataclass(api_event, cal_id, cal_name)
-
-        if not output:
-            safe_title = re.sub(r"[^\w\s-]", "", event.title)[:30].strip()
-            safe_title = re.sub(r"\s+", "_", safe_title)
-            output = Path(f"{safe_title}.cal.gax.md")
-
-        if output.exists():
-            raise ValueError(f"File already exists: {output}")
-
-        content = event_to_yaml(event)
-        output.write_text(content)
-        return output
-
-    def event_new(
-        self, *, calendar: str = "primary", output: Path | None = None
-    ) -> Path:
-        """Create a new event template file."""
-        now = datetime.now(timezone.utc)
-        start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        end = start + timedelta(hours=1)
-
-        event = CalendarEvent(
-            id="",
-            calendar=calendar,
-            source="",
-            synced="",
-            title="New Event",
-            start=start.isoformat().replace("+00:00", "Z"),
-            end=end.isoformat().replace("+00:00", "Z"),
-            timezone="UTC",
-            status="confirmed",
-        )
-
-        file_path = output or Path("new_event.cal.gax.md")
-        content = event_to_yaml(event)
-        file_path.write_text(content)
-        return file_path
-
-    def event_pull(self, path: Path) -> None:
-        """Pull latest event data from API."""
-        content = path.read_text()
-        local_event = yaml_to_event(content)
-
-        if not local_event.id:
-            raise ValueError("Event has no ID (not yet pushed upstream)")
-
-        api_event = get_event(local_event.id, local_event.calendar)
-
-        cals = list_calendars()
-        cal_name = local_event.calendar
-        for cal in cals:
-            if cal["id"] == local_event.calendar:
-                cal_name = cal["name"]
-                break
-
-        updated_event = api_event_to_dataclass(
-            api_event, local_event.calendar, cal_name
-        )
-        new_content = event_to_yaml(updated_event)
-        path.write_text(new_content)
-
-    def event_diff(self, path: Path) -> str | None:
-        """Preview changes between local event file and remote.
-
-        Returns a human-readable diff string, or None if no changes.
-        For new events (no id), returns a summary of what will be created.
-        """
-        content = path.read_text()
-        local = yaml_to_event(content)
-
-        if not local.id:
-            return f"New event: {local.title}\n{local.start} — {local.end}"
-
-        api_event = get_event(local.id, local.calendar)
-        remote = api_event_to_dataclass(api_event, local.calendar, local.calendar)
-
-        # Compare editable fields
-        fields = [
-            ("title", local.title, remote.title),
-            ("start", local.start, remote.start),
-            ("end", local.end, remote.end),
-            ("timezone", local.timezone, remote.timezone),
-            ("location", local.location, remote.location),
-            ("status", local.status, remote.status),
-            ("recurrence", local.recurrence, remote.recurrence),
-            ("attendees", local.attendees, remote.attendees),
-            ("description", local.description, remote.description),
-        ]
-
-        lines = []
-        for name, local_val, remote_val in fields:
-            if local_val != remote_val:
-                lines.append(f"{name}: {remote_val} -> {local_val}")
-
-        return "\n".join(lines) if lines else None
-
-    def event_push(self, path: Path) -> str:
-        """Push local event changes to API. Returns result URL."""
-        content = path.read_text()
-        local_event = yaml_to_event(content)
-
-        if local_event.id:
-            result = update_event(local_event)
-            return result.get("htmlLink", "")
-        else:
-            result = create_event(local_event)
-
-            # Update local file with new ID
-            local_event.id = result["id"]
-            local_event.source = (
-                f"https://calendar.google.com/calendar/event?eid={result['id']}"
-            )
-            local_event.synced = (
-                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            )
-
-            new_content = event_to_yaml(local_event)
-            path.write_text(new_content)
-
-            return result.get("htmlLink", "")
-
-    def event_delete(self, path: Path) -> str:
-        """Delete event from calendar and local file. Returns event title."""
-        content = path.read_text()
-        local_event = yaml_to_event(content)
-
-        if not local_event.id:
-            raise ValueError("Event has no ID (not on calendar)")
-
-        delete_event(local_event.id, local_event.calendar)
-        path.unlink()
-        return local_event.title
-
     def _clone_events_to_file(
         self,
         path: Path,
@@ -1007,3 +856,163 @@ class Cal(Resource):
             f.write(tsv_body)
 
         return len(events)
+
+
+# =============================================================================
+# Event resource — single calendar event (clone/pull/diff/push/delete).
+# =============================================================================
+
+
+class Event(Resource):
+    """Google Calendar event resource."""
+
+    name = "event"
+
+    def clone(
+        self, url: str, output: Path | None = None, *, calendar: str = "primary", **kw
+    ) -> Path:
+        """Clone a single event to a .cal.gax.md file."""
+        event_id, cal_id = extract_event_id(url)
+        if calendar != "primary":
+            cal_id = calendar
+
+        # Get calendar name
+        cals = list_calendars()
+        cal_name = cal_id
+        for cal in cals:
+            if cal["id"] == cal_id:
+                cal_name = cal["name"]
+                break
+
+        api_event = get_event(event_id, cal_id)
+        event = api_event_to_dataclass(api_event, cal_id, cal_name)
+
+        if not output:
+            safe_title = re.sub(r"[^\w\s-]", "", event.title)[:30].strip()
+            safe_title = re.sub(r"\s+", "_", safe_title)
+            output = Path(f"{safe_title}.cal.gax.md")
+
+        if output.exists():
+            raise ValueError(f"File already exists: {output}")
+
+        content = event_to_yaml(event)
+        output.write_text(content)
+        return output
+
+    def new(self, *, calendar: str = "primary", output: Path | None = None) -> Path:
+        """Create a new event template file."""
+        now = datetime.now(timezone.utc)
+        start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        end = start + timedelta(hours=1)
+
+        event = CalendarEvent(
+            id="",
+            calendar=calendar,
+            source="",
+            synced="",
+            title="New Event",
+            start=start.isoformat().replace("+00:00", "Z"),
+            end=end.isoformat().replace("+00:00", "Z"),
+            timezone="UTC",
+            status="confirmed",
+        )
+
+        file_path = output or Path("new_event.cal.gax.md")
+        content = event_to_yaml(event)
+        file_path.write_text(content)
+        return file_path
+
+    def pull(self, path: Path, **kw) -> None:
+        """Pull latest event data from API."""
+        content = path.read_text()
+        local_event = yaml_to_event(content)
+
+        if not local_event.id:
+            raise ValueError("Event has no ID (not yet pushed upstream)")
+
+        api_event = get_event(local_event.id, local_event.calendar)
+
+        cals = list_calendars()
+        cal_name = local_event.calendar
+        for cal in cals:
+            if cal["id"] == local_event.calendar:
+                cal_name = cal["name"]
+                break
+
+        updated_event = api_event_to_dataclass(
+            api_event, local_event.calendar, cal_name
+        )
+        new_content = event_to_yaml(updated_event)
+        path.write_text(new_content)
+
+    def diff(self, path: Path, **kw) -> str | None:
+        """Preview changes between local event file and remote.
+
+        Returns a human-readable diff string, or None if no changes.
+        For new events (no id), returns a summary of what will be created.
+        """
+        content = path.read_text()
+        local = yaml_to_event(content)
+
+        if not local.id:
+            return f"New event: {local.title}\n{local.start} — {local.end}"
+
+        api_event = get_event(local.id, local.calendar)
+        remote = api_event_to_dataclass(api_event, local.calendar, local.calendar)
+
+        # Compare editable fields
+        fields = [
+            ("title", local.title, remote.title),
+            ("start", local.start, remote.start),
+            ("end", local.end, remote.end),
+            ("timezone", local.timezone, remote.timezone),
+            ("location", local.location, remote.location),
+            ("status", local.status, remote.status),
+            ("recurrence", local.recurrence, remote.recurrence),
+            ("attendees", local.attendees, remote.attendees),
+            ("description", local.description, remote.description),
+        ]
+
+        lines = []
+        for name, local_val, remote_val in fields:
+            if local_val != remote_val:
+                lines.append(f"{name}: {remote_val} -> {local_val}")
+
+        return "\n".join(lines) if lines else None
+
+    def push(self, path: Path, **kw) -> str:
+        """Push local event changes to API. Returns result URL."""
+        content = path.read_text()
+        local_event = yaml_to_event(content)
+
+        if local_event.id:
+            result = update_event(local_event)
+            return result.get("htmlLink", "")
+        else:
+            result = create_event(local_event)
+
+            # Update local file with new ID
+            local_event.id = result["id"]
+            local_event.source = (
+                f"https://calendar.google.com/calendar/event?eid={result['id']}"
+            )
+            local_event.synced = (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
+
+            new_content = event_to_yaml(local_event)
+            path.write_text(new_content)
+
+            return result.get("htmlLink", "")
+
+    def delete(self, path: Path) -> str:
+        """Delete event from calendar and local file. Returns event title."""
+        content = path.read_text()
+        local_event = yaml_to_event(content)
+
+        if not local_event.id:
+            raise ValueError("Event has no ID (not on calendar)")
+
+        delete_event(local_event.id, local_event.calendar)
+        path.unlink()
+        return local_event.title

@@ -14,7 +14,7 @@ from .gsheet import pull_all
 from .gsheet.frontmatter import parse_content
 from .label import Label
 from .filter import Filter
-from .gcal import Cal
+from .gcal import Cal, Event
 from .form import Form
 from .draft import Draft
 from .contacts import Contacts
@@ -378,15 +378,15 @@ def _push_file(
 
         elif file_type == "gax/cal":
             try:
-                c = Cal()
-                diff_text = c.event_diff(file_path)
+                e = Event()
+                diff_text = e.diff(file_path)
                 if diff_text is None:
                     return True, "no changes"
                 if not yes:
                     click.echo(diff_text)
                     if not click.confirm("Push these changes?"):
                         return False, "cancelled"
-                link = c.event_push(file_path)
+                link = e.push(file_path)
                 return True, f"pushed {link}"
             except ValueError as e:
                 return False, str(e)
@@ -560,7 +560,7 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
 
         elif file_type == "gax/cal":
             try:
-                Cal().event_pull(file_path)
+                Event().pull(file_path)
                 return True, "updated"
             except ValueError as e:
                 return False, str(e)

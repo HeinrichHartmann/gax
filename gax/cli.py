@@ -35,7 +35,7 @@ from . import docs
 from .mail import Thread, Mailbox
 from .label import Label
 from .filter import Filter
-from .gcal import Cal
+from .gcal import Cal, Event
 from .form import Form
 from .draft import Draft
 from .contacts import Contacts
@@ -1944,7 +1944,7 @@ def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None)
     try:
         from .ui import success
 
-        file_path = Cal().event_clone(id_or_url, calendar=calendar, output=output_path)
+        file_path = Event().clone(id_or_url, calendar=calendar, output=output_path)
         success(f"Cloned event to {file_path}")
     except ValueError as e:
         from .ui import error
@@ -1969,7 +1969,7 @@ def cal_event_new_cmd(calendar: str, output_path: Path | None):
     try:
         from .ui import success
 
-        file_path = Cal().event_new(calendar=calendar, output=output_path)
+        file_path = Event().new(calendar=calendar, output=output_path)
         success(f"Created event template at {file_path}")
         click.echo(f"Edit the file, then run: gax cal event push {file_path}")
     except ValueError as e:
@@ -1986,7 +1986,7 @@ def cal_event_pull_cmd(file_path: Path):
     try:
         from .ui import success
 
-        Cal().event_pull(file_path)
+        Event().pull(file_path)
         success(f"Pulled latest data to {file_path}")
     except ValueError as e:
         from .ui import error
@@ -2003,8 +2003,8 @@ def cal_event_push_cmd(file_path: Path, yes: bool):
     try:
         from .ui import success
 
-        c = Cal()
-        diff_text = c.event_diff(file_path)
+        e = Event()
+        diff_text = e.diff(file_path)
         if diff_text is None:
             click.echo("No changes to push.")
             return
@@ -2014,7 +2014,7 @@ def cal_event_push_cmd(file_path: Path, yes: bool):
                 click.echo("Cancelled.")
                 return
 
-        link = c.event_push(file_path)
+        link = e.push(file_path)
         success(f"Pushed event: {link}")
     except ValueError as e:
         from .ui import error
@@ -2043,7 +2043,7 @@ def cal_event_delete_cmd(file_path: Path, yes: bool):
                 click.echo("Cancelled.")
                 return
 
-        title = Cal().event_delete(file_path)
+        title = Event().delete(file_path)
         success(f"Deleted event '{title}'")
     except ValueError as e:
         from .ui import error
