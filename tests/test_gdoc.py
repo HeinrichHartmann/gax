@@ -12,10 +12,8 @@ from gax.gdoc import (
     format_multipart,
     format_section,
     pull_single_tab,
-    compute_tab_paths,
-    DocSection,
 )
-from gax.gdoc.native_md import get_doc_tabs, split_doc_by_tabs, TabInfo
+from gax.gdoc.native_md import get_doc_tabs
 
 
 # Load fixtures
@@ -41,13 +39,10 @@ class TestPullDoc:
     def test_multi_tab_document(self, mock_native_md):
         """Test pulling a document with multiple tabs."""
         # Mock native_md functions
-        mock_native_md.get_doc_tabs.return_value = (
-            "Project Plan",
-            [
-                TabInfo(id="t.1", title="Overview", index=0),
-                TabInfo(id="t.2", title="Timeline", index=1),
-            ],
-        )
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t.1", "title": "Overview", "index": 0},
+            {"id": "t.2", "title": "Timeline", "index": 1},
+        ]
         mock_native_md.export_doc_markdown.return_value = (
             "# Overview\n\nThese are the project goals.\n\n"
             "# Timeline\n\n## Key Milestones\n\nMilestone 1\n"
@@ -85,10 +80,9 @@ class TestPullDoc:
     @patch("gax.gdoc.native_md")
     def test_single_tab_document(self, mock_native_md):
         """Test pulling a document with a single tab."""
-        mock_native_md.get_doc_tabs.return_value = (
-            "Simple Doc",
-            [TabInfo(id="t1", title="Simple Doc", index=0)],
-        )
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t1", "title": "Simple Doc", "index": 0}
+        ]
         mock_native_md.export_doc_markdown.return_value = (
             "# Simple Doc\n\nHello World\n"
         )
@@ -111,7 +105,7 @@ class TestPullDoc:
     def test_document_without_tabs(self, mock_native_md):
         """Test pulling a legacy document without tabs array."""
         # No tabs returned means fallback to default
-        mock_native_md.get_doc_tabs.return_value = ("Legacy Doc", [])
+        mock_native_md.get_doc_tabs.return_value = []
         mock_native_md.export_doc_markdown.return_value = "Legacy content\n"
         mock_native_md.split_doc_by_tabs.return_value = {"Document": "Legacy content"}
 
@@ -136,13 +130,10 @@ class TestFormatMultipart:
     @patch("gax.gdoc.native_md")
     def test_format_multi_tab_to_file(self, mock_native_md, tmp_path):
         """Test formatting a multi-tab document and writing to file."""
-        mock_native_md.get_doc_tabs.return_value = (
-            "Project Plan",
-            [
-                TabInfo(id="t.1", title="Overview", index=0),
-                TabInfo(id="t.2", title="Timeline", index=1),
-            ],
-        )
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t.1", "title": "Overview", "index": 0},
+            {"id": "t.2", "title": "Timeline", "index": 1},
+        ]
         mock_native_md.export_doc_markdown.return_value = (
             "# Overview\n\nProject goals.\n\n"
             "# Timeline\n\n## Key Milestones\n\nMilestone 1\n"
@@ -182,13 +173,10 @@ class TestFormatMultipart:
     @patch("gax.gdoc.native_md")
     def test_sections_are_self_contained(self, mock_native_md, tmp_path):
         """Test that each section can be extracted as a standalone file."""
-        mock_native_md.get_doc_tabs.return_value = (
-            "Project Plan",
-            [
-                TabInfo(id="t.1", title="Overview", index=0),
-                TabInfo(id="t.2", title="Timeline", index=1),
-            ],
-        )
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t.1", "title": "Overview", "index": 0},
+            {"id": "t.2", "title": "Timeline", "index": 1},
+        ]
         mock_native_md.export_doc_markdown.return_value = "# Overview\n\n# Timeline\n"
         mock_native_md.split_doc_by_tabs.return_value = {
             "Overview": "Overview content",
@@ -230,10 +218,9 @@ class TestHeadingConversion:
     def test_heading_levels(self, mock_native_md):
         """Test that headings from native export are preserved."""
         # Native API returns markdown directly with headings
-        mock_native_md.get_doc_tabs.return_value = (
-            "Headings Test",
-            [TabInfo(id="t1", title="Headings", index=0)],
-        )
+        mock_native_md.get_doc_tabs.return_value = [
+            {"id": "t1", "title": "Headings", "index": 0}
+        ]
         mock_native_md.export_doc_markdown.return_value = (
             "# Headings\n\n# Heading 1\n\n## Heading 2\n\n### Heading 3\n\n"
             "#### Heading 4\n\nNormal text\n"
@@ -266,14 +253,13 @@ class TestGetDocTabs:
         doc_response = json.loads(load_fixture("sample_doc_response.json"))
         service = make_mock_service(doc_response)
 
-        title, tabs = get_doc_tabs("test-doc-123", docs_service=service)
+        tabs = get_doc_tabs("test-doc-123", docs_service=service)
 
-        assert title == "Project Plan"
         assert len(tabs) == 2
-        assert tabs[0].title == "Overview"
-        assert tabs[0].index == 0
-        assert tabs[1].title == "Timeline"
-        assert tabs[1].index == 1
+        assert tabs[0]["title"] == "Overview"
+        assert tabs[0]["index"] == 0
+        assert tabs[1]["title"] == "Timeline"
+        assert tabs[1]["index"] == 1
 
     def test_single_tab_document(self):
         """Test getting tabs from a single-tab document."""
@@ -289,12 +275,11 @@ class TestGetDocTabs:
         }
         service = make_mock_service(doc_response)
 
-        title, tabs = get_doc_tabs("single-doc", docs_service=service)
+        tabs = get_doc_tabs("single-doc", docs_service=service)
 
-        assert title == "Simple Doc"
         assert len(tabs) == 1
-        assert tabs[0].title == "Simple Doc"
-        assert tabs[0].id == "t.123"
+        assert tabs[0]["title"] == "Simple Doc"
+        assert tabs[0]["id"] == "t.123"
 
     def test_legacy_document_no_tabs(self):
         """Test getting tabs from a legacy document without tabs array."""
@@ -305,57 +290,9 @@ class TestGetDocTabs:
         }
         service = make_mock_service(doc_response)
 
-        title, tabs = get_doc_tabs("legacy-doc", docs_service=service)
+        tabs = get_doc_tabs("legacy-doc", docs_service=service)
 
-        assert title == "Legacy Doc"
         assert len(tabs) == 0
-
-    def test_nested_tabs(self):
-        """Test getting tabs from a document with nested (child) tabs."""
-        doc_response = {
-            "documentId": "nested-doc",
-            "title": "Nested Doc",
-            "tabs": [
-                {
-                    "tabProperties": {"tabId": "t.1", "title": "Overview"},
-                    "documentTab": {"body": {"content": []}},
-                },
-                {
-                    "tabProperties": {"tabId": "t.2", "title": "Design"},
-                    "documentTab": {"body": {"content": []}},
-                    "childTabs": [
-                        {
-                            "tabProperties": {"tabId": "t.3", "title": "Frontend"},
-                            "documentTab": {"body": {"content": []}},
-                        },
-                        {
-                            "tabProperties": {"tabId": "t.4", "title": "Backend"},
-                            "documentTab": {"body": {"content": []}},
-                            "childTabs": [
-                                {
-                                    "tabProperties": {"tabId": "t.5", "title": "API"},
-                                    "documentTab": {"body": {"content": []}},
-                                },
-                            ],
-                        },
-                    ],
-                },
-            ],
-        }
-        service = make_mock_service(doc_response)
-
-        title, tabs = get_doc_tabs("nested-doc", docs_service=service)
-
-        assert title == "Nested Doc"
-        assert len(tabs) == 5
-        assert [(t.title, t.depth, t.has_children) for t in tabs] == [
-            ("Overview", 0, False),
-            ("Design", 0, True),
-            ("Frontend", 1, False),
-            ("Backend", 1, True),
-            ("API", 2, False),
-        ]
-        assert [t.index for t in tabs] == [0, 1, 2, 3, 4]
 
 
 class TestPullSingleTab:
@@ -437,126 +374,3 @@ class TestPullSingleTab:
 
         assert section.section_title == "Legacy Doc"
         assert "Legacy content" in section.content
-
-
-def _section(title, depth=0, has_children=False, tab_id="t.x", section_type=None):
-    """Helper to create a DocSection for path computation tests."""
-    return DocSection(
-        title="Doc",
-        source="https://docs.google.com/document/d/abc/edit",
-        time="2026-01-01T00:00:00Z",
-        section=1,
-        section_title=title,
-        content="",
-        section_type=section_type,
-        tab_depth=depth,
-        tab_has_children=has_children,
-        tab_id=tab_id,
-    )
-
-
-class TestComputeTabPaths:
-    """Tests for compute_tab_paths function."""
-
-    def test_flat_tabs(self, tmp_path):
-        """Flat tabs (no nesting) produce files in root folder."""
-        sections = [
-            _section("Overview"),
-            _section("Timeline"),
-        ]
-        paths = compute_tab_paths(sections, tmp_path)
-        assert [p.relative_to(tmp_path) for p in paths] == [
-            Path("Overview.tab.gax.md"),
-            Path("Timeline.tab.gax.md"),
-        ]
-
-    def test_nested_tabs(self, tmp_path):
-        """Nested tabs produce subdirectories."""
-        sections = [
-            _section("Overview"),
-            _section("Design", has_children=True),
-            _section("Frontend", depth=1),
-            _section("Backend", depth=1, has_children=True),
-            _section("API", depth=2),
-        ]
-        paths = compute_tab_paths(sections, tmp_path)
-        rel = [p.relative_to(tmp_path) for p in paths]
-        assert rel == [
-            Path("Overview.tab.gax.md"),
-            Path("Design/Design.tab.gax.md"),
-            Path("Design/Frontend.tab.gax.md"),
-            Path("Design/Backend/Backend.tab.gax.md"),
-            Path("Design/Backend/API.tab.gax.md"),
-        ]
-
-    def test_sibling_parent_tabs(self, tmp_path):
-        """Two top-level parent tabs produce separate subdirectories."""
-        sections = [
-            _section("Design", has_children=True),
-            _section("Frontend", depth=1),
-            _section("Testing", has_children=True),
-            _section("Unit", depth=1),
-        ]
-        paths = compute_tab_paths(sections, tmp_path)
-        rel = [p.relative_to(tmp_path) for p in paths]
-        assert rel == [
-            Path("Design/Design.tab.gax.md"),
-            Path("Design/Frontend.tab.gax.md"),
-            Path("Testing/Testing.tab.gax.md"),
-            Path("Testing/Unit.tab.gax.md"),
-        ]
-
-    def test_comment_sections_skipped(self, tmp_path):
-        """Comment sections get empty Path placeholders."""
-        sections = [
-            _section("Overview"),
-            _section("Overview (Comments)", section_type="comments"),
-        ]
-        paths = compute_tab_paths(sections, tmp_path)
-        assert paths[0] == tmp_path / "Overview.tab.gax.md"
-        assert paths[1] == Path("")
-
-    def test_special_characters_sanitized(self, tmp_path):
-        """Tab names with special characters are sanitized."""
-        sections = [_section("Q&A: Design/Notes")]
-        paths = compute_tab_paths(sections, tmp_path)
-        assert paths[0] == tmp_path / "Q&A-_Design-Notes.tab.gax.md"
-
-
-class TestSplitDocByTabsNested:
-    """Tests for split_doc_by_tabs with nested tabs.
-
-    The Drive API exports ALL tabs as H1 headers regardless of nesting depth.
-    """
-
-    def test_flat_h1_tabs(self):
-        """Standard H1-separated tabs."""
-        md = "# Overview\n\nGoals.\n\n# Timeline\n\nMilestones.\n"
-        result = split_doc_by_tabs(md, ["Overview", "Timeline"])
-        assert "Goals." in result["Overview"]
-        assert "Milestones." in result["Timeline"]
-
-    def test_nested_all_h1(self):
-        """Nested tabs are all exported as H1 by the Drive API."""
-        md = (
-            "# Overview\n\nGoals.\n\n"
-            "# Design\n\nIntro.\n\n"
-            "# Frontend\n\nReact stuff.\n\n"
-            "# Backend\n\nPython stuff.\n"
-        )
-        result = split_doc_by_tabs(
-            md,
-            ["Overview", "Design", "Frontend", "Backend"],
-            [0, 0, 1, 1],
-        )
-        assert "Goals." in result["Overview"]
-        assert "Intro." in result["Design"]
-        assert "React stuff." in result["Frontend"]
-        assert "Python stuff." in result["Backend"]
-
-    def test_h2_not_matched_as_tab_when_not_in_list(self):
-        """H2 headers that aren't tab titles should be kept as content."""
-        md = "# Overview\n\n## Subsection\n\nBody.\n"
-        result = split_doc_by_tabs(md, ["Overview"], [0])
-        assert "## Subsection" in result["Overview"]
-        assert "Body." in result["Overview"]

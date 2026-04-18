@@ -17,7 +17,6 @@ from googleapiclient.discovery import build
 from ..auth import get_authenticated_credentials
 from .. import multipart
 from . import native_md
-from .native_md import TabInfo
 from .. import docs
 from ..ui import operation, success, error
 
@@ -35,9 +34,6 @@ class DocSection:
     section_title: str  # Title of this section/tab
     content: str  # Markdown content
     section_type: Optional[str] = None  # 'comments' for comment sections
-    tab_depth: int = 0  # 0 = top-level, 1 = child, etc.
-    tab_has_children: bool = False  # True if tab has child tabs
-    tab_id: str = ""  # Google Docs tabId
 
 
 @dataclass
@@ -144,28 +140,36 @@ def pull_doc(
         docs_service: Optional Docs API service object for testing
         drive_service: Optional Drive API service object for testing
     """
-    # Get tab list and title from Docs API (single call)
-    doc_title, tabs = native_md.get_doc_tabs(document_id, docs_service=docs_service)
+    # Get tab list from Docs API
+    tabs = native_md.get_doc_tabs(document_id, docs_service=docs_service)
 
     if not tabs:
         # Fallback: single document without tabs
-        tabs = [TabInfo(id="", title="Document", index=0)]
+        tabs = [{"id": "", "title": "Document", "index": 0}]
+
+    # Get document title
+    if docs_service is None:
+        creds = get_authenticated_credentials()
+        docs_service = build("docs", "v1", credentials=creds)
+
+    doc = docs_service.documents().get(documentId=document_id).execute()
+    doc_title = doc.get("title", "Untitled")
 
     # Export full document as markdown using native API
     full_md = native_md.export_doc_markdown(document_id, drive_service=drive_service)
 
     # Split by tabs
-    tab_titles = [t.title for t in tabs]
-    tab_depths = [t.depth for t in tabs]
-    tab_contents = native_md.split_doc_by_tabs(full_md, tab_titles, tab_depths)
+    tab_titles = [t["title"] for t in tabs]
+    tab_contents = native_md.split_doc_by_tabs(full_md, tab_titles)
 
     time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     sections = []
 
     with operation("Processing tabs", total=len(tabs)) as op:
         for i, tab in enumerate(tabs, start=1):
-            logger.info(f"Processing tab: {tab.title}")
-            content = tab_contents.get(tab.title, "")
+            tab_title = tab["title"]
+            logger.info(f"Processing tab: {tab_title}")
+            content = tab_contents.get(tab_title, "")
 
             sections.append(
                 DocSection(
@@ -173,11 +177,8 @@ def pull_doc(
                     source=source_url,
                     time=time_str,
                     section=i,
-                    section_title=tab.title,
+                    section_title=tab_title,
                     content=content,
-                    tab_depth=tab.depth,
-                    tab_has_children=tab.has_children,
-                    tab_id=tab.id,
                 )
             )
             op.advance()
@@ -341,19 +342,55 @@ def tab():
     pass
 
 
+def get_tabs_list(document_id: str, *, service=None) -> dict:
+    """Get document title and list of tabs.
+
+    Returns:
+        Dict with 'title' and 'tabs' (list of {id, title, index})
+    """
+    if service is None:
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+
+    document = (
+        service.documents()
+        .get(documentId=document_id, includeTabsContent=True)
+        .execute()
+    )
+
+    doc_title = document.get("title", "Untitled")
+    raw_tabs = document.get("tabs", [])
+
+    tabs = []
+    for i, t in enumerate(raw_tabs):
+        props = t.get("tabProperties", {})
+        tabs.append(
+            {
+                "id": props.get("tabId", ""),
+                "title": props.get("title", f"Tab {i}"),
+                "index": i,
+            }
+        )
+
+    # If no tabs, document itself is the only "tab"
+    if not tabs:
+        tabs = [{"id": "", "title": doc_title, "index": 0}]
+
+    return {"title": doc_title, "tabs": tabs}
+
+
 @tab.command("list")
 @click.argument("url")
 def tab_list(url: str):
     """List tabs in a document (TSV output)."""
     try:
         document_id = extract_doc_id(url)
-        doc_title, tabs = native_md.get_doc_tabs(document_id)
+        info = get_tabs_list(document_id)
 
-        click.echo(f"# {doc_title}")
+        click.echo(f"# {info['title']}")
         click.echo("index\tid\ttitle")
-        for t in tabs:
-            indent = "  " * t.depth
-            click.echo(f"{t.index}\t{t.id}\t{indent}{t.title}")
+        for t in info["tabs"]:
+            click.echo(f"{t['index']}\t{t['id']}\t{t['title']}")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -1118,18 +1155,23 @@ def clone(url: str, output: Optional[Path], with_comments: bool, quiet: bool):
 
         click.echo(f"Fetching: {document_id}")
 
-        # Fetch tab metadata and title (single API call)
-        doc_title, tabs = native_md.get_doc_tabs(document_id)
+        # Fetch tab metadata
+        tabs = native_md.get_doc_tabs(document_id)
         if not tabs:
-            tabs = [TabInfo(id="", title="Document", index=0)]
+            tabs = [{"id": "", "title": "Document", "index": 0}]
+
+        # Get document title
+        creds = get_authenticated_credentials()
+        docs_service = build("docs", "v1", credentials=creds)
+        doc = docs_service.documents().get(documentId=document_id).execute()
+        doc_title = doc.get("title", "Untitled")
 
         # Export only the first tab
         first_tab = tabs[0]
         full_md = native_md.export_doc_markdown(document_id)
-        tab_titles = [t.title for t in tabs]
-        tab_depths = [t.depth for t in tabs]
-        tab_contents = native_md.split_doc_by_tabs(full_md, tab_titles, tab_depths)
-        tab_content = tab_contents.get(first_tab.title, "")
+        tab_titles = [t["title"] for t in tabs]
+        tab_contents = native_md.split_doc_by_tabs(full_md, tab_titles)
+        tab_content = tab_contents.get(first_tab["title"], "")
 
         time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         section = DocSection(
@@ -1137,7 +1179,7 @@ def clone(url: str, output: Optional[Path], with_comments: bool, quiet: bool):
             source=source_url,
             time=time_str,
             section=1,
-            section_title=first_tab.title,
+            section_title=first_tab["title"],
             content=tab_content,
         )
 
@@ -1164,14 +1206,8 @@ def clone(url: str, output: Optional[Path], with_comments: bool, quiet: bool):
 
         if not quiet and len(tabs) > 1:
             click.echo(
-                f'  Tab "{first_tab.title}" cloned (1 of {len(tabs)} tabs).\n'
+                f'  Tab "{first_tab["title"]}" cloned (1 of {len(tabs)} tabs).\n'
                 f"  For all tabs: gax doc checkout {url}"
-            )
-
-        has_nested = any(t.depth > 0 for t in tabs)
-        if not quiet and has_nested:
-            click.echo(
-                "  Warning: Document has nested tabs. Use 'gax doc checkout' for full structure."
             )
 
     except Exception as e:
@@ -1221,50 +1257,6 @@ def pull(file: Path, with_comments: bool):
         sys.exit(1)
 
 
-def _safe_name(name: str) -> str:
-    """Sanitize a name for use as a filename."""
-    s = re.sub(r'[<>:"/\\|?*]', "-", name)
-    return re.sub(r"\s+", "_", s)
-
-
-def compute_tab_paths(sections: list[DocSection], folder: Path) -> list[Path]:
-    """Compute filesystem paths for checkout tab files.
-
-    Tabs with children get subdirectories; their content lives inside.
-    Leaf tabs are plain files in their parent's directory.
-
-    Returns a list of Paths parallel to sections (empty Path for comments).
-    """
-    ancestor_stack: list[str] = []
-    tab_paths: list[Path] = []
-
-    for section in sections:
-        if section.section_type == "comments":
-            tab_paths.append(Path(""))
-            continue
-
-        safe = _safe_name(section.section_title)
-        depth = section.tab_depth
-
-        # Trim ancestor stack to current depth
-        ancestor_stack = ancestor_stack[:depth]
-
-        if section.tab_has_children:
-            rel = Path(*ancestor_stack, safe) if ancestor_stack else Path(safe)
-            file_path = folder / rel / f"{safe}.tab.gax.md"
-            ancestor_stack.append(safe)
-        else:
-            if ancestor_stack:
-                rel = Path(*ancestor_stack)
-                file_path = folder / rel / f"{safe}.tab.gax.md"
-            else:
-                file_path = folder / f"{safe}.tab.gax.md"
-
-        tab_paths.append(file_path)
-
-    return tab_paths
-
-
 @doc.command()
 @click.argument("url")
 @click.option(
@@ -1305,7 +1297,7 @@ def checkout(url: str, output: Optional[Path]):
         # Create folder
         folder.mkdir(parents=True, exist_ok=True)
 
-        # Metadata will be written after tab paths are computed
+        # Write .gax.yaml metadata file
         metadata = {
             "type": "gax/doc-checkout",
             "document_id": document_id,
@@ -1313,24 +1305,6 @@ def checkout(url: str, output: Optional[Path]):
             "title": title,
             "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-
-        click.echo(f"Checking out {len(sections)} tabs to {folder}/")
-
-        tab_paths = compute_tab_paths(sections, folder)
-
-        # Write tab tree to .gax.yaml
-        tab_tree = []
-        for section, fpath in zip(sections, tab_paths):
-            if section.section_type == "comments":
-                continue
-            tab_tree.append({
-                "id": section.tab_id,
-                "title": section.section_title,
-                "path": str(fpath.relative_to(folder)),
-                "depth": section.tab_depth,
-            })
-        metadata["tabs"] = tab_tree
-
         metadata_path = folder / ".gax.yaml"
         with open(metadata_path, "w") as f:
             yaml.dump(
@@ -1341,11 +1315,13 @@ def checkout(url: str, output: Optional[Path]):
                 sort_keys=False,
             )
 
+        click.echo(f"Checking out {len(sections)} tabs to {folder}/")
+
         created = 0
         skipped = 0
 
         with operation("Writing tab files", total=len(sections)) as op:
-            for section, file_path in zip(sections, tab_paths):
+            for section in sections:
                 tab_name = section.section_title
                 logger.info(f"Processing tab: {tab_name}")
 
@@ -1354,6 +1330,11 @@ def checkout(url: str, output: Optional[Path]):
                     op.advance()
                     continue
 
+                # Generate filename
+                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
+                file_path = folder / f"{safe_tab_name}.tab.gax.md"
+
                 # Skip if exists
                 if file_path.exists():
                     skipped += 1
@@ -1361,15 +1342,12 @@ def checkout(url: str, output: Optional[Path]):
                     continue
 
                 try:
-                    # Create parent directories for nested tabs
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
-
                     # Write file with full YAML header
                     content = format_section(section)
                     file_path.write_text(content, encoding="utf-8")
 
                     created += 1
-                    click.echo(f"  {file_path.relative_to(folder)}")
+                    click.echo(f"  {file_path.name}")
 
                 except Exception as e:
                     click.echo(f"  Error with tab '{tab_name}': {e}", err=True)

@@ -145,7 +145,7 @@ def _detect_file_type(file_path: Path) -> str | None:
     return None
 
 
-def _pull_folder(folder_path: Path, verbose: bool = False, yes: bool = False) -> tuple[bool, str]:
+def _pull_folder(folder_path: Path, verbose: bool = False) -> tuple[bool, str]:
     """Pull a .gax.d folder. Returns (success, message).
 
     Performs a checkout to a scratch directory, shows diff, and asks for confirmation.
@@ -250,27 +250,13 @@ def _pull_folder(folder_path: Path, verbose: bool = False, yes: bool = False) ->
                 return False, "No URL or document_id in .gax.yaml"
 
             # Run checkout to scratch dir
-            from .gdoc import pull_doc, format_section, compute_tab_paths
+            from .gdoc import pull_doc, format_section
 
             sections = pull_doc(document_id, url)
 
             scratch_path.mkdir(parents=True, exist_ok=True)
 
-            # Compute nested tab paths
-            tab_paths = compute_tab_paths(sections, scratch_path)
-
-            # Write metadata with tab tree
-            tab_tree = []
-            for section, fpath in zip(sections, tab_paths):
-                if section.section_type == "comments":
-                    continue
-                tab_tree.append({
-                    "id": section.tab_id,
-                    "title": section.section_title,
-                    "path": str(fpath.relative_to(scratch_path)),
-                    "depth": section.tab_depth,
-                })
-
+            # Write metadata
             new_metadata = {
                 "type": "gax/doc-checkout",
                 "document_id": document_id,
@@ -279,7 +265,6 @@ def _pull_folder(folder_path: Path, verbose: bool = False, yes: bool = False) ->
                 "checked_out": datetime.now(timezone.utc).strftime(
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
-                "tabs": tab_tree,
             }
             with open(scratch_path / ".gax.yaml", "w") as f:
                 yaml.dump(
@@ -290,13 +275,17 @@ def _pull_folder(folder_path: Path, verbose: bool = False, yes: bool = False) ->
                     sort_keys=False,
                 )
 
-            # Create tab files at computed paths
-            for section, file_path in zip(sections, tab_paths):
+            # Create tab files
+            for section in sections:
                 if section.section_type == "comments":
                     continue
-                file_path.parent.mkdir(parents=True, exist_ok=True)
+                tab_name = section.section_title
+                safe_tab_name = re.sub(r'[<>:"/\\|?*]', "-", tab_name)
+                safe_tab_name = re.sub(r"\s+", "_", safe_tab_name)
+                file_name = f"{safe_tab_name}.tab.gax.md"
+
                 content = format_section(section)
-                file_path.write_text(content, encoding="utf-8")
+                (scratch_path / file_name).write_text(content, encoding="utf-8")
         else:
             return False, f"Unsupported checkout type: {checkout_type}"
 
@@ -401,7 +390,7 @@ def _pull_folder(folder_path: Path, verbose: bool = False, yes: bool = False) ->
         click.echo("-" * 60)
 
         # Prompt for confirmation
-        if not yes and not click.confirm(f"\nApply these changes to {folder_path}?"):
+        if not click.confirm(f"\nApply these changes to {folder_path}?"):
             shutil.rmtree(scratch_path)
             return False, "cancelled"
 
@@ -617,84 +606,6 @@ def _push_file(
         return False, str(e)
 
 
-def _push_doc_folder(
-    folder_path: Path, metadata: dict, yes: bool = False
-) -> tuple[bool, str]:
-    """Push a doc checkout folder. Each .tab.gax.md is pushed individually.
-
-    Returns (success, message).
-    """
-    from .gdoc import update_tab_content
-    from .gdoc import native_md
-    import difflib
-
-    document_id = metadata.get("document_id")
-    url = metadata.get("url")
-    if not document_id or not url:
-        return False, "No document_id or url in .gax.yaml"
-
-    # Find all .tab.gax.md files recursively
-    tab_files = sorted(folder_path.rglob("*.tab.gax.md"))
-    if not tab_files:
-        return False, "No .tab.gax.md files found"
-
-    # Parse each tab file and show diffs
-    tabs_to_push = []
-    for tab_file in tab_files:
-        content = tab_file.read_text(encoding="utf-8")
-        sections = parse_multipart(content)
-        if not sections:
-            continue
-
-        local_section = sections[0]
-        tab_name = local_section.headers.get(
-            "tab", local_section.headers.get("section_title", "")
-        )
-        if not tab_name:
-            continue
-
-        # Get remote content for diff
-        try:
-            remote_md = native_md.export_tab_markdown(document_id, tab_name)
-        except ValueError:
-            # Tab doesn't exist remotely yet — new tab
-            remote_md = ""
-
-        local_lines = local_section.content.splitlines(keepends=True)
-        remote_lines = remote_md.splitlines(keepends=True)
-
-        diff = list(
-            difflib.unified_diff(
-                remote_lines, local_lines, fromfile="remote", tofile="local"
-            )
-        )
-
-        if diff:
-            tabs_to_push.append((tab_file, tab_name, local_section.content, diff))
-
-    if not tabs_to_push:
-        return True, "no changes"
-
-    if not yes:
-        for tab_file, tab_name, _content, diff in tabs_to_push:
-            rel = tab_file.relative_to(folder_path)
-            click.echo(f"\n{rel} ({tab_name}):")
-            click.echo("-" * 40)
-            for line in diff:
-                click.echo(line.rstrip("\n"))
-        click.echo("-" * 40)
-        if not click.confirm(f"\nPush {len(tabs_to_push)} tab(s)?"):
-            return False, "cancelled"
-
-    pushed = 0
-    for _tab_file, tab_name, content, _diff in tabs_to_push:
-        content_to_push = native_md.inline_images_from_store(content)
-        update_tab_content(document_id, tab_name, content_to_push)
-        pushed += 1
-
-    return True, f"pushed {pushed} tab(s)"
-
-
 def _push_folder(
     folder_path: Path, yes: bool = False, with_formulas: bool = False
 ) -> tuple[bool, str]:
@@ -735,7 +646,10 @@ def _push_folder(
             return success_result, message
 
         elif checkout_type == "gax/doc-checkout":
-            return _push_doc_folder(folder_path, metadata, yes=yes)
+            return (
+                False,
+                "Doc folder push not yet supported. Use 'gax doc tab push' for individual tabs.",
+            )
 
         else:
             return False, f"Push not supported for checkout type: {checkout_type}"
@@ -900,8 +814,7 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
 @main.command("pull")
 @click.argument("files", nargs=-1, required=True)
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
-def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
+def unified_pull(files: tuple[str, ...], verbose: bool):
     """Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
 
     Automatically detects file type from YAML header and calls
@@ -955,7 +868,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
                     continue
 
                 logger.info(f"Pulling {path}/")
-                ok, message = _pull_folder(path, verbose, yes=yes)
+                ok, message = _pull_folder(path, verbose)
                 results.append((path, ok, message))
             else:
                 # Check if this is a file with a .gax.md tracking file (Drive file)
