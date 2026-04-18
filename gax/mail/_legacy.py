@@ -1,17 +1,13 @@
-"""Gmail sync for gax — legacy monolith being split into shared/thread/mailbox."""
+"""Gmail sync for gax — legacy CLI commands being moved to cli.py."""
 
 import logging
-import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import click
-from googleapiclient.discovery import build
 
-from ..auth import get_authenticated_credentials
-from ..ui import operation, success, error
+from ..ui import success, error
 from .. import docs as doc
 
 from .shared import (  # noqa: F401 — re-exported for backward compat
@@ -29,6 +25,25 @@ from .thread import (  # noqa: F401 — re-exported for backward compat
     Thread as Thread,
     _is_thread_id as _is_thread_id,
     _pull_single_file as _pull_single_file,
+)
+from .mailbox import (  # noqa: F401 — re-exported for backward compat
+    Mailbox as Mailbox,
+    SYS_LABEL_TO_ABBREV as SYS_LABEL_TO_ABBREV,
+    ABBREV_TO_SYS_LABEL as ABBREV_TO_SYS_LABEL,
+    CAT_LABEL_TO_ABBREV as CAT_LABEL_TO_ABBREV,
+    ABBREV_TO_CAT_LABEL as ABBREV_TO_CAT_LABEL,
+    TRACKED_SYS_LABELS as TRACKED_SYS_LABELS,
+    TRACKED_CAT_LABELS as TRACKED_CAT_LABELS,
+    _tsv_quote as _tsv_quote,
+    _parse_tsv_line as _parse_tsv_line,
+    _write_gax_file as _write_gax_file,
+    _parse_gax_header as _parse_gax_header,
+    _parse_gax_content as _parse_gax_content,
+    _make_filename as _make_filename,
+    _get_existing_thread_ids as _get_existing_thread_ids,
+    _get_thread_summary as _get_thread_summary,
+    _get_thread_for_relabel as _get_thread_for_relabel,
+    _relabel_fetch_threads as _relabel_fetch_threads,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,166 +107,6 @@ def pull(path: Path):
         sys.exit(1)
 
 
-def _make_filename(date_str: str, from_addr: str, subject: str, _thread_id: str) -> str:
-    """Create filename: date-from-subject.mail.gax.md"""
-    # Extract date (YYYY-MM-DD)
-    try:
-        from email.utils import parsedate_to_datetime
-
-        dt = parsedate_to_datetime(date_str)
-        date_part = dt.strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        # Try ISO format
-        if "T" in date_str:
-            date_part = date_str.split("T")[0]
-        else:
-            date_part = "unknown-date"
-
-    # Extract email from "Name <email>" format
-    email_match = re.search(r"<([^>]+)>", from_addr)
-    if email_match:
-        from_part = email_match.group(1)
-    else:
-        from_part = from_addr.split()[0] if from_addr else "unknown"
-
-    # Sanitize from
-    from_part = re.sub(r'[<>:"/\\|?*\s]', "", from_part)[:30]
-
-    # Sanitize subject
-    subject_part = re.sub(r'[<>:"/\\|?*]', "-", subject)
-    subject_part = re.sub(r"\s+", "_", subject_part)[:40]
-
-    return f"{date_part}-{from_part}-{subject_part}.mail.gax.md"
-
-
-def _get_existing_thread_ids(folder: Path) -> set[str]:
-    """Get thread IDs already synced to folder."""
-    if not folder.exists():
-        return set()
-
-    thread_ids = set()
-    for f in folder.glob("*.mail.gax.md"):
-        # Try to extract thread_id from file content
-        try:
-            content = f.read_text(encoding="utf-8")
-            match = re.search(r"^thread_id:\s*(\S+)", content, re.MULTILINE)
-            if match:
-                thread_ids.add(match.group(1))
-        except Exception:
-            pass
-
-    return thread_ids
-
-
-def _get_thread_summary(thread_id: str, service) -> dict:
-    """Get summary info for a thread (first message metadata)."""
-    thread = (
-        service.users()
-        .threads()
-        .get(
-            userId="me",
-            id=thread_id,
-            format="metadata",
-            metadataHeaders=["From", "Subject", "Date"],
-        )
-        .execute()
-    )
-
-    messages = thread.get("messages", [])
-    if not messages:
-        return {"thread_id": thread_id, "date": "", "from": "", "subject": ""}
-
-    # Get first message headers
-    headers = messages[0].get("payload", {}).get("headers", [])
-
-    from_addr = _get_header(headers, "From")
-    subject = _get_header(headers, "Subject")
-    date_str = _get_header(headers, "Date")
-
-    # Extract email from "Name <email>" format
-    email_match = re.search(r"<([^>]+)>", from_addr)
-    if email_match:
-        from_email = email_match.group(1)
-    else:
-        from_email = from_addr.split()[0] if from_addr else ""
-
-    # Parse date
-    try:
-        from email.utils import parsedate_to_datetime
-
-        dt = parsedate_to_datetime(date_str)
-        date_short = dt.strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        date_short = date_str[:10] if date_str else ""
-
-    return {
-        "thread_id": thread_id,
-        "date": date_short,
-        "from": from_email,
-        "subject": subject[:60],
-    }
-
-
-def _list_threads(query: str, limit: int):
-    """List threads matching query (TSV output)."""
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        threads = []
-        page_token = None
-        total_estimate = 0
-
-        while len(threads) < limit:
-            batch_size = min(100, limit - len(threads))
-            result = (
-                service.users()
-                .threads()
-                .list(
-                    userId="me",
-                    q=query,
-                    maxResults=batch_size,
-                    pageToken=page_token,
-                )
-                .execute()
-            )
-
-            total_estimate = result.get("resultSizeEstimate", 0)
-            batch = result.get("threads", [])
-            threads.extend(batch)
-
-            page_token = result.get("nextPageToken")
-            if not page_token or not batch:
-                break
-
-        threads = threads[:limit]
-
-        if not threads:
-            click.echo("No threads found.", err=True)
-            sys.exit(1)
-
-        if total_estimate > limit:
-            click.echo(
-                f"# Found ~{total_estimate} threads, showing first {limit}", err=True
-            )
-
-        click.echo("thread_id\tdate\tfrom\tsubject")
-
-        for thread_info in threads:
-            thread_id = thread_info["id"]
-            try:
-                summary = _get_thread_summary(thread_id, service)
-                click.echo(
-                    f"{summary['thread_id']}\t{summary['date']}\t{summary['from']}\t{summary['subject']}"
-                )
-            except Exception as e:
-                click.echo(f"# Error fetching {thread_id}: {e}", err=True)
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
 @thread.command()
 @click.argument("file_or_url")
 @click.option(
@@ -261,14 +116,7 @@ def _list_threads(query: str, limit: int):
     help="Output file (default: Re_<subject>.draft.gax.md)",
 )
 def reply(file_or_url: str, output: Optional[Path]):
-    """Create a reply draft from a thread.
-
-    Examples:
-
-        gax mail reply Project_Update.mail.gax.md
-        gax mail reply "https://mail.google.com/mail/u/0/#inbox/abc123"
-        gax mail reply thread.mail.gax.md -o my_reply.draft.gax.md
-    """
+    """Create a reply draft from a thread."""
     try:
         out_path = Thread().reply(file_or_url, output=output)
         success(f"Created: {out_path}")
@@ -279,7 +127,7 @@ def reply(file_or_url: str, output: Optional[Path]):
 
 
 # =============================================================================
-# List commands (search and bulk label operations)
+# Mailbox CLI commands (will move to cli.py in Step 4)
 # =============================================================================
 
 
@@ -302,257 +150,11 @@ def mailbox(ctx, query: str, limit: int):
         gax mailbox clone                  # Clone for bulk labeling
     """
     if ctx.invoked_subcommand is None:
-        # Default action: search/list threads
-        _list_threads(query, limit)
-
-
-# System label abbreviations (token-efficient)
-SYS_LABEL_TO_ABBREV = {
-    "INBOX": "I",
-    "SPAM": "S",
-    "TRASH": "T",
-    "UNREAD": "U",
-    "STARRED": "*",
-    "IMPORTANT": "!",
-}
-ABBREV_TO_SYS_LABEL = {v: k for k, v in SYS_LABEL_TO_ABBREV.items()}
-
-# Category abbreviations (mutually exclusive)
-CAT_LABEL_TO_ABBREV = {
-    "CATEGORY_PERSONAL": "P",
-    "CATEGORY_UPDATES": "U",
-    "CATEGORY_PROMOTIONS": "R",
-    "CATEGORY_SOCIAL": "S",
-    "CATEGORY_FORUMS": "F",
-}
-ABBREV_TO_CAT_LABEL = {v: k for k, v in CAT_LABEL_TO_ABBREV.items()}
-
-# System labels to track (others like SENT, DRAFT are ignored)
-TRACKED_SYS_LABELS = set(SYS_LABEL_TO_ABBREV.keys())
-TRACKED_CAT_LABELS = set(CAT_LABEL_TO_ABBREV.keys())
-
-
-def _get_thread_for_relabel(thread_id: str, service, label_id_to_name: dict) -> dict:
-    """Get thread info for relabel output.
-
-    Args:
-        thread_id: Gmail thread ID
-        service: Gmail API service
-        label_id_to_name: Mapping from label ID to name
-
-    Returns:
-        Dict with 'sys', 'cat', and 'labels'
-    """
-    thread = (
-        service.users()
-        .threads()
-        .get(
-            userId="me",
-            id=thread_id,
-            format="metadata",
-            metadataHeaders=["From", "Subject", "Date"],
-        )
-        .execute()
-    )
-
-    messages = thread.get("messages", [])
-    if not messages:
-        return {
-            "id": thread_id,
-            "sys": "",
-            "cat": "",
-            "labels": [],
-            "from": "",
-            "subject": "",
-            "date": "",
-            "snippet": "",
-        }
-
-    # Collect all labels from all messages in thread
-    label_ids = set()
-    for msg in messages:
-        label_ids.update(msg.get("labelIds", []))
-
-    # Separate system labels, category, and user labels
-    sys_abbrevs = []
-    cat_abbrev = ""
-    user_labels = []
-    for lid in label_ids:
-        if lid in TRACKED_SYS_LABELS:
-            sys_abbrevs.append(SYS_LABEL_TO_ABBREV[lid])
-        elif lid in TRACKED_CAT_LABELS:
-            cat_abbrev = CAT_LABEL_TO_ABBREV[lid]
-        elif lid not in {"SENT", "DRAFT", "CHAT"}:
-            # User label - convert ID to name
-            name = label_id_to_name.get(lid, lid)
-            user_labels.append(name)
-
-    # Sort abbreviations in consistent order: I S T U * !
-    abbrev_order = "ISTU*!"
-    sys_abbrevs.sort(key=lambda x: abbrev_order.index(x) if x in abbrev_order else 99)
-
-    # Get first message headers
-    first_msg = messages[0]
-    headers = first_msg.get("payload", {}).get("headers", [])
-    snippet = first_msg.get("snippet", "")[:80]
-
-    from_addr = _get_header(headers, "From")
-    subject = _get_header(headers, "Subject")
-    date_str = _get_header(headers, "Date")
-
-    # Extract email from "Name <email>" format
-    email_match = re.search(r"<([^>]+)>", from_addr)
-    if email_match:
-        from_email = email_match.group(1)
-    else:
-        from_email = from_addr.split()[0] if from_addr else ""
-
-    # Parse date
-    try:
-        from email.utils import parsedate_to_datetime
-
-        dt = parsedate_to_datetime(date_str)
-        date_short = dt.strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        date_short = date_str[:10] if date_str else ""
-
-    return {
-        "id": thread_id,
-        "sys": "".join(sys_abbrevs),
-        "cat": cat_abbrev,
-        "labels": sorted(user_labels),
-        "from": from_email,
-        "subject": subject[:60],
-        "date": date_short,
-        "snippet": snippet,
-    }
-
-
-def _tsv_quote(value: str) -> str:
-    """Quote a TSV field if it contains special characters."""
-    if "\t" in value or "\n" in value or '"' in value:
-        return '"' + value.replace('"', '""') + '"'
-    return value
-
-
-def _relabel_fetch_threads(
-    service, query: str, limit: int, label_id_to_name: dict
-) -> list[dict]:
-    """Fetch threads for relabeling."""
-    threads = []
-    page_token = None
-
-    while len(threads) < limit:
-        batch_size = min(100, limit - len(threads))
-        result = (
-            service.users()
-            .threads()
-            .list(
-                userId="me",
-                q=query,
-                maxResults=batch_size,
-                pageToken=page_token,
-            )
-            .execute()
-        )
-
-        batch = result.get("threads", [])
-        threads.extend(batch)
-
-        page_token = result.get("nextPageToken")
-        if not page_token or not batch:
-            break
-
-    threads = threads[:limit]
-
-    # Get details for each thread
-    thread_data = []
-    for thread_info in threads:
         try:
-            data = _get_thread_for_relabel(thread_info["id"], service, label_id_to_name)
-            thread_data.append(data)
-        except Exception as e:
-            click.echo(f"# Error fetching {thread_info['id']}: {e}", err=True)
-
-    return thread_data
-
-
-def _write_gax_file(path: Path, query: str, limit: int, thread_data: list[dict]):
-    """Write threads to .gax.md file with YAML header and TSV content."""
-    # Build TSV content first to get content-length
-    tsv_lines = ["id\tfrom\tsubject\tdate\tsys\tcat\tlabels"]
-    for t in thread_data:
-        from_q = _tsv_quote(t["from"])
-        subject_q = _tsv_quote(t["subject"])
-        labels_str = ",".join(t["labels"]) if t["labels"] else ""
-        tsv_lines.append(
-            f"{t['id']}\t{from_q}\t{subject_q}\t{t['date']}\t{t['sys']}\t{t['cat']}\t{labels_str}"
-        )
-    tsv_content = "\n".join(tsv_lines) + "\n"
-    content_length = len(tsv_content.encode("utf-8"))
-
-    with open(path, "w") as f:
-        # YAML header
-        f.write("---\n")
-        f.write("type: gax/list\n")
-        f.write(
-            f"pulled: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
-        )
-        f.write(f"query: {query}\n")
-        f.write(f"limit: {limit}\n")
-        f.write("columns:\n")
-        f.write("  sys: I=Inbox S=Spam T=Trash U=Unread *=Starred !=Important\n")
-        f.write("  cat: P=Personal U=Updates R=Promotions S=Social F=Forums\n")
-        f.write("  labels: user labels (comma-sep, nesting with /)\n")
-        f.write("content-type: text/tab-separated-values\n")
-        f.write(f"content-length: {content_length}\n")
-        f.write("---\n")
-        # TSV content
-        f.write(tsv_content)
-
-
-def _parse_gax_header(path: Path) -> dict:
-    """Parse YAML header from .gax.md file to get query and limit."""
-    header = {"query": None, "limit": 50}
-    with open(path) as f:
-        content = f.read()
-
-    # Parse YAML header between --- markers
-    if not content.startswith("---\n"):
-        return header
-
-    # Find closing ---
-    header_end = content.find("\n---\n", 4)
-    if header_end == -1:
-        return header
-
-    header_text = content[4:header_end]
-    for line in header_text.split("\n"):
-        if line.startswith("query:"):
-            header["query"] = line.split(":", 1)[1].strip()
-        elif line.startswith("limit:"):
-            try:
-                header["limit"] = int(line.split(":", 1)[1].strip())
-            except ValueError:
-                pass
-
-    return header
-
-
-def _parse_gax_content(path: Path) -> str:
-    """Extract TSV content from .gax.md file (skip YAML header)."""
-    with open(path) as f:
-        content = f.read()
-
-    if not content.startswith("---\n"):
-        return content
-
-    # Find closing ---
-    header_end = content.find("\n---\n", 4)
-    if header_end == -1:
-        return content
-
-    return content[header_end + 5 :]  # Skip \n---\n
+            Mailbox().list(sys.stdout, query=query, limit=limit)
+        except ValueError as e:
+            error(str(e))
+            sys.exit(1)
 
 
 @mailbox.command("fetch")
@@ -568,103 +170,12 @@ def _parse_gax_content(path: Path) -> str:
 )
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
 def mailbox_fetch(output: Path, query: str, limit: int):
-    """Fetch full threads matching query into a folder.
-
-    Searches Gmail and retrieves each matching thread as a full .mail.gax.md file.
-    Incremental: skips existing threads.
-
-    \b
-    Examples:
-        gax mailbox fetch
-        gax mailbox fetch -o Inbox/ -q "in:inbox"
-        gax mailbox fetch -o Alice/ -q "from:alice" --limit 100
-
-    \b
-    Workflow:
-        1. fetch -> retrieve full threads from Gmail to folder
-        2. grep/search folder contents as needed
-    """
+    """Fetch full threads matching query into a folder."""
     try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        # Search threads
-        click.echo(f"Searching: {query}")
-        threads = []
-        page_token = None
-
-        while len(threads) < limit:
-            batch_size = min(100, limit - len(threads))
-            result = (
-                service.users()
-                .threads()
-                .list(
-                    userId="me",
-                    q=query,
-                    maxResults=batch_size,
-                    pageToken=page_token,
-                )
-                .execute()
-            )
-
-            batch = result.get("threads", [])
-            threads.extend(batch)
-
-            page_token = result.get("nextPageToken")
-            if not page_token or not batch:
-                break
-
-        threads = threads[:limit]
-
-        if not threads:
-            click.echo("No threads found.", err=True)
-            sys.exit(1)
-
-        thread_ids = [t["id"] for t in threads]
-        click.echo(f"Found {len(thread_ids)} threads")
-
-        # Create output folder
-        output.mkdir(parents=True, exist_ok=True)
-
-        # Get already cloned thread IDs
-        existing_ids = _get_existing_thread_ids(output)
-
-        # Clone each thread
-        cloned = 0
-        skipped = 0
-
-        for thread_id in thread_ids:
-            if thread_id in existing_ids:
-                skipped += 1
-                continue
-
-            try:
-                sections = pull_thread(thread_id)
-                content = format_multipart(sections)
-
-                # Generate filename
-                first = sections[0]
-                filename = _make_filename(
-                    first.date, first.from_addr, first.title, thread_id
-                )
-                file_path = output / filename
-
-                # Avoid overwriting
-                if file_path.exists():
-                    base = file_path.stem
-                    file_path = output / f"{base}_{thread_id}.mail.gax.md"
-
-                file_path.write_text(content, encoding="utf-8")
-                cloned += 1
-                click.echo(f"  {filename}")
-
-            except Exception as e:
-                click.echo(f"  Error cloning {thread_id}: {e}", err=True)
-
-        click.echo(f"Checked out: {cloned}, Skipped: {skipped} (already present)")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        cloned, skipped = Mailbox().fetch(query=query, limit=limit, output=output)
+        success(f"Cloned: {cloned}, Skipped: {skipped} (already present)")
+    except ValueError as e:
+        error(str(e))
         sys.exit(1)
 
 
@@ -680,126 +191,25 @@ def mailbox_fetch(output: Path, query: str, limit: int):
 )
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
 def mailbox_clone(output: str, query: str, limit: int):
-    """Clone threads from Gmail for bulk labeling.
-
-    Creates a .gax.md file with current state. Use 'pull' to update,
-    'plan' to compute changes, 'apply' to execute.
-
-    \b
-    Columns:
-      sys:    I=Inbox S=Spam T=Trash U=Unread *=Starred !=Important
-      cat:    P=Personal U=Updates R=Promotions S=Social F=Forums
-      labels: User labels (comma-separated, nesting with /)
-
-    \b
-    Examples:
-        gax mailbox clone
-        gax mailbox clone -o inbox.gax.md -q "in:inbox"
-        gax mailbox clone -o spam.gax.md -q "in:spam" --limit 100
-
-    \b
-    Workflow:
-        1. clone  -> create .gax.md file with current state
-        2. pull   -> update .gax.md file (re-fetch)
-        3. edit   -> change sys/cat/labels to desired state
-        4. plan   -> compute diff
-        5. apply  -> execute changes
-    """
-    output_path = Path(output)
-
-    # Check for existing file
-    if output_path.exists():
-        click.echo(f"Error: {output} already exists. Use 'pull' to update.", err=True)
-        sys.exit(1)
-
+    """Clone threads from Gmail for bulk labeling."""
     try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        # Get all labels for ID to name mapping
-        labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {}
-        for label in labels_result.get("labels", []):
-            label_id_to_name[label["id"]] = label["name"]
-
-        thread_data = _relabel_fetch_threads(service, query, limit, label_id_to_name)
-
-        _write_gax_file(output_path, query, limit, thread_data)
-
-        click.echo(f"Cloned {len(thread_data)} threads to {output}")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        file_path = Mailbox().clone(query=query, limit=limit, output=Path(output))
+        success(f"Cloned to: {file_path}")
+    except ValueError as e:
+        error(str(e))
         sys.exit(1)
 
 
 @mailbox.command("pull")
 @click.argument("file", type=click.Path(exists=True))
 def relabel_pull(file: str):
-    """Update a .gax.md file by re-fetching from Gmail.
-
-    Reads the query from the file header and fetches fresh data.
-
-    \b
-    Example:
-        gax mail list pull inbox.gax.md
-    """
-    path = Path(file)
-
-    # Parse header to get query
-    header = _parse_gax_header(path)
-    if not header["query"]:
-        click.echo(f"Error: No query found in {file} header", err=True)
-        sys.exit(1)
-
-    query = header["query"]
-    limit = header["limit"]
-
+    """Update a .gax.md file by re-fetching from Gmail."""
     try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        # Get all labels for ID to name mapping
-        labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {}
-        for label in labels_result.get("labels", []):
-            label_id_to_name[label["id"]] = label["name"]
-
-        thread_data = _relabel_fetch_threads(service, query, limit, label_id_to_name)
-
-        _write_gax_file(path, query, limit, thread_data)
-
-        click.echo(f"Pulled {len(thread_data)} threads to {file}")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        Mailbox().pull(Path(file))
+        success(f"Updated: {file}")
+    except ValueError as e:
+        error(str(e))
         sys.exit(1)
-
-
-def _parse_tsv_line(line: str) -> list[str]:
-    """Parse a TSV line, handling quoted fields."""
-    fields = []
-    current = ""
-    in_quotes = False
-
-    i = 0
-    while i < len(line):
-        c = line[i]
-        if c == '"':
-            if in_quotes and i + 1 < len(line) and line[i + 1] == '"':
-                current += '"'
-                i += 2
-                continue
-            in_quotes = not in_quotes
-        elif c == "\t" and not in_quotes:
-            fields.append(current)
-            current = ""
-        else:
-            current += c
-        i += 1
-
-    fields.append(current)
-    return fields
 
 
 @mailbox.command("plan")
@@ -811,209 +221,15 @@ def _parse_tsv_line(line: str) -> list[str]:
     help="Output file (default: mailbox.plan.yaml)",
 )
 def mailbox_plan(file: str, output: str):
-    """Generate plan from edited list file.
-
-    Compares desired state (sys/cat/labels) with current state in Gmail.
-    Outputs add/remove operations needed to reach desired state.
-
-    \b
-    Columns:
-      sys:    I=Inbox S=Spam T=Trash U=Unread *=Starred !=Important
-      cat:    P=Personal U=Updates R=Promotions S=Social F=Forums
-      labels: User labels (comma-separated)
-
-    Example:
-
-        gax mail list plan inbox.gax.md
-    """
+    """Generate plan from edited list file."""
     import yaml
 
     try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        plan = Mailbox().compute_plan(Path(file))
 
-        # Get label mappings
-        labels_result = service.users().labels().list(userId="me").execute()
-        label_name_to_id = {}
-        label_id_to_name = {}
-        for label in labels_result.get("labels", []):
-            label_name_to_id[label["name"]] = label["id"]
-            label_id_to_name[label["id"]] = label["name"]
-
-        # Read TSV content (skip YAML header if present)
-        tsv_content = _parse_gax_content(Path(file))
-        lines = tsv_content.split("\n")
-
-        # Parse header and data
-        data_lines = []
-        header = None
-        for line in lines:
-            line = line.rstrip("\n")
-            if not line.strip():
-                continue
-            if header is None:
-                header = _parse_tsv_line(line)
-                continue
-            data_lines.append(line)
-
-        if not header:
-            click.echo("Error: No header found in TSV", err=True)
-            sys.exit(1)
-
-        # Find column indices
-        try:
-            id_idx = header.index("id")
-            sys_idx = header.index("sys")
-            cat_idx = header.index("cat")
-            labels_idx = header.index("labels")
-        except ValueError as e:
-            click.echo(f"Error: Missing required column: {e}", err=True)
-            sys.exit(1)
-
-        # Build changes
-        changes = []
-        errors = []
-
-        for line in data_lines:
-            if not line.strip():
-                continue
-
-            fields = _parse_tsv_line(line)
-            # Require at least sys column (minimum useful data)
-            if len(fields) <= sys_idx:
-                continue
-
-            thread_id = fields[id_idx].strip()
-            desired_sys = fields[sys_idx].strip()
-            desired_cat = fields[cat_idx].strip() if len(fields) > cat_idx else ""
-            desired_labels_str = (
-                fields[labels_idx].strip() if len(fields) > labels_idx else ""
-            )
-
-            if not thread_id:
-                continue
-
-            # Parse desired sys labels
-            desired_sys_labels = set()
-            for c in desired_sys:
-                if c in ABBREV_TO_SYS_LABEL:
-                    desired_sys_labels.add(ABBREV_TO_SYS_LABEL[c])
-
-            # Parse desired category
-            desired_cat_label = None
-            if desired_cat and desired_cat in ABBREV_TO_CAT_LABEL:
-                desired_cat_label = ABBREV_TO_CAT_LABEL[desired_cat]
-
-            # Parse desired user labels
-            desired_labels = set()
-            if desired_labels_str:
-                desired_labels = {
-                    lbl.strip() for lbl in desired_labels_str.split(",") if lbl.strip()
-                }
-
-            # Get current labels from Gmail
-            try:
-                thread = (
-                    service.users()
-                    .threads()
-                    .get(userId="me", id=thread_id, format="minimal")
-                    .execute()
-                )
-            except Exception as e:
-                errors.append(f"Cannot fetch thread {thread_id}: {e}")
-                continue
-
-            current_label_ids = set()
-            for msg in thread.get("messages", []):
-                current_label_ids.update(msg.get("labelIds", []))
-
-            # Separate current labels
-            current_sys_labels = current_label_ids & TRACKED_SYS_LABELS
-            current_cat_labels = current_label_ids & TRACKED_CAT_LABELS
-            current_cat_label = next(iter(current_cat_labels), None)
-            current_user_labels = set()
-            for lid in current_label_ids:
-                if lid not in TRACKED_SYS_LABELS and lid not in TRACKED_CAT_LABELS:
-                    if lid not in {"SENT", "DRAFT", "CHAT"}:
-                        name = label_id_to_name.get(lid, lid)
-                        current_user_labels.add(name)
-
-            # Compute diffs
-            sys_to_add = desired_sys_labels - current_sys_labels
-            sys_to_remove = current_sys_labels - desired_sys_labels
-
-            cat_to_add = None
-            cat_to_remove = None
-            if desired_cat_label not in current_cat_labels:
-                if desired_cat_label:
-                    cat_to_add = desired_cat_label
-                if current_cat_label:
-                    cat_to_remove = current_cat_label
-
-            labels_to_add = desired_labels - current_user_labels
-            # Also add parent labels for nested labels (hub/i/x → hub/i, hub)
-            parents_to_add = set()
-            for lbl in labels_to_add:
-                parts = lbl.split("/")
-                for i in range(1, len(parts)):
-                    parent = "/".join(parts[:i])
-                    if parent not in current_user_labels:
-                        parents_to_add.add(parent)
-            labels_to_add |= parents_to_add
-            # Don't remove parents that are implied by desired labels
-            desired_labels_expanded = set(desired_labels)
-            for lbl in desired_labels:
-                parts = lbl.split("/")
-                for i in range(1, len(parts)):
-                    desired_labels_expanded.add("/".join(parts[:i]))
-            labels_to_remove = current_user_labels - desired_labels_expanded
-
-            # Build change record
-            change = {"id": thread_id}
-            has_change = False
-
-            # System label changes
-            if sys_to_add:
-                change["add_sys"] = sorted(sys_to_add)
-                has_change = True
-            if sys_to_remove:
-                change["remove_sys"] = sorted(sys_to_remove)
-                has_change = True
-
-            # Category change
-            if cat_to_add:
-                change["add_cat"] = cat_to_add
-                has_change = True
-            if cat_to_remove:
-                change["remove_cat"] = cat_to_remove
-                has_change = True
-
-            # User label changes
-            if labels_to_add:
-                change["add"] = sorted(labels_to_add)
-                has_change = True
-            if labels_to_remove:
-                change["remove"] = sorted(labels_to_remove)
-                has_change = True
-
-            if has_change:
-                changes.append(change)
-
-        if errors:
-            for err in errors:
-                click.echo(f"Error: {err}", err=True)
-            sys.exit(1)
-
-        if not changes:
+        if not plan["changes"]:
             click.echo("No changes to apply.")
             return
-
-        # Write plan
-        plan = {
-            "source": file,
-            "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "changes": changes,
-        }
 
         path = Path(output)
         with open(path, "w") as f:
@@ -1021,7 +237,9 @@ def mailbox_plan(file: str, output: str):
                 plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False
             )
 
-        # Summary
+        changes = plan["changes"]
+        click.echo(f"Wrote {len(changes)} changes to {output}")
+
         sys_add_count = sum(1 for c in changes if c.get("add_sys"))
         sys_remove_count = sum(1 for c in changes if c.get("remove_sys"))
         cat_change_count = sum(
@@ -1030,7 +248,6 @@ def mailbox_plan(file: str, output: str):
         add_count = sum(1 for c in changes if c.get("add"))
         remove_count = sum(1 for c in changes if c.get("remove"))
 
-        click.echo(f"Wrote {len(changes)} changes to {output}")
         if sys_add_count or sys_remove_count:
             click.echo(f"  System label changes: {sys_add_count + sys_remove_count}")
         if cat_change_count:
@@ -1040,8 +257,8 @@ def mailbox_plan(file: str, output: str):
         if remove_count:
             click.echo(f"  Remove user labels: {remove_count}")
 
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    except ValueError as e:
+        error(str(e))
         sys.exit(1)
 
 
@@ -1049,21 +266,10 @@ def mailbox_plan(file: str, output: str):
 @click.argument("plan_file", type=click.Path(exists=True))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def relabel_apply(plan_file: str, yes: bool):
-    """Apply label changes from plan.
-
-    Reads the plan file and applies sys/cat/label changes.
-
-    Example:
-
-        gax mail list apply inbox.plan.yaml
-    """
+    """Apply label changes from plan."""
     import yaml
 
     try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        # Read plan
         with open(plan_file) as f:
             plan = yaml.safe_load(f)
 
@@ -1071,19 +277,6 @@ def relabel_apply(plan_file: str, yes: bool):
         if not changes:
             click.echo("No changes in plan.")
             return
-
-        # Get label name -> id mapping
-        labels_result = service.users().labels().list(userId="me").execute()
-        label_map = {
-            label["name"]: label["id"] for label in labels_result.get("labels", [])
-        }
-
-        # Find user labels that need to be created
-        labels_to_create = set()
-        for change in changes:
-            for label_name in change.get("add", []):
-                if label_name not in label_map:
-                    labels_to_create.add(label_name)
 
         # Show summary
         click.echo(f"Plan: {plan_file}")
@@ -1110,119 +303,17 @@ def relabel_apply(plan_file: str, yes: bool):
         if len(changes) > 10:
             click.echo(f"  ... and {len(changes) - 10} more")
 
-        if labels_to_create:
-            click.echo()
-            click.echo(f"Labels to create: {', '.join(sorted(labels_to_create))}")
-
         click.echo()
 
         if not yes and not click.confirm("Apply these changes?"):
             click.echo("Aborted.")
             return
 
-        # Create missing user labels (with parent labels for nesting)
-        if labels_to_create:
-            with operation("Creating labels", total=len(labels_to_create)) as op:
-                for label_name in sorted(labels_to_create):
-                    try:
-                        # For nested labels (with /), create parents first
-                        if "/" in label_name:
-                            parts = label_name.split("/")
-                            for i in range(len(parts)):
-                                partial = "/".join(parts[: i + 1])
-                                if partial not in label_map:
-                                    logger.info(f"Creating: {partial}")
-                                    result = (
-                                        service.users()
-                                        .labels()
-                                        .create(userId="me", body={"name": partial})
-                                        .execute()
-                                    )
-                                    label_map[partial] = result["id"]
-                        else:
-                            if label_name not in label_map:
-                                logger.info(f"Creating: {label_name}")
-                                result = (
-                                    service.users()
-                                    .labels()
-                                    .create(userId="me", body={"name": label_name})
-                                    .execute()
-                                )
-                                label_map[label_name] = result["id"]
-                    except Exception as e:
-                        if "Label name exists" not in str(e):
-                            error(f"Error creating label '{label_name}': {e}")
-                    op.advance()
-
-        # Apply changes
-        succeeded = 0
-        failed = 0
-
-        with operation("Applying label changes", total=len(changes)) as op:
-            for change in changes:
-                thread_id = change["id"]
-                try:
-                    add_ids = []
-                    remove_ids = []
-
-                    # System labels to add
-                    if change.get("add_sys"):
-                        add_ids.extend(change["add_sys"])
-
-                    # System labels to remove
-                    if change.get("remove_sys"):
-                        remove_ids.extend(change["remove_sys"])
-
-                    # Category to add
-                    if change.get("add_cat"):
-                        add_ids.append(change["add_cat"])
-
-                    # Category to remove
-                    if change.get("remove_cat"):
-                        remove_ids.append(change["remove_cat"])
-
-                    # User labels to add
-                    if change.get("add"):
-                        add_ids.extend(label_map[name] for name in change["add"])
-
-                    # User labels to remove
-                    if change.get("remove"):
-                        remove_ids.extend(label_map[name] for name in change["remove"])
-
-                    modify_body = {}
-                    if add_ids:
-                        modify_body["addLabelIds"] = add_ids
-                    if remove_ids:
-                        modify_body["removeLabelIds"] = remove_ids
-
-                    if modify_body:
-                        logger.info(f"Thread {thread_id[:8]}...")
-                        service.users().threads().modify(
-                            userId="me",
-                            id=thread_id,
-                            body=modify_body,
-                        ).execute()
-
-                    succeeded += 1
-
-                except Exception as e:
-                    error(f"Error on {thread_id}: {e}")
-                    failed += 1
-
-                op.advance()
-
+        succeeded, failed = Mailbox().apply_plan(plan)
         success(f"Applied: {succeeded} threads")
         if failed:
             error(f"Failed: {failed} threads")
 
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    except ValueError as e:
+        error(str(e))
         sys.exit(1)
-
-
-# All mail subcommands are now top-level (registered in cli.py) - see ADR 020
-# - thread → mail (individual threads)
-# - list → mailbox (thread collections)
-# - draft → draft (top-level)
-# - label → mail-label (top-level)
-# - filter → mail-filter (top-level)
