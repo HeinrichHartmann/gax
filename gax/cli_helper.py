@@ -168,6 +168,16 @@ def _pull_folder(
             from .gdoc import Doc
 
             Doc().clone(url, output=scratch_path)
+
+        elif checkout_type == "gax/drive-checkout":
+            # Drive folders pull in-place (no scratch dir diffing for binary files)
+            if scratch_path.exists():
+                shutil.rmtree(scratch_path)
+            from .gdrive import Folder
+
+            Folder().pull(folder_path)
+            return True, "updated"
+
         else:
             return False, f"Unsupported checkout type: {checkout_type}"
 

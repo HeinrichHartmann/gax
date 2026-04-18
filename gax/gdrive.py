@@ -1,4 +1,4 @@
-"""Google Drive file operations for gax.
+"""Google Drive file and folder operations for gax.
 
 Resource module — follows the draft.py reference pattern.
 
@@ -9,8 +9,9 @@ Module structure
 ================
 
   File format        — create/read sidecar tracking files
-  Drive API helpers  — download, upload, update, permissions
-  File(Resource)     — resource class (the public interface for cli.py)
+  Drive API helpers  — download, upload, update, permissions, folder listing
+  File(Resource)     — single file resource (clone/pull/push)
+  Folder             — folder collection manager (checkout/pull)
 
 Design decisions
 ================
@@ -25,6 +26,11 @@ Additional notes specific to file:
 
   No diff: binary files can't be meaningfully diffed. diff() raises
   NotImplementedError (inherited from base class).
+
+  Folder checkout: creates a .drive.gax.md.d/ directory with per-file
+  sidecars. Google Workspace files (Docs, Sheets, Forms) are cloned
+  via their native gax resource instead of binary download.
+  See ADR 028 for design details.
 """
 
 import logging
@@ -220,7 +226,90 @@ def set_public(file_id: str, public: bool = True):
 
 
 # =============================================================================
-# Resource class — the public interface for cli.py.
+# Folder API helpers — list folder contents, extract folder ID.
+# =============================================================================
+
+WORKSPACE_MIME_TYPES = {
+    "application/vnd.google-apps.document": "doc",
+    "application/vnd.google-apps.spreadsheet": "sheet",
+    "application/vnd.google-apps.form": "form",
+}
+
+FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+
+
+def extract_folder_id(url_or_id: str) -> str:
+    """Extract folder ID from Google Drive folder URL or return as-is."""
+    patterns = [
+        r"/folders/([a-zA-Z0-9_-]+)",
+        r"^([a-zA-Z0-9_-]+)$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url_or_id)
+        if match:
+            return match.group(1)
+    raise ValueError(f"Cannot extract folder ID from: {url_or_id}")
+
+
+def get_folder_metadata(folder_id: str, *, service=None) -> dict:
+    """Get folder name and metadata. Returns dict with id, name."""
+    if service is None:
+        creds = get_authenticated_credentials()
+        service = build("drive", "v3", credentials=creds)
+    return service.files().get(fileId=folder_id, fields="id,name").execute()
+
+
+def list_folder(folder_id: str, *, recursive: bool = False, service=None) -> list[dict]:
+    """List files in a Drive folder.
+
+    Returns flat list of dicts, each with:
+      id, name, mimeType, size, path (relative to root folder), is_folder
+
+    Handles pagination. With recursive=True, traverses subfolders.
+    """
+    if service is None:
+        creds = get_authenticated_credentials()
+        service = build("drive", "v3", credentials=creds)
+
+    def _list_one(parent_id: str, prefix: str) -> list[dict]:
+        items = []
+        page_token = None
+        while True:
+            resp = (
+                service.files()
+                .list(
+                    q=f"'{parent_id}' in parents and trashed=false",
+                    fields="nextPageToken,files(id,name,mimeType,size)",
+                    pageSize=1000,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            for f in resp.get("files", []):
+                rel_path = f"{prefix}{f['name']}" if prefix else f["name"]
+                is_folder = f["mimeType"] == FOLDER_MIME_TYPE
+                items.append(
+                    {
+                        "id": f["id"],
+                        "name": f["name"],
+                        "mimeType": f["mimeType"],
+                        "size": int(f.get("size", 0)),
+                        "path": rel_path,
+                        "is_folder": is_folder,
+                    }
+                )
+                if is_folder and recursive:
+                    items.extend(_list_one(f["id"], f"{rel_path}/"))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return items
+
+    return _list_one(folder_id, "")
+
+
+# =============================================================================
+# File(Resource) — single file resource.
 # =============================================================================
 
 
@@ -297,3 +386,260 @@ class File(Resource):
 
         create_tracking_file(path, metadata)
         logger.info(f"View: {metadata.get('webViewLink', '')}")
+
+
+def _safe_name(name: str) -> str:
+    """Sanitize a file/folder name for use as a local path component."""
+    safe = re.sub(r'[<>:"/\\|?*]', "-", name)
+    return re.sub(r"\s+", "_", safe)
+
+
+# =============================================================================
+# Folder — collection manager for Drive folders (checkout/pull).
+# =============================================================================
+
+
+class Folder:
+    """Google Drive folder — checkout/pull a folder tree.
+
+    Not a Resource subclass (collection manager, like Mailbox and Sheet).
+    Dispatches to native gax resources for Google Workspace files.
+    """
+
+    name = "folder"
+
+    def checkout(
+        self,
+        url: str,
+        output: Path | None = None,
+        *,
+        recursive: bool = False,
+    ) -> Path:
+        """Checkout a Drive folder to a local directory. Returns path created.
+
+        Downloads all files. Google Workspace files (Docs, Sheets, Forms)
+        are cloned via their native gax resource.
+        """
+        folder_id = extract_folder_id(url)
+        meta = get_folder_metadata(folder_id)
+        title = meta["name"]
+
+        if output:
+            folder = output
+        else:
+            folder = Path(f"{_safe_name(title)}.drive.gax.md.d")
+
+        folder.mkdir(parents=True, exist_ok=True)
+
+        # Write .gax.yaml metadata
+        metadata = {
+            "type": "gax/drive-checkout",
+            "folder_id": folder_id,
+            "url": f"https://drive.google.com/drive/folders/{folder_id}",
+            "title": title,
+            "recursive": recursive,
+            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        with open(folder / ".gax.yaml", "w") as f:
+            yaml.dump(
+                metadata,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+
+        # List and download files
+        items = list_folder(folder_id, recursive=recursive)
+
+        cloned = 0
+        skipped = 0
+
+        for item in items:
+            if item["is_folder"]:
+                # Create local subdirectory
+                (folder / item["path"]).mkdir(parents=True, exist_ok=True)
+                continue
+
+            local_path = folder / item["path"]
+            mime = item["mimeType"]
+
+            # Skip if already exists
+            if local_path.exists() or (
+                mime in WORKSPACE_MIME_TYPES and _workspace_file_exists(folder, item)
+            ):
+                skipped += 1
+                continue
+
+            # Ensure parent dir exists
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            logger.info(f"Cloning: {item['path']}")
+
+            if mime in WORKSPACE_MIME_TYPES:
+                self._clone_workspace_file(item, folder)
+            else:
+                download_file(item["id"], local_path)
+                create_tracking_file(
+                    local_path,
+                    {
+                        "id": item["id"],
+                        "name": item["name"],
+                        "mimeType": mime,
+                        "size": item["size"],
+                    },
+                )
+
+            cloned += 1
+
+        logger.info(f"Cloned: {cloned}, Skipped: {skipped}")
+        return folder
+
+    def pull(self, path: Path) -> None:
+        """Pull latest files for a checkout folder.
+
+        Re-lists the remote folder and downloads new/updated files.
+        Existing files are refreshed via their sidecar.
+        """
+        metadata_path = path / ".gax.yaml"
+        if not metadata_path.exists():
+            raise ValueError(f"No .gax.yaml found in {path}")
+
+        meta = yaml.safe_load(metadata_path.read_text())
+        folder_id = meta.get("folder_id")
+        if not folder_id:
+            raise ValueError("No folder_id in .gax.yaml")
+
+        recursive = meta.get("recursive", False)
+        remote_items = list_folder(folder_id, recursive=recursive)
+
+        # Build set of remote file IDs (non-folders)
+        remote_by_path = {
+            item["path"]: item for item in remote_items if not item["is_folder"]
+        }
+
+        # Pull existing tracked files
+        updated = 0
+        for sidecar in path.rglob("*.gax.md"):
+            actual = sidecar.parent / sidecar.name[:-7]  # strip .gax.md
+            if actual.exists():
+                try:
+                    File().pull(actual)
+                    updated += 1
+                except Exception as e:
+                    logger.warning(f"{actual}: {e}")
+
+        # Download new remote files
+        new_files = 0
+        for rel_path, item in remote_by_path.items():
+            local_path = path / rel_path
+            mime = item["mimeType"]
+
+            if local_path.exists():
+                continue
+            if mime in WORKSPACE_MIME_TYPES and _workspace_file_exists(path, item):
+                continue
+
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f"New file: {rel_path}")
+
+            if mime in WORKSPACE_MIME_TYPES:
+                self._clone_workspace_file(item, path)
+            else:
+                download_file(item["id"], local_path)
+                create_tracking_file(
+                    local_path,
+                    {
+                        "id": item["id"],
+                        "name": item["name"],
+                        "mimeType": mime,
+                        "size": item["size"],
+                    },
+                )
+
+            new_files += 1
+
+        # Ensure subfolders exist
+        for item in remote_items:
+            if item["is_folder"]:
+                (path / item["path"]).mkdir(parents=True, exist_ok=True)
+
+        # Update metadata timestamp
+        meta["checked_out"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(metadata_path, "w") as f:
+            yaml.dump(
+                meta,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+
+        # Report remotely deleted files
+        local_sidecars = set()
+        for sidecar in path.rglob("*.gax.md"):
+            rel = sidecar.parent / sidecar.name[:-7]  # strip .gax.md
+            try:
+                local_sidecars.add(str(rel.relative_to(path)))
+            except ValueError:
+                continue
+        remote_paths = set(remote_by_path.keys())
+        deleted = local_sidecars - remote_paths
+        for d in sorted(deleted):
+            logger.info(f"Deleted remotely: {d}")
+
+        logger.info(
+            f"Updated: {updated}, New: {new_files}, Deleted remotely: {len(deleted)}"
+        )
+
+    def _clone_workspace_file(self, item: dict, folder: Path) -> None:
+        """Clone a Google Workspace file using its native gax resource."""
+        mime = item["mimeType"]
+        resource_type = WORKSPACE_MIME_TYPES[mime]
+        file_id = item["id"]
+        parent = item["path"].rsplit("/", 1)[0] if "/" in item["path"] else ""
+        target_dir = folder / parent if parent else folder
+
+        url = f"https://docs.google.com/{_workspace_url_path(resource_type)}/d/{file_id}/edit"
+        safe_name = _safe_name(item["name"])
+
+        if resource_type == "doc":
+            from .gdoc.doc import Tab
+
+            output = target_dir / f"{safe_name}.doc.gax.md"
+            if not output.exists():
+                Tab().clone(url, output=output)
+        elif resource_type == "sheet":
+            from .gsheet.sheet import SheetTab
+
+            output = target_dir / f"{safe_name}.sheet.gax.md"
+            if not output.exists():
+                SheetTab().clone(url, output=output)
+        elif resource_type == "form":
+            from .form import Form
+
+            output = target_dir / f"{safe_name}.form.gax.md"
+            if not output.exists():
+                Form().clone(url, output=output)
+
+
+def _workspace_url_path(resource_type: str) -> str:
+    """Map resource type to Google URL path segment."""
+    return {
+        "doc": "document",
+        "sheet": "spreadsheets",
+        "form": "forms",
+    }[resource_type]
+
+
+def _workspace_file_exists(folder: Path, item: dict) -> bool:
+    """Check if a Workspace file was already cloned as a .gax.md file."""
+    mime = item["mimeType"]
+    resource_type = WORKSPACE_MIME_TYPES.get(mime, "")
+    safe_name = _safe_name(item["name"])
+    parent = item["path"].rsplit("/", 1)[0] if "/" in item["path"] else ""
+    target_dir = folder / parent if parent else folder
+
+    ext_map = {"doc": ".doc.gax.md", "sheet": ".sheet.gax.md", "form": ".form.gax.md"}
+    ext = ext_map.get(resource_type, "")
+    return (target_dir / f"{safe_name}{ext}").exists() if ext else False
