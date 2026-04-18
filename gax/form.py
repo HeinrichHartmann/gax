@@ -165,13 +165,17 @@ def form_to_yaml(form: dict, source_url: str) -> str:
     document_title = info.get("documentTitle", title)
     description = info.get("description", "")
 
+    info_body: dict[str, Any] = {}
+    if "title" in info:
+        info_body["title"] = title
+    if description:
+        info_body["description"] = description
+
     body: dict[str, Any] = {
         "documentTitle": document_title,
-        "info": {"title": title},
     }
-
-    if description:
-        body["info"]["description"] = description
+    if info_body:
+        body["info"] = info_body
 
     settings = form.get("settings", {})
     if settings:

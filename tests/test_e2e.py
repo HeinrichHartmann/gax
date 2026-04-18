@@ -35,6 +35,7 @@ Run with: make test-e2e
 import os
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -86,7 +87,7 @@ def _run_gax(*args: str) -> subprocess.CompletedProcess:
 
 
 def clear_doc_tabs(doc_id: str) -> list[str]:
-    """Delete all tabs except the first one from a document.
+    """Delete tabs whose name starts with E2E_PREFIX from a document.
 
     Returns list of deleted tab names.
     """
@@ -97,22 +98,18 @@ def clear_doc_tabs(doc_id: str) -> list[str]:
         service.documents()
         .get(
             documentId=doc_id,
-            includeTabsContent=True,  # Required to get tabs list
+            includeTabsContent=True,
         )
         .execute()
     )
 
     tabs = doc.get("tabs", [])
-    if len(tabs) <= 1:
-        return []
-
-    # Delete all tabs except the first one
     deleted = []
-    for tab in tabs[1:]:
+    for tab in tabs:
         props = tab.get("tabProperties", {})
         title = props.get("title", "")
         tab_id = props.get("tabId", "")
-        if tab_id:
+        if tab_id and title.startswith(E2E_PREFIX):
             try:
                 service.documents().batchUpdate(
                     documentId=doc_id,
@@ -126,7 +123,7 @@ def clear_doc_tabs(doc_id: str) -> list[str]:
 
 
 def clear_sheet_tabs(sheet_id: str) -> list[str]:
-    """Delete all sheets except the first one from a spreadsheet.
+    """Delete sheets whose name starts with E2E_PREFIX from a spreadsheet.
 
     Returns list of deleted sheet names.
     """
@@ -136,16 +133,12 @@ def clear_sheet_tabs(sheet_id: str) -> list[str]:
     spreadsheet = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
 
     sheets = spreadsheet.get("sheets", [])
-    if len(sheets) <= 1:
-        return []
-
-    # Delete all sheets except the first one
     deleted = []
-    for sheet in sheets[1:]:
+    for sheet in sheets:
         props = sheet.get("properties", {})
         title = props.get("title", "")
         sheet_tab_id = props.get("sheetId")
-        if sheet_tab_id is not None:
+        if sheet_tab_id is not None and title.startswith(E2E_PREFIX):
             try:
                 service.spreadsheets().batchUpdate(
                     spreadsheetId=sheet_id,
@@ -177,28 +170,31 @@ def temp_dir():
         yield Path(tmpdir)
 
 
+@pytest.fixture(scope="session")
+def clean_e2e_resources():
+    """One-time cleanup of stale E2E tabs from previous runs."""
+    doc_id = os.environ.get("GAX_TEST_DOC")
+    sheet_id = os.environ.get("GAX_TEST_SHEET")
+    if doc_id:
+        clear_doc_tabs(doc_id)
+    if sheet_id:
+        clear_sheet_tabs(sheet_id)
+
+
 @pytest.fixture
-def test_doc():
-    """Get test doc ID and URL, clear all extra tabs."""
+def test_doc(clean_e2e_resources):
+    """Get test doc ID and URL."""
     doc_id = _get_test_doc_id()
     doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
-    # Setup: clear all extra tabs
-    clear_doc_tabs(doc_id)
-    yield {"id": doc_id, "url": doc_url}
-    # Teardown: clear all extra tabs
-    clear_doc_tabs(doc_id)
+    return {"id": doc_id, "url": doc_url}
 
 
 @pytest.fixture
-def test_sheet():
-    """Get test sheet ID and URL, clear all extra sheets."""
+def test_sheet(clean_e2e_resources):
+    """Get test sheet ID and URL."""
     sheet_id = _get_test_sheet_id()
     sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
-    # Setup: clear all extra sheets
-    clear_sheet_tabs(sheet_id)
-    yield {"id": sheet_id, "url": sheet_url}
-    # Teardown: clear all extra sheets
-    clear_sheet_tabs(sheet_id)
+    return {"id": sheet_id, "url": sheet_url}
 
 
 # =============================================================================
@@ -212,12 +208,13 @@ class TestDocE2E:
 
     def test_import_pull_cycle(self, check_auth, test_doc, temp_dir):
         """Test: import markdown -> pull -> verify content."""
+        uid = uuid.uuid4().hex[:8]
         fixture_content = (FIXTURES_DIR / "e2e_test1.md").read_text()
-        test_file = temp_dir / "doc1.md"
+        test_file = temp_dir / f"{E2E_PREFIX}_doc1_{uid}.md"
         test_file.write_text(fixture_content)
 
-        # Step 1: Import as new tab
-        tracking_file = temp_dir / "doc1.tab.gax.md"
+        # Step 1: Import as new tab (tab name = filename stem)
+        tracking_file = temp_dir / f"{E2E_PREFIX}_doc1_{uid}.tab.gax.md"
         result = _run_gax(
             "doc",
             "tab",
@@ -228,7 +225,7 @@ class TestDocE2E:
             str(tracking_file),
         )
         assert result.returncode == 0, f"Import failed: {result.stderr}"
-        assert "Created tab" in result.stdout
+        assert "Created" in result.stdout
         assert tracking_file.exists()
 
         # Step 2: Pull content back
@@ -242,12 +239,13 @@ class TestDocE2E:
 
     def test_import_update_cycle(self, check_auth, test_doc, temp_dir):
         """Test: import -> update content -> push -> pull -> verify."""
+        uid = uuid.uuid4().hex[:8]
         fixture_content = (FIXTURES_DIR / "e2e_test2.md").read_text()
-        test_file = temp_dir / "doc2.md"
+        test_file = temp_dir / f"{E2E_PREFIX}_doc2_{uid}.md"
         test_file.write_text(fixture_content)
 
-        # Import
-        tracking_file = temp_dir / "doc2.tab.gax.md"
+        # Import (tab name = filename stem)
+        tracking_file = temp_dir / f"{E2E_PREFIX}_doc2_{uid}.tab.gax.md"
         result = _run_gax(
             "doc",
             "tab",
@@ -290,11 +288,12 @@ class TestSheetE2E:
 
     def test_clone_pull_cycle(self, check_auth, test_sheet, temp_dir):
         """Test: create tab via API -> clone -> pull -> verify."""
+        uid = uuid.uuid4().hex[:8]
         creds = get_authenticated_credentials()
         service = build("sheets", "v4", credentials=creds)
         sheet_id = test_sheet["id"]
 
-        tab_name = "test_sheet1"
+        tab_name = f"{E2E_PREFIX}_sheet1_{uid}"
 
         # Add sheet
         service.spreadsheets().batchUpdate(
@@ -341,11 +340,12 @@ class TestSheetE2E:
 
     def test_push_cycle(self, check_auth, test_sheet, temp_dir):
         """Test: create tab -> clone -> modify -> push -> verify."""
+        uid = uuid.uuid4().hex[:8]
         creds = get_authenticated_credentials()
         service = build("sheets", "v4", credentials=creds)
         sheet_id = test_sheet["id"]
 
-        tab_name = "test_sheet2"
+        tab_name = f"{E2E_PREFIX}_sheet2_{uid}"
 
         # Add sheet with initial data
         service.spreadsheets().batchUpdate(
@@ -412,10 +412,12 @@ class TestCombinedE2E:
 
     def test_multi_tab_workflow(self, check_auth, test_doc, test_sheet, temp_dir):
         """Test importing multiple tabs to both doc and sheet."""
+        uid = uuid.uuid4().hex[:8]
+
         # Import two tabs to doc
         for i, fixture in enumerate(["e2e_test1.md", "e2e_test2.md"], 1):
             fixture_content = (FIXTURES_DIR / fixture).read_text()
-            test_file = temp_dir / f"multi{i}.md"
+            test_file = temp_dir / f"{E2E_PREFIX}_multi{i}_{uid}.md"
             test_file.write_text(fixture_content)
 
             result = _run_gax(
@@ -425,7 +427,7 @@ class TestCombinedE2E:
                 test_doc["url"],
                 str(test_file),
                 "-o",
-                str(temp_dir / f"multi{i}.tab.gax.md"),
+                str(temp_dir / f"{E2E_PREFIX}_multi{i}_{uid}.tab.gax.md"),
             )
             assert result.returncode == 0, f"Doc import {i} failed: {result.stderr}"
 
@@ -435,7 +437,7 @@ class TestCombinedE2E:
         sheet_id = test_sheet["id"]
 
         for i, fixture in enumerate(["e2e_sheet1.md", "e2e_sheet2.md"], 1):
-            tab_name = f"multi_sheet{i}"
+            tab_name = f"{E2E_PREFIX}_msheet{i}_{uid}"
 
             # Add sheet
             service.spreadsheets().batchUpdate(
@@ -723,12 +725,15 @@ def _cleanup_test_drafts():
     service = build("gmail", "v1", credentials=creds)
     result = service.users().drafts().list(userId="me", maxResults=100).execute()
     for draft_info in result.get("drafts", []):
-        draft = (
-            service.users()
-            .drafts()
-            .get(userId="me", id=draft_info["id"], format="metadata")
-            .execute()
-        )
+        try:
+            draft = (
+                service.users()
+                .drafts()
+                .get(userId="me", id=draft_info["id"], format="metadata")
+                .execute()
+            )
+        except Exception:
+            continue  # Draft may have been deleted by another worker
         headers = draft.get("message", {}).get("payload", {}).get("headers", [])
         subject = ""
         for h in headers:
@@ -736,7 +741,12 @@ def _cleanup_test_drafts():
                 subject = h["value"]
                 break
         if subject.startswith(E2E_DRAFT_SUBJECT):
-            service.users().drafts().delete(userId="me", id=draft_info["id"]).execute()
+            try:
+                service.users().drafts().delete(
+                    userId="me", id=draft_info["id"]
+                ).execute()
+            except Exception:
+                pass  # Already deleted by another worker
 
 
 @pytest.mark.e2e

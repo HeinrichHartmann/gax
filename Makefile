@@ -4,7 +4,7 @@ test:
 	pytest tests/ -v -m "not e2e"
 
 test-e2e:
-	pytest tests/test_e2e.py -v
+	pytest tests/test_e2e.py -v -n 3
 
 install:
 	uv tool install --reinstall --editable .
