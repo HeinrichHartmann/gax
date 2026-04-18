@@ -122,65 +122,6 @@ def inline_images_from_store(markdown: str) -> str:
     return re.sub(pattern, replace_url, markdown)
 
 
-def export_doc_markdown(
-    document_id: str,
-    *,
-    drive_service=None,
-    extract_images: bool = True,
-    num_retries: int = 0,
-) -> str:
-    """Export a Google Doc to Markdown using native Drive API.
-
-    Args:
-        document_id: Google Docs document ID
-        drive_service: Optional Drive API service for testing
-        extract_images: If True, extract base64 images to blob store
-        num_retries: Retries with exponential backoff on 429/5xx
-
-    Returns:
-        Markdown content as string
-    """
-    if drive_service is None:
-        creds = get_authenticated_credentials()
-        drive_service = build("drive", "v3", credentials=creds)
-
-    result = (
-        drive_service.files()
-        .export(fileId=document_id, mimeType="text/markdown")
-        .execute(num_retries=num_retries)
-    )
-
-    markdown = result.decode("utf-8")
-
-    if extract_images:
-        markdown = extract_images_to_store(markdown)
-
-    # Normalize: Drive API exports bullet lists as "* item", standardize to "- item"
-    markdown = re.sub(r"^\* ", "- ", markdown, flags=re.MULTILINE)
-
-    # Normalize: Remove trailing whitespace from all lines
-    markdown = re.sub(r"[ \t]+$", "", markdown, flags=re.MULTILINE)
-
-    # Normalize: Unescape Drive API over-escaped characters.
-    # Google's markdown export backslash-escapes these characters:
-    #   - > # ~ ` _ . = < [ ] *
-    # e.g. "Dash - arrow >" becomes "Dash \- arrow \>" in the raw export.
-    # Safe to apply globally: Google never emits fenced code blocks (uses \>
-    # blockquote style instead) and strips inline backticks, so there are no
-    # contexts where these escapes are legitimate.
-    # Verified 2026-04-14 against Drive API v3 markdown export.
-    markdown = re.sub(r"\\([->#~`_.=<\[\]*])", r"\1", markdown)
-
-    # Normalize: Google wraps h6 content in italic markers; strip them
-    markdown = re.sub(r"^(######) \*(.+)\*$", r"\1 \2", markdown, flags=re.MULTILINE)
-
-    # Normalize: Ensure trailing newline
-    if not markdown.endswith("\n"):
-        markdown += "\n"
-
-    return markdown
-
-
 def create_doc_from_markdown(
     name: str, markdown: str, *, parent_folder_id: str | None = None, drive_service=None
 ) -> str:
@@ -220,138 +161,31 @@ def create_doc_from_markdown(
     return result["id"]
 
 
-def split_doc_by_tabs(markdown: str, tab_titles: list[str]) -> dict[str, str]:
-    """Split exported markdown by tab titles.
-
-    The native Drive API export concatenates all tabs. Each tab starts
-    with its title as an H1 header. This function splits the content
-    back into individual tabs.
-
-    Args:
-        markdown: Full markdown export from Drive API
-        tab_titles: List of tab titles in order
-
-    Returns:
-        Dict mapping tab title to markdown content
-    """
-    result = {}
-    lines = markdown.split("\n")
-
-    current_tab = None
-    current_lines = []
-
-    def _normalize_header(text: str) -> str:
-        """Normalize Drive API header: strip bold markers and unescape markdown."""
-        text = text.strip()
-        if text.startswith("**") and text.endswith("**"):
-            text = text[2:-2]
-        # Unescape markdown special characters
-        text = re.sub(r"\\(.)", r"\1", text)
-        return text
-
-    for line in lines:
-        # Check if this line is a tab header
-        if line.startswith("# "):
-            header_text = _normalize_header(line[2:])
-            if header_text in tab_titles:
-                # Save previous tab
-                if current_tab is not None:
-                    result[current_tab] = "\n".join(current_lines).strip() + "\n"
-                # Start new tab
-                current_tab = header_text
-                current_lines = []
-                continue
-
-        if current_tab is not None:
-            current_lines.append(line)
-
-    # Save last tab
-    if current_tab is not None:
-        result[current_tab] = "\n".join(current_lines).strip() + "\n"
-
-    # Fallback: single-tab doc with no H1 title header — use full content
-    if not result and len(tab_titles) == 1:
-        result[tab_titles[0]] = markdown.strip() + "\n"
-
-    return result
-
-
-def get_doc_tabs(
-    document_id: str, *, docs_service=None, num_retries: int = 0
-) -> list[dict]:
-    """Get list of tabs in a document.
-
-    Args:
-        document_id: Google Docs document ID
-        docs_service: Optional Docs API service for testing
-        num_retries: Retries with exponential backoff on 429/5xx
-
-    Returns:
-        List of {id, title, index} dicts
-    """
-    if docs_service is None:
-        creds = get_authenticated_credentials()
-        docs_service = build("docs", "v1", credentials=creds)
-
-    doc = (
-        docs_service.documents()
-        .get(documentId=document_id, includeTabsContent=True)
-        .execute(num_retries=num_retries)
-    )
-
-    tabs = []
-    for i, tab in enumerate(doc.get("tabs", [])):
-        props = tab.get("tabProperties", {})
-        tabs.append(
-            {
-                "id": props.get("tabId", ""),
-                "title": props.get("title", f"Tab {i}"),
-                "index": i,
-            }
-        )
-
-    return tabs
-
-
 def export_tab_markdown(
     document_id: str,
-    tab_title: str,
+    tab_name: str,
     *,
-    drive_service=None,
     docs_service=None,
+    drive_service=None,
+    source_url: str | None = None,
     num_retries: int = 0,
 ) -> str:
-    """Export a single tab to Markdown.
+    """Backwards-compatible tab export helper.
 
-    Exports the full document and extracts the specified tab.
-
-    Args:
-        document_id: Google Docs document ID
-        tab_title: Title of the tab to export
-        drive_service: Optional Drive API service
-        docs_service: Optional Docs API service
-        num_retries: Retries with exponential backoff on 429/5xx
-
-    Returns:
-        Markdown content for the specified tab
+    The native Drive markdown export path was retired in favor of the IR-based
+    Docs JSON pipeline, but some tests and callers still import this helper.
     """
-    # Get tab titles
-    tabs = get_doc_tabs(document_id, docs_service=docs_service, num_retries=num_retries)
-    tab_titles = [t["title"] for t in tabs]
+    from .doc import pull_single_tab
 
-    if tab_title not in tab_titles:
-        raise ValueError(f"Tab not found: {tab_title}")
+    if source_url is None:
+        source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
-    # Export full doc
-    full_md = export_doc_markdown(
-        document_id, drive_service=drive_service, num_retries=num_retries
+    section = pull_single_tab(
+        document_id,
+        tab_name,
+        source_url,
+        docs_service=docs_service,
+        drive_service=drive_service,
+        num_retries=num_retries,
     )
-
-    # Split by tabs
-    tab_contents = split_doc_by_tabs(full_md, tab_titles)
-
-    if tab_title not in tab_contents:
-        # Tab might be empty or have different header structure
-        return ""
-
-    return tab_contents[tab_title]
+    return section.content

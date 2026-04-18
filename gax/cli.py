@@ -2371,10 +2371,10 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
             click.echo(diff_text)
             click.echo("-" * 40)
 
-            from .gdoc.md2docs import parse_markdown, check_unsupported
+            from .gdoc.ir import from_markdown, check_unsupported
 
             section = parse_multipart(file.read_text(encoding="utf-8"))[0]
-            push_warnings = check_unsupported(parse_markdown(section.content))
+            push_warnings = check_unsupported(from_markdown(section.content))
             for w in push_warnings:
                 click.echo(f"  Warning: {w.feature}: {w.detail}")
 
