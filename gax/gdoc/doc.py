@@ -48,7 +48,7 @@ from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
 from .. import multipart
-from . import native_md
+from .native_md import extract_images_to_store, inline_images_from_store
 from ..ui import operation
 from ..resource import Resource
 
@@ -164,43 +164,63 @@ def extract_doc_id(url: str) -> str:
     raise ValueError(f"Cannot extract document ID from: {url}")
 
 
-def pull_doc(
-    document_id: str, source_url: str, *, docs_service=None, drive_service=None
-) -> list[DocSection]:
-    """Fetch document from Google Docs API and return list of sections.
-
-    Uses native Drive API markdown export for high-quality conversion.
-    """
-    # Get tab list from Docs API
-    tabs = native_md.get_doc_tabs(document_id, docs_service=docs_service)
-
-    if not tabs:
-        # Fallback: single document without tabs
-        tabs = [{"id": "", "title": "Document", "index": 0}]
-
-    # Get document title
+def _fetch_doc(document_id: str, *, docs_service=None, num_retries: int = 0) -> dict:
+    """Fetch full document JSON with tab content."""
     if docs_service is None:
         creds = get_authenticated_credentials()
         docs_service = build("docs", "v1", credentials=creds)
+    return (
+        docs_service.documents()
+        .get(documentId=document_id, includeTabsContent=True)
+        .execute(num_retries=num_retries)
+    )
 
-    doc = docs_service.documents().get(documentId=document_id).execute()
+
+def _tab_content_to_markdown(doc: dict, tab: dict) -> str:
+    """Convert a tab's body content to markdown via the IR."""
+    from . import ir
+
+    body = tab.get("documentTab", {}).get("body", {}).get("content", [])
+    blocks = ir.from_doc_json(body, lists=doc.get("lists"))
+    md = ir.render_markdown(blocks)
+    # Post-process: extract base64 images to blob store
+    md = extract_images_to_store(md)
+    return md
+
+
+def pull_doc(
+    document_id: str,
+    source_url: str,
+    *,
+    docs_service=None,
+    num_retries: int = 0,
+) -> list[DocSection]:
+    """Fetch document from Google Docs API and return list of sections.
+
+    Reads directly from the Docs API JSON (no Drive API markdown export).
+    Each tab's content is converted to markdown via the Block/Span IR.
+    """
+    doc = _fetch_doc(
+        document_id,
+        docs_service=docs_service,
+        num_retries=num_retries,
+    )
     doc_title = doc.get("title", "Untitled")
+    raw_tabs = doc.get("tabs", [])
 
-    # Export full document as markdown using native API
-    full_md = native_md.export_doc_markdown(document_id, drive_service=drive_service)
-
-    # Split by tabs
-    tab_titles = [t["title"] for t in tabs]
-    tab_contents = native_md.split_doc_by_tabs(full_md, tab_titles)
+    if not raw_tabs:
+        return []
 
     time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     sections = []
 
-    with operation("Processing tabs", total=len(tabs)) as op:
-        for i, tab in enumerate(tabs, start=1):
-            tab_title = tab["title"]
+    with operation("Processing tabs", total=len(raw_tabs)) as op:
+        for i, tab in enumerate(raw_tabs, start=1):
+            props = tab.get("tabProperties", {})
+            tab_title = props.get("title", f"Tab {i}")
             logger.info(f"Processing tab: {tab_title}")
-            content = tab_contents.get(tab_title, "")
+
+            content = _tab_content_to_markdown(doc, tab)
 
             sections.append(
                 DocSection(
@@ -223,38 +243,35 @@ def pull_single_tab(
     source_url: str,
     *,
     docs_service=None,
-    drive_service=None,
+    num_retries: int = 0,
 ) -> DocSection:
     """Pull a single tab from a document.
 
-    Uses native Drive API markdown export for high-quality conversion.
+    Reads directly from the Docs API JSON.
     """
-    # Get document title
-    if docs_service is None:
-        creds = get_authenticated_credentials()
-        docs_service = build("docs", "v1", credentials=creds)
-
-    doc = docs_service.documents().get(documentId=document_id).execute()
+    doc = _fetch_doc(
+        document_id,
+        docs_service=docs_service,
+        num_retries=num_retries,
+    )
     doc_title = doc.get("title", "Untitled")
 
-    # Export single tab using native API
-    content = native_md.export_tab_markdown(
-        document_id,
-        tab_name,
-        drive_service=drive_service,
-        docs_service=docs_service,
-    )
+    # Find the tab by name
+    for tab in doc.get("tabs", []):
+        props = tab.get("tabProperties", {})
+        if props.get("title") == tab_name:
+            content = _tab_content_to_markdown(doc, tab)
+            time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return DocSection(
+                title=doc_title,
+                source=source_url,
+                time=time_str,
+                section=1,
+                section_title=tab_name,
+                content=content,
+            )
 
-    time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    return DocSection(
-        title=doc_title,
-        source=source_url,
-        time=time_str,
-        section=1,
-        section_title=tab_name,
-        content=content,
-    )
+    raise ValueError(f"Tab not found: {tab_name}")
 
 
 # =============================================================================
@@ -312,7 +329,7 @@ def create_tab_with_content(
     Returns:
         Tuple of (tab_id, push_warnings)
     """
-    from .md2docs import markdown_to_requests
+    from .ir import from_markdown, to_docs_requests
 
     if service is None:
         creds = get_authenticated_credentials()
@@ -334,7 +351,8 @@ def create_tab_with_content(
     tab_id = create_response["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
 
     # Step 2: Insert markdown content
-    content_requests, tables_data, warnings = markdown_to_requests(markdown, tab_id)
+    blocks = from_markdown(markdown)
+    content_requests, tables_data, warnings = to_docs_requests(blocks, tab_id)
     if content_requests:
         service.documents().batchUpdate(
             documentId=document_id,
@@ -362,7 +380,7 @@ def _populate_tables(
     After insertTable creates empty tables, this reads the document structure
     to get real cell indices, inserts cell content, and applies inline formatting.
     """
-    from .md2docs import _utf16_len
+    from .ir import _utf16_len
 
     doc = (
         service.documents()
@@ -554,7 +572,7 @@ def update_tab_content(
 
     Returns list of push warnings.
     """
-    from .md2docs import markdown_to_requests
+    from .ir import from_markdown, to_docs_requests
 
     if service is None:
         creds = get_authenticated_credentials()
@@ -607,7 +625,8 @@ def update_tab_content(
             break
 
     # Insert new content
-    content_requests, tables_data, warnings = markdown_to_requests(markdown, tab_id)
+    blocks = from_markdown(markdown)
+    content_requests, tables_data, warnings = to_docs_requests(blocks, tab_id)
     if content_requests:
         service.documents().batchUpdate(
             documentId=document_id,
@@ -841,21 +860,17 @@ class Tab(Resource):
             # Clone specific tab
             section = pull_single_tab(document_id, tab_name, source_url)
         else:
-            # Clone first tab
-            tabs = native_md.get_doc_tabs(document_id)
-            if not tabs:
-                tabs = [{"id": "", "title": "Document", "index": 0}]
-
-            creds = get_authenticated_credentials()
-            docs_service = build("docs", "v1", credentials=creds)
-            doc = docs_service.documents().get(documentId=document_id).execute()
+            # Clone first tab via full document fetch
+            doc = _fetch_doc(document_id)
             doc_title = doc.get("title", "Untitled")
+            raw_tabs = doc.get("tabs", [])
 
-            first_tab = tabs[0]
-            full_md = native_md.export_doc_markdown(document_id)
-            tab_titles = [t["title"] for t in tabs]
-            tab_contents = native_md.split_doc_by_tabs(full_md, tab_titles)
-            tab_content = tab_contents.get(first_tab["title"], "")
+            if not raw_tabs:
+                raise ValueError("Document has no tabs")
+
+            first_tab = raw_tabs[0]
+            first_title = first_tab.get("tabProperties", {}).get("title", "Document")
+            content = _tab_content_to_markdown(doc, first_tab)
 
             time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             section = DocSection(
@@ -863,8 +878,8 @@ class Tab(Resource):
                 source=source_url,
                 time=time_str,
                 section=1,
-                section_title=first_tab["title"],
-                content=tab_content,
+                section_title=first_title,
+                content=content,
             )
 
         if with_comments:
@@ -970,7 +985,7 @@ class Tab(Resource):
             raise ValueError("No source URL found in file")
 
         document_id = extract_doc_id(source_url)
-        content_to_push = native_md.inline_images_from_store(section.content)
+        content_to_push = inline_images_from_store(section.content)
 
         if use_patch:
             from .diff_push import diff_push as _diff_push
@@ -1143,9 +1158,7 @@ class Doc(Resource):
         for t in info["tabs"]:
             out.write(f"{t['index']}\t{t['id']}\t{t['title']}\n")
 
-    def tab_import(
-        self, url: str, file: Path, output: Path | None = None
-    ) -> Path:
+    def tab_import(self, url: str, file: Path, output: Path | None = None) -> Path:
         """Import a markdown file as a new tab in a document.
 
         Returns path to the tracking file created.

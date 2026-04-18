@@ -22,8 +22,7 @@ import pytest
 from googleapiclient.discovery import build
 
 from gax.auth import get_authenticated_credentials, is_authenticated
-from gax.gdoc import create_tab_with_content
-from gax.gdoc.native_md import export_tab_markdown
+from gax.gdoc import create_tab_with_content, pull_single_tab
 
 
 # =============================================================================
@@ -381,13 +380,14 @@ class TestIdentityRoundTrip:
     def test_identity(self, doc_id, services, pushed_fixture):
         tab_name, _, md = pushed_fixture
 
-        m1 = export_tab_markdown(
+        section = pull_single_tab(
             doc_id,
             tab_name,
+            f"https://docs.google.com/document/d/{doc_id}/edit",
             docs_service=services["docs"],
-            drive_service=services["drive"],
             num_retries=NUM_RETRIES,
         )
+        m1 = section.content
 
         if md != m1:
             d = "".join(
