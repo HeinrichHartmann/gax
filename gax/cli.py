@@ -16,6 +16,11 @@ Output conventions for resource methods:
   - No output (most ops): return None, cli.py prints success()
   - Structured result (path, ID): return it, cli.py formats
   - Tabular/streaming (list, diff): accept a file descriptor, write to it
+
+Imports: cli.py imports only the resource *class* (e.g. Draft, not
+parse_draft or create_draft). All interaction goes through class methods.
+Non-standard CLI commands can add methods to the class as needed.
+Module-to-module imports (e.g. mail.py using draft internals) are fine.
 """
 
 import glob
