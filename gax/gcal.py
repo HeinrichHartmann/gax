@@ -884,6 +884,41 @@ class Cal(Resource):
         new_content = event_to_yaml(updated_event)
         path.write_text(new_content)
 
+    def event_diff(self, path: Path) -> str | None:
+        """Preview changes between local event file and remote.
+
+        Returns a human-readable diff string, or None if no changes.
+        For new events (no id), returns a summary of what will be created.
+        """
+        content = path.read_text()
+        local = yaml_to_event(content)
+
+        if not local.id:
+            return f"New event: {local.title}\n{local.start} — {local.end}"
+
+        api_event = get_event(local.id, local.calendar)
+        remote = api_event_to_dataclass(api_event, local.calendar, local.calendar)
+
+        # Compare editable fields
+        fields = [
+            ("title", local.title, remote.title),
+            ("start", local.start, remote.start),
+            ("end", local.end, remote.end),
+            ("timezone", local.timezone, remote.timezone),
+            ("location", local.location, remote.location),
+            ("status", local.status, remote.status),
+            ("recurrence", local.recurrence, remote.recurrence),
+            ("attendees", local.attendees, remote.attendees),
+            ("description", local.description, remote.description),
+        ]
+
+        lines = []
+        for name, local_val, remote_val in fields:
+            if local_val != remote_val:
+                lines.append(f"{name}: {remote_val} -> {local_val}")
+
+        return "\n".join(lines) if lines else None
+
     def event_push(self, path: Path) -> str:
         """Push local event changes to API. Returns result URL."""
         content = path.read_text()

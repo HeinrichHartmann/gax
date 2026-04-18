@@ -546,20 +546,17 @@ def _push_file(
                 return False, str(e)
 
         elif file_type == "gax/cal":
-            from .gcal import yaml_to_event
-
-            content = file_path.read_text(encoding="utf-8")
-            local_event = yaml_to_event(content)
-
-            action = "Update" if local_event.id else "Create"
-            if not yes:
-                click.echo(f"{action} event '{local_event.title}'?")
-                if not click.confirm("Proceed?"):
-                    return False, "cancelled"
-
             try:
-                link = Cal().event_push(file_path)
-                return True, f"{action.lower()}d {link}"
+                c = Cal()
+                diff_text = c.event_diff(file_path)
+                if diff_text is None:
+                    return True, "no changes"
+                if not yes:
+                    click.echo(diff_text)
+                    if not click.confirm("Push these changes?"):
+                        return False, "cancelled"
+                link = c.event_push(file_path)
+                return True, f"pushed {link}"
             except ValueError as e:
                 return False, str(e)
 
@@ -3043,23 +3040,22 @@ def cal_event_pull_cmd(file_path: Path):
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def cal_event_push_cmd(file_path: Path, yes: bool):
     """Push local changes to API."""
-    from .gcal import yaml_to_event
-
     try:
         from .ui import success
 
-        content = file_path.read_text()
-        local_event = yaml_to_event(content)
-
-        action = "Update" if local_event.id else "Create new"
+        c = Cal()
+        diff_text = c.event_diff(file_path)
+        if diff_text is None:
+            click.echo("No changes to push.")
+            return
         if not yes:
-            click.echo(f"{action} event '{local_event.title}'?")
-            if not click.confirm("Proceed?"):
+            click.echo(diff_text)
+            if not click.confirm("Push these changes?"):
                 click.echo("Cancelled.")
                 return
 
-        link = Cal().event_push(file_path)
-        success(f"{action}d event: {link}")
+        link = c.event_push(file_path)
+        success(f"Pushed event: {link}")
     except ValueError as e:
         from .ui import error
 

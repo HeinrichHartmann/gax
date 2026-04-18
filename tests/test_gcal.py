@@ -1,6 +1,9 @@
 """Unit tests for gcal module -- no API calls needed."""
 
+from unittest.mock import patch
+
 from gax.gcal import (
+    Cal,
     CalendarEvent,
     Conference,
     api_event_to_dataclass,
@@ -328,3 +331,77 @@ class TestFormatFunctions:
     def test_rsvp_no_attendees(self):
         event = self._make_event()
         assert _get_rsvp_status(event) == ""
+
+
+# =============================================================================
+# event_diff
+# =============================================================================
+
+
+class TestEventDiff:
+    def _make_local_event(self, **overrides):
+        defaults = dict(
+            id="evt123",
+            calendar="primary",
+            source="https://calendar.google.com/calendar/event?eid=evt123",
+            synced="2026-03-15T00:00:00Z",
+            title="Team standup",
+            start="2026-03-15T09:00:00+01:00",
+            end="2026-03-15T09:30:00+01:00",
+            timezone="Europe/Berlin",
+            location="Room 42",
+            description="Daily sync",
+            attendees=["alice@x.com"],
+            status="confirmed",
+        )
+        defaults.update(overrides)
+        return CalendarEvent(**defaults)
+
+    def test_new_event_returns_summary(self, tmp_path):
+        event = self._make_local_event(id="", title="Launch party",
+                                       start="2026-04-01T18:00:00Z",
+                                       end="2026-04-01T20:00:00Z")
+        f = tmp_path / "new.cal.gax.md"
+        f.write_text(event_to_yaml(event))
+
+        result = Cal().event_diff(f)
+        assert result is not None
+        assert "New event: Launch party" in result
+        assert "2026-04-01T18:00:00Z" in result
+
+    @patch("gax.gcal.get_event")
+    @patch("gax.gcal.api_event_to_dataclass")
+    def test_no_changes_returns_none(self, mock_to_dc, mock_get, tmp_path):
+        local = self._make_local_event()
+        mock_get.return_value = {}
+        mock_to_dc.return_value = self._make_local_event()
+
+        f = tmp_path / "event.cal.gax.md"
+        f.write_text(event_to_yaml(local))
+
+        result = Cal().event_diff(f)
+        assert result is None
+        mock_get.assert_called_once_with("evt123", "primary")
+
+    @patch("gax.gcal.get_event")
+    @patch("gax.gcal.api_event_to_dataclass")
+    def test_field_changes(self, mock_to_dc, mock_get, tmp_path):
+        local = self._make_local_event(
+            title="Renamed standup",
+            location="Room 99",
+            description="Updated sync",
+        )
+        mock_get.return_value = {}
+        mock_to_dc.return_value = self._make_local_event()
+
+        f = tmp_path / "event.cal.gax.md"
+        f.write_text(event_to_yaml(local))
+
+        result = Cal().event_diff(f)
+        assert result is not None
+        assert "title: Team standup -> Renamed standup" in result
+        assert "location: Room 42 -> Room 99" in result
+        assert "description: Daily sync -> Updated sync" in result
+        # Unchanged fields should not appear
+        assert "start:" not in result
+        assert "timezone:" not in result
