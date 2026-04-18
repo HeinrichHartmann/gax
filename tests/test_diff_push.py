@@ -19,10 +19,16 @@ from gax.gdoc.diff_push import (
 
 class TestWalkDocBody:
     def test_classifies_heading(self):
-        body = [{"paragraph": {
-            "paragraphStyle": {"namedStyleType": "HEADING_2"},
-            "elements": [{"textRun": {"content": "My Heading\n"}}],
-        }, "startIndex": 10, "endIndex": 21}]
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "HEADING_2"},
+                    "elements": [{"textRun": {"content": "My Heading\n"}}],
+                },
+                "startIndex": 10,
+                "endIndex": 21,
+            }
+        ]
         elems = walk_doc_body(body)
         assert len(elems) == 1
         assert elems[0].type == "heading"
@@ -30,44 +36,90 @@ class TestWalkDocBody:
         assert elems[0].details["level"] == 2
 
     def test_classifies_paragraph(self):
-        body = [{"paragraph": {
-            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-            "elements": [{"textRun": {"content": "Hello world.\n"}}],
-        }, "startIndex": 1, "endIndex": 14}]
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "Hello world.\n"}}],
+                },
+                "startIndex": 1,
+                "endIndex": 14,
+            }
+        ]
         elems = walk_doc_body(body)
         assert len(elems) == 1
         assert elems[0].type == "paragraph"
         assert elems[0].text == "Hello world."
 
     def test_classifies_empty(self):
-        body = [{"paragraph": {
-            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-            "elements": [{"textRun": {"content": "\n"}}],
-        }, "startIndex": 14, "endIndex": 15}]
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "\n"}}],
+                },
+                "startIndex": 14,
+                "endIndex": 15,
+            }
+        ]
         elems = walk_doc_body(body)
         assert len(elems) == 1
         assert elems[0].type == "empty"
 
     def test_classifies_list_item(self):
-        body = [{"paragraph": {
-            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-            "bullet": {"listId": "list1", "nestingLevel": 0},
-            "elements": [{"textRun": {"content": "Item one\n"}}],
-        }, "startIndex": 20, "endIndex": 29}]
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "bullet": {"listId": "list1", "nestingLevel": 0},
+                    "elements": [{"textRun": {"content": "Item one\n"}}],
+                },
+                "startIndex": 20,
+                "endIndex": 29,
+            }
+        ]
         elems = walk_doc_body(body)
         assert len(elems) == 1
         assert elems[0].type == "list_item"
         assert elems[0].text == "Item one"
 
     def test_classifies_table(self):
-        body = [{"table": {
-            "tableRows": [
-                {"tableCells": [
-                    {"content": [{"paragraph": {"elements": [{"textRun": {"content": "A\n"}}]}}]},
-                    {"content": [{"paragraph": {"elements": [{"textRun": {"content": "B\n"}}]}}]},
-                ]},
-            ]
-        }, "startIndex": 100, "endIndex": 120}]
+        body = [
+            {
+                "table": {
+                    "tableRows": [
+                        {
+                            "tableCells": [
+                                {
+                                    "content": [
+                                        {
+                                            "paragraph": {
+                                                "elements": [
+                                                    {"textRun": {"content": "A\n"}}
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                },
+                                {
+                                    "content": [
+                                        {
+                                            "paragraph": {
+                                                "elements": [
+                                                    {"textRun": {"content": "B\n"}}
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                },
+                            ]
+                        },
+                    ]
+                },
+                "startIndex": 100,
+                "endIndex": 120,
+            }
+        ]
         elems = walk_doc_body(body)
         assert len(elems) == 1
         assert elems[0].type == "table"
@@ -78,14 +130,19 @@ class TestWalkDocBody:
 class TestAlign:
     def _make_doc_elements(self, items):
         """Helper: create DocElement list from (type, text, start, end) tuples."""
-        return [DocElement(type=t, text=txt, start_index=s, end_index=e) for t, txt, s, e in items]
+        return [
+            DocElement(type=t, text=txt, start_index=s, end_index=e)
+            for t, txt, s, e in items
+        ]
 
     def test_exact_match(self):
-        doc = self._make_doc_elements([
-            ("heading", "Title", 1, 7),
-            ("empty", "", 7, 8),
-            ("paragraph", "Hello world.", 8, 21),
-        ])
+        doc = self._make_doc_elements(
+            [
+                ("heading", "Title", 1, 7),
+                ("empty", "", 7, 8),
+                ("paragraph", "Hello world.", 8, 21),
+            ]
+        )
         ast = parse_markdown("# Title\n\nHello world.\n")
         result = align(doc, ast)
         assert len(result) == 2
@@ -95,10 +152,12 @@ class TestAlign:
 
     def test_merged_paragraphs(self):
         """Two doc paragraphs merge into one AST paragraph."""
-        doc = self._make_doc_elements([
-            ("paragraph", "Line one.", 1, 11),
-            ("paragraph", "Line two.", 11, 21),
-        ])
+        doc = self._make_doc_elements(
+            [
+                ("paragraph", "Line one.", 1, 11),
+                ("paragraph", "Line two.", 11, 21),
+            ]
+        )
         # Markdown without blank line between → single paragraph
         md = "Line one.\nLine two.\n"
         ast = parse_markdown(md)
@@ -111,23 +170,27 @@ class TestAlign:
         assert result[0].end_index == 21
 
     def test_skips_empty(self):
-        doc = self._make_doc_elements([
-            ("heading", "Title", 1, 7),
-            ("empty", "", 7, 8),
-            ("empty", "", 8, 9),
-            ("paragraph", "Text.", 9, 15),
-        ])
+        doc = self._make_doc_elements(
+            [
+                ("heading", "Title", 1, 7),
+                ("empty", "", 7, 8),
+                ("empty", "", 8, 9),
+                ("paragraph", "Text.", 9, 15),
+            ]
+        )
         ast = parse_markdown("# Title\n\nText.\n")
         result = align(doc, ast)
         assert len(result) == 2
 
     def test_table_alignment(self):
-        doc = self._make_doc_elements([
-            ("heading", "Data", 1, 6),
-            ("empty", "", 6, 7),
-            ("table", "[table 2x2]", 7, 50),
-            ("empty", "", 50, 51),
-        ])
+        doc = self._make_doc_elements(
+            [
+                ("heading", "Data", 1, 6),
+                ("empty", "", 6, 7),
+                ("table", "[table 2x2]", 7, 50),
+                ("empty", "", 50, 51),
+            ]
+        )
         ast = parse_markdown("# Data\n\n| A | B |\n|---|---|\n| 1 | 2 |\n")
         result = align(doc, ast)
         assert len(result) == 2
@@ -203,7 +266,9 @@ class TestDiffToMutations:
         return [
             AlignedNode(
                 node=n,
-                doc_elements=[DocElement(type="paragraph", text="", start_index=s, end_index=e)],
+                doc_elements=[
+                    DocElement(type="paragraph", text="", start_index=s, end_index=e)
+                ],
                 start_index=s,
                 end_index=e,
             )
@@ -265,8 +330,7 @@ class TestDiffToMutations:
         # Should delete the range of "Para two."
         delete_reqs = [m for m in mutations if "deleteContentRange" in m]
         assert any(
-            m["deleteContentRange"]["range"]["startIndex"] == 12
-            for m in delete_reqs
+            m["deleteContentRange"]["range"]["startIndex"] == 12 for m in delete_reqs
         )
 
     def test_insert_heading(self):
@@ -316,7 +380,12 @@ class TestDiffToMutations:
         ops = ast_diff(base, edited)
         mutations = diff_to_mutations(ops, alignment, "tab1")
 
-        bold_updates = [m for m in mutations if "updateTextStyle" in m and m["updateTextStyle"].get("textStyle", {}).get("bold")]
+        bold_updates = [
+            m
+            for m in mutations
+            if "updateTextStyle" in m
+            and m["updateTextStyle"].get("textStyle", {}).get("bold")
+        ]
         assert len(bold_updates) >= 1
 
 
@@ -334,16 +403,22 @@ def _make_doc_table_json(rows_text):
         for cell_text in row:
             para_start = idx
             para_end = idx + len(cell_text) + 1  # +1 for newline
-            cells.append({
-                "content": [{
-                    "paragraph": {
-                        "elements": [{"textRun": {"content": cell_text + "\n"}}],
-                        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-                    },
-                    "startIndex": para_start,
-                    "endIndex": para_end,
-                }]
-            })
+            cells.append(
+                {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {"textRun": {"content": cell_text + "\n"}}
+                                ],
+                                "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                            },
+                            "startIndex": para_start,
+                            "endIndex": para_end,
+                        }
+                    ]
+                }
+            )
             idx = para_end + 1
         table_rows.append({"tableCells": cells})
     return {
@@ -362,12 +437,14 @@ class TestTableUpdates:
             end_index=doc_table_json["endIndex"],
             raw=doc_table_json,
         )
-        return [AlignedNode(
-            node=base_node,
-            doc_elements=[doc_elem],
-            start_index=doc_elem.start_index,
-            end_index=doc_elem.end_index,
-        )]
+        return [
+            AlignedNode(
+                node=base_node,
+                doc_elements=[doc_elem],
+                start_index=doc_elem.start_index,
+                end_index=doc_elem.end_index,
+            )
+        ]
 
     def test_cell_text_update(self):
         base = parse_markdown("| A | B |\n|---|---|\n| old | keep |\n")
@@ -401,8 +478,12 @@ class TestTableUpdates:
         ops = ast_diff(base, edited)
         mutations = diff_to_mutations(ops, alignment, "tab1")
 
-        bold = [m for m in mutations if "updateTextStyle" in m
-                and m["updateTextStyle"].get("textStyle", {}).get("bold")]
+        bold = [
+            m
+            for m in mutations
+            if "updateTextStyle" in m
+            and m["updateTextStyle"].get("textStyle", {}).get("bold")
+        ]
         assert len(bold) >= 1
 
     def test_unchanged_table_no_ops(self):
@@ -439,13 +520,15 @@ class TestTableUpdates:
         doc_json = _make_doc_table_json([["A"], ["old"]])
         # Manually add a second paragraph to cell[1][0]
         cell = doc_json["table"]["tableRows"][1]["tableCells"][0]
-        cell["content"].append({
-            "paragraph": {
-                "elements": [{"textRun": {"content": "extra line\n"}}],
-            },
-            "startIndex": 200,
-            "endIndex": 211,
-        })
+        cell["content"].append(
+            {
+                "paragraph": {
+                    "elements": [{"textRun": {"content": "extra line\n"}}],
+                },
+                "startIndex": 200,
+                "endIndex": 211,
+            }
+        )
 
         alignment = self._make_table_alignment(base_table, doc_json)
         ops = ast_diff(base, edited)

@@ -95,7 +95,7 @@ def parse_contacts_file(path: Path) -> tuple[ContactsHeader, str]:
         pulled=fields.get("pulled", ""),
     )
 
-    body = content[end + 5:]  # Skip closing --- and newline
+    body = content[end + 5 :]  # Skip closing --- and newline
     return header, body
 
 
@@ -367,22 +367,40 @@ def format_markdown(contacts: list[dict]) -> str:
 # =============================================================================
 
 COMPARABLE_FIELDS = [
-    "name", "givenName", "familyName", "email", "phone",
-    "organization", "title", "department", "address",
-    "birthday", "notes", "nickname", "website", "labels",
+    "name",
+    "givenName",
+    "familyName",
+    "email",
+    "phone",
+    "organization",
+    "title",
+    "department",
+    "address",
+    "birthday",
+    "notes",
+    "nickname",
+    "website",
+    "labels",
 ]
 
 LIST_FIELDS = {"email", "phone", "labels"}
 
 # Mapping from normalized field names to API personFields for update masks
 FIELD_TO_API = {
-    "name": "names", "givenName": "names", "familyName": "names",
-    "email": "emailAddresses", "phone": "phoneNumbers",
-    "organization": "organizations", "title": "organizations",
+    "name": "names",
+    "givenName": "names",
+    "familyName": "names",
+    "email": "emailAddresses",
+    "phone": "phoneNumbers",
+    "organization": "organizations",
+    "title": "organizations",
     "department": "organizations",
-    "address": "addresses", "birthday": "birthdays",
-    "notes": "biographies", "nickname": "nicknames",
-    "website": "urls", "labels": "memberships",
+    "address": "addresses",
+    "birthday": "birthdays",
+    "notes": "biographies",
+    "nickname": "nicknames",
+    "website": "urls",
+    "labels": "memberships",
 }
 
 
@@ -485,8 +503,9 @@ class Contacts(Resource):
         normalized = [api_to_contact(c, groups) for c in raw_contacts]
         return normalized, groups
 
-    def clone(self, url: str = "", output: Path | None = None, *,
-              fmt: str = "md", **kw) -> Path:
+    def clone(
+        self, url: str = "", output: Path | None = None, *, fmt: str = "md", **kw
+    ) -> Path:
         """Clone all contacts to a local file."""
         logger.info("Fetching contacts...")
         normalized, _ = self._fetch_and_normalize()

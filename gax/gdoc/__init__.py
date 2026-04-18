@@ -933,7 +933,12 @@ def tab_diff(file: Path):
 @tab.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-@click.option("--patch", "use_patch", is_flag=True, help="Incremental push: apply only changed elements (experimental)")
+@click.option(
+    "--patch",
+    "use_patch",
+    is_flag=True,
+    help="Incremental push: apply only changed elements (experimental)",
+)
 def tab_push(file: Path, yes: bool, use_patch: bool):
     """Push local changes to a single tab (with confirmation).
 
@@ -991,7 +996,9 @@ def tab_push(file: Path, yes: bool, use_patch: bool):
 
             click.echo(f"Patching tab '{tab_name}'...")
             push_warnings = _diff_push(
-                document_id, tab_name, content_to_push,
+                document_id,
+                tab_name,
+                content_to_push,
                 docs_service=preview.docs_service,
                 drive_service=preview.drive_service,
             )
@@ -1103,7 +1110,8 @@ def _add_comments_to_sections(
     help="Include document comments as separate sections",
 )
 @click.option(
-    "-q", "--quiet",
+    "-q",
+    "--quiet",
     is_flag=True,
     help="Suppress multi-tab status message",
 )
@@ -1323,12 +1331,14 @@ def checkout(url: str, output: Optional[Path]):
         for section, fpath in zip(sections, tab_paths):
             if section.section_type == "comments":
                 continue
-            tab_tree.append({
-                "id": section.tab_id,
-                "title": section.section_title,
-                "path": str(fpath.relative_to(folder)),
-                "depth": section.tab_depth,
-            })
+            tab_tree.append(
+                {
+                    "id": section.tab_id,
+                    "title": section.section_title,
+                    "path": str(fpath.relative_to(folder)),
+                    "depth": section.tab_depth,
+                }
+            )
         metadata["tabs"] = tab_tree
 
         metadata_path = folder / ".gax.yaml"

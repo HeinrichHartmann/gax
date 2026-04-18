@@ -250,7 +250,9 @@ def create_doc_from_markdown(
     return result["id"]
 
 
-def split_doc_by_tabs(markdown: str, tab_titles: list[str], tab_depths: list[int] | None = None) -> dict[str, str]:
+def split_doc_by_tabs(
+    markdown: str, tab_titles: list[str], tab_depths: list[int] | None = None
+) -> dict[str, str]:
     """Split exported markdown by tab titles.
 
     The native Drive API export concatenates all tabs, each starting
@@ -357,7 +359,9 @@ def export_tab_markdown(
         Markdown content for the specified tab
     """
     # Get tab titles
-    _title, tabs = get_doc_tabs(document_id, docs_service=docs_service, num_retries=num_retries)
+    _title, tabs = get_doc_tabs(
+        document_id, docs_service=docs_service, num_retries=num_retries
+    )
     tab_titles = [t.title for t in tabs]
     tab_depths = [t.depth for t in tabs]
 
