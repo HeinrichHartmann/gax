@@ -15,7 +15,7 @@ from gax.gdoc import (
     compute_tab_paths,
     DocSection,
 )
-from gax.native_md import get_doc_tabs, split_doc_by_tabs, TabInfo
+from gax.gdoc.native_md import get_doc_tabs, split_doc_by_tabs, TabInfo
 
 
 # Load fixtures

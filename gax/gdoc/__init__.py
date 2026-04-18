@@ -14,12 +14,12 @@ from typing import Optional
 import click
 from googleapiclient.discovery import build
 
-from .auth import get_authenticated_credentials
-from . import multipart
+from ..auth import get_authenticated_credentials
+from .. import multipart
 from . import native_md
 from .native_md import TabInfo
-from . import docs
-from .ui import operation, success, error
+from .. import docs
+from ..ui import operation, success, error
 
 logger = logging.getLogger(__name__)
 

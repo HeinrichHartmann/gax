@@ -455,7 +455,7 @@ def _push_file(
             # Single tab push
             if len(sections) == 1:
                 from .gdoc import extract_doc_id, pull_single_tab, update_tab_content
-                from . import native_md
+                from .gdoc import native_md
                 import difflib
 
                 local_section = sections[0]
@@ -489,7 +489,7 @@ def _push_file(
                     return True, "no changes"
 
                 # Check for unsupported features before confirming
-                from .md2docs import parse_markdown, check_unsupported
+                from .gdoc.md2docs import parse_markdown, check_unsupported
 
                 push_warnings = check_unsupported(parse_markdown(local_section.content))
 
@@ -701,7 +701,7 @@ def _push_doc_folder(
     Returns (success, message).
     """
     from .gdoc import update_tab_content
-    from . import native_md
+    from .gdoc import native_md
     import difflib
 
     document_id = metadata.get("document_id")

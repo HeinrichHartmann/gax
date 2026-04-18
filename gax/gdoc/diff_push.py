@@ -996,7 +996,7 @@ def preview_diff(
     """Compute the diff without applying it. Returns a preview for the user."""
     from . import native_md
     from googleapiclient.discovery import build
-    from .auth import get_authenticated_credentials
+    from ..auth import get_authenticated_credentials
 
     if docs_service is None or drive_service is None:
         creds = get_authenticated_credentials()
@@ -1111,7 +1111,7 @@ def diff_push(
     """
     from . import native_md
     from googleapiclient.discovery import build
-    from .auth import get_authenticated_credentials
+    from ..auth import get_authenticated_credentials
 
     if docs_service is None or drive_service is None:
         creds = get_authenticated_credentials()

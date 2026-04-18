@@ -1,6 +1,6 @@
 """Tests for markdown to Google Docs conversion."""
 
-from gax.md2docs import parse_markdown, check_unsupported
+from gax.gdoc.md2docs import parse_markdown, check_unsupported
 
 
 class TestCheckUnsupported:

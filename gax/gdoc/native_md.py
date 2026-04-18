@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 
-from .auth import get_authenticated_credentials
-from .store import store_blob
+from ..auth import get_authenticated_credentials
+from ..store import store_blob
 
 
 @dataclass
@@ -77,7 +77,7 @@ def extract_images_to_store(markdown: str) -> str:
             ext = "jpg"
 
         # Generate a name based on content hash prefix
-        from .store import compute_hash
+        from ..store import compute_hash
 
         content_hash = compute_hash(image_data)
         name = f"image-{content_hash[7:15]}.{ext}"  # sha256-XXXXXXXX -> XXXXXXXX
@@ -107,7 +107,7 @@ def inline_images_from_store(markdown: str) -> str:
         Markdown with file:// URLs replaced by base64 data URLs
     """
     from pathlib import Path
-    from .store import get_metadata
+    from ..store import get_metadata
 
     # Pattern to match file:// URLs to our blob store
     pattern = r'file://([^\s\)>"]+)'

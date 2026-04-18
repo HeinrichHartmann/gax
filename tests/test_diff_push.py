@@ -1,7 +1,7 @@
 """Tests for diff-based push module."""
 
-from gax.md2docs import parse_markdown
-from gax.diff_push import (
+from gax.gdoc.md2docs import parse_markdown
+from gax.gdoc.diff_push import (
     DocElement,
     AlignedNode,
     align,

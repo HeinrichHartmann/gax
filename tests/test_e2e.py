@@ -470,7 +470,7 @@ class TestImageE2E:
 
     def test_image_extraction_and_inlining(self, check_auth, temp_dir):
         """Test image extraction from blob store and inlining back."""
-        from gax.native_md import extract_images_to_store, inline_images_from_store
+        from gax.gdoc.native_md import extract_images_to_store, inline_images_from_store
         import base64
 
         # Create a small test image (1x1 red PNG)
