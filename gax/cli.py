@@ -39,7 +39,7 @@ from . import auth
 from . import docs
 from .gdoc import doc
 from .mail import thread as mail_group, mailbox
-from .label import label as mail_label
+from .label import Label
 from .filter import filter_group as mail_filter
 from .gcal import cal_cli
 from .form import form
@@ -774,10 +774,11 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
     try:
         # Handle labels and filters first (YAML-only, not multipart)
         if file_type == "gax/labels":
-            from .label import label_pull_to_file
-
-            count = label_pull_to_file(file_path)
-            return True, f"{count} labels"
+            try:
+                Label().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
 
         if file_type == "gax/filters":
             from .filter import filter_pull_to_file
@@ -2303,11 +2304,119 @@ def contacts_push(file, yes):
         sys.exit(1)
 
 
+# =============================================================================
+# Label commands
+# =============================================================================
+
+
+@docs.section("resource")
+@click.group("mail-label")
+def mail_label():
+    """Gmail label management (declarative)."""
+    pass
+
+
+@mail_label.command("list")
+def label_list():
+    """List Gmail labels (TSV output)."""
+    try:
+        Label().list(sys.stdout)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@mail_label.command("clone")
+@click.option(
+    "-o", "--output",
+    type=click.Path(path_type=Path),
+    help="Output file (default: mail-labels.gax.md)",
+)
+@click.option("--all", "include_all", is_flag=True, help="Include system labels")
+def label_clone(output, include_all):
+    """Clone Gmail labels to a .gax.md file."""
+    try:
+        from .ui import success
+
+        file_path = Label().clone(output=output, include_all=include_all)
+        success(f"Created: {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@mail_label.command("pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("--all", "include_all", is_flag=True, help="Include system labels")
+def label_pull(file, include_all):
+    """Pull latest labels to existing file."""
+    try:
+        from .ui import success
+
+        Label().pull(file, include_all=include_all)
+        success(f"Updated: {file}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@mail_label.command("plan")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-o", "--output", type=click.Path(path_type=Path),
+              default="labels.plan.yaml", help="Output plan file")
+@click.option("--delete", "allow_delete", is_flag=True, help="Include deletions")
+def label_plan(file, output, allow_delete):
+    """Preview label changes (diff)."""
+    try:
+        diff_text = Label().diff(file, allow_delete=allow_delete)
+        if diff_text is None:
+            click.echo("No changes to apply.")
+            return
+        click.echo(diff_text)
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@mail_label.command("apply")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@click.option("--delete", "allow_delete", is_flag=True, help="Include deletions")
+def label_apply(file, yes, allow_delete):
+    """Apply label changes to Gmail."""
+    try:
+        from .ui import success
+
+        lbl = Label()
+        diff_text = lbl.diff(file, allow_delete=allow_delete)
+        if diff_text is None:
+            click.echo("No changes to apply.")
+            return
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Apply these changes?"):
+                click.echo("Aborted.")
+                return
+        lbl.push(file, allow_delete=allow_delete)
+        success("Done.")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
 # Register doc, mail, cal, form, file, and contacts command groups
 main.add_command(doc)
 main.add_command(mail_group, name="mail")  # Flattened from mail.thread (ADR 020)
 main.add_command(mailbox)  # Flattened from mail.list (ADR 020)
-main.add_command(mail_label, name="mail-label")  # Flattened from mail.label (ADR 020)
+main.add_command(mail_label)  # Flattened from mail.label (ADR 020)
 main.add_command(
     mail_filter, name="mail-filter"
 )  # Flattened from mail.filter (ADR 020)
