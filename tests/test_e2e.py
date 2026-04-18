@@ -636,7 +636,7 @@ class TestCalendarE2E:
         # Step 3: Push to create upstream
         result = _run_gax("cal", "event", "push", str(event_file), "-y")
         assert result.returncode == 0, f"Push failed: {result.stderr}"
-        assert "Created event" in result.stdout
+        assert "Pushed event" in result.stdout
 
         # Verify the file was updated with ID
         content = event_file.read_text()
@@ -1633,3 +1633,110 @@ class TestMailboxE2E:
         # Should have created .mail.gax.md files
         files = list(output_dir.glob("*.mail.gax.md"))
         assert len(files) >= 1, f"Expected at least 1 file, found: {files}"
+
+
+# =============================================================================
+# Drive File E2E Tests
+# =============================================================================
+
+
+def _upload_test_file(content: str, name: str) -> str:
+    """Upload a small text file to Google Drive. Returns file ID."""
+    import io
+
+    from googleapiclient.http import MediaIoBaseUpload
+
+    creds = get_authenticated_credentials()
+    service = build("drive", "v3", credentials=creds)
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(content.encode("utf-8")),
+        mimetype="text/plain",
+    )
+    file = (
+        service.files()
+        .create(
+            body={"name": name},
+            media_body=media,
+            fields="id",
+        )
+        .execute()
+    )
+    return file["id"]
+
+
+def _delete_drive_file(file_id: str) -> None:
+    """Delete a file from Google Drive."""
+    creds = get_authenticated_credentials()
+    service = build("drive", "v3", credentials=creds)
+    try:
+        service.files().delete(fileId=file_id).execute()
+    except Exception:
+        pass
+
+
+@pytest.mark.e2e
+class TestDriveFileE2E:
+    """End-to-end tests for Google Drive file operations (clone, pull)."""
+
+    def test_clone_pull_cycle(self, check_auth, temp_dir):
+        """Test: upload file -> clone -> verify -> pull -> verify."""
+        file_id = _upload_test_file(
+            f"{E2E_PREFIX} test content\nline 2\n",
+            f"{E2E_PREFIX}_test.txt",
+        )
+        try:
+            # Clone
+            output = temp_dir / f"{E2E_PREFIX}_test.txt"
+            result = _run_gax("file", "clone", file_id, "-o", str(output))
+            assert result.returncode == 0, f"Clone failed: {result.stderr}"
+            assert output.exists()
+
+            content = output.read_text()
+            assert f"{E2E_PREFIX} test content" in content
+            assert "line 2" in content
+
+            # Sidecar tracking file should exist
+            tracking = Path(str(output) + ".gax.md")
+            assert tracking.exists(), f"Missing tracking file: {tracking}"
+            tracking_content = tracking.read_text()
+            assert file_id in tracking_content
+
+            # Pull to refresh
+            result = _run_gax("file", "pull", str(output))
+            assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+            # Content should still be valid after pull
+            pulled = output.read_text()
+            assert f"{E2E_PREFIX} test content" in pulled
+
+        finally:
+            _delete_drive_file(file_id)
+
+    def test_unified_push(self, check_auth, temp_dir):
+        """Test: clone -> modify -> unified push -> verify sidecar path handling."""
+        file_id = _upload_test_file(
+            f"{E2E_PREFIX} original\n",
+            f"{E2E_PREFIX}_push_test.txt",
+        )
+        try:
+            # Clone
+            output = temp_dir / f"{E2E_PREFIX}_push_test.txt"
+            result = _run_gax("file", "clone", file_id, "-o", str(output))
+            assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+            # Modify local file
+            output.write_text(f"{E2E_PREFIX} modified\n")
+
+            # Push via unified command (exercises cli.py sidecar path stripping)
+            tracking = Path(str(output) + ".gax.md")
+            result = _run_gax("push", str(tracking), "-y")
+            assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+            # Pull back and verify the update made it
+            result = _run_gax("file", "pull", str(output))
+            assert result.returncode == 0, f"Pull failed: {result.stderr}"
+            assert f"{E2E_PREFIX} modified" in output.read_text()
+
+        finally:
+            _delete_drive_file(file_id)
