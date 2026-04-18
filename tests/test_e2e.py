@@ -1,6 +1,25 @@
 """End-to-end integration tests for gax.
 
-These tests require authentication and use real Google Docs/Sheets.
+These tests require authentication and use a real Google account.
+
+E2E test policy
+===============
+
+  - Tests run against the user's actual Google account. They must tolerate
+    pre-existing content and only operate on test-specific resources.
+
+  - All test resources are tagged with a unique prefix (E2E_PREFIX = "gaxe2e")
+    so they can be identified and cleaned up reliably.
+
+  - Each test class has a cleanup function that finds and deletes ALL resources
+    matching the prefix — not just the ones created in the current run. This
+    handles recovery from partial/crashed runs.
+
+  - Cleanup runs in both setup (before) and teardown (finally) to ensure
+    idempotent test runs.
+
+  - Priority: never delete user data. Be precise about what you clean up.
+    Prefer unique, unlikely-to-collide prefixes.
 
 Required environment variables:
     GAX_TEST_DOC   - Google Doc ID for testing
@@ -25,6 +44,9 @@ from gax.auth import get_authenticated_credentials, is_authenticated
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+# Shared prefix for all e2e test resources. Used to tag and clean up.
+E2E_PREFIX = "gaxe2e"
 
 
 def _get_test_doc_id() -> str:
@@ -825,11 +847,29 @@ class TestNestedTabE2E:
 # =============================================================================
 
 
-def _delete_draft(draft_id: str):
-    """Delete a draft via the Gmail API directly."""
+E2E_DRAFT_SUBJECT = f"{E2E_PREFIX}-draft"
+
+
+def _cleanup_test_drafts():
+    """Delete all drafts whose subject starts with the e2e prefix."""
     creds = get_authenticated_credentials()
     service = build("gmail", "v1", credentials=creds)
-    service.users().drafts().delete(userId="me", id=draft_id).execute()
+    result = service.users().drafts().list(userId="me", maxResults=100).execute()
+    for draft_info in result.get("drafts", []):
+        draft = (
+            service.users()
+            .drafts()
+            .get(userId="me", id=draft_info["id"], format="metadata")
+            .execute()
+        )
+        headers = draft.get("message", {}).get("payload", {}).get("headers", [])
+        subject = ""
+        for h in headers:
+            if h["name"].lower() == "subject":
+                subject = h["value"]
+                break
+        if subject.startswith(E2E_DRAFT_SUBJECT):
+            service.users().drafts().delete(userId="me", id=draft_info["id"]).execute()
 
 
 @pytest.mark.e2e
@@ -838,35 +878,30 @@ class TestDraftE2E:
 
     def test_new_push_pull_cycle(self, check_auth, temp_dir):
         """Test: new -> push -> modify -> push (diff) -> pull -> verify."""
+        _cleanup_test_drafts()
+
         draft_file = temp_dir / "test.draft.gax.md"
 
-        # Create new draft file
-        result = _run_gax(
-            "draft", "new",
-            "--to", "test@example.com",
-            "--subject", "gax e2e test draft",
-            "-o", str(draft_file),
-        )
-        assert result.returncode == 0, f"New failed: {result.stderr}"
-        assert draft_file.exists()
-
-        # Push to create in Gmail
-        result = _run_gax("push", str(draft_file), "-y")
-        assert result.returncode == 0, f"Push failed: {result.stderr}"
-
-        # Verify draft_id was written back
-        content = draft_file.read_text()
-        assert "draft_id:" in content
-
-        # Extract draft_id for cleanup
-        from gax.draft import parse_draft
-        config, _ = parse_draft(content)
-        draft_id = config.draft_id
-        assert draft_id
-
         try:
-            # Modify body
+            # Create new draft file
+            result = _run_gax(
+                "draft", "new",
+                "--to", "test@example.com",
+                "--subject", E2E_DRAFT_SUBJECT,
+                "-o", str(draft_file),
+            )
+            assert result.returncode == 0, f"New failed: {result.stderr}"
+            assert draft_file.exists()
+
+            # Push to create in Gmail
+            result = _run_gax("push", str(draft_file), "-y")
+            assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+            # Verify draft_id was written back
             content = draft_file.read_text()
+            assert "draft_id:" in content
+
+            # Modify body
             draft_file.write_text(content.rstrip() + "\nHello from e2e test.\n")
 
             # Push update (with -y to skip confirm)
@@ -885,7 +920,7 @@ class TestDraftE2E:
             assert "no changes" in result.stdout.lower() or result.returncode == 0
 
         finally:
-            _delete_draft(draft_id)
+            _cleanup_test_drafts()
 
 
 # =============================================================================
@@ -900,7 +935,7 @@ def _delete_contact(resource_name: str):
     service.people().deleteContact(resourceName=resource_name).execute()
 
 
-E2E_CONTACT_PREFIX = "gaxe2etest"
+E2E_CONTACT_GIVEN = f"{E2E_PREFIX}contact"
 
 
 def _find_contact_by_given_name(given_name: str) -> str | None:
@@ -941,7 +976,7 @@ def _find_contacts_by_prefix(prefix: str) -> list[str]:
 
 def _cleanup_test_contacts():
     """Delete all contacts matching the e2e test prefix."""
-    for rn in _find_contacts_by_prefix(E2E_CONTACT_PREFIX):
+    for rn in _find_contacts_by_prefix(E2E_CONTACT_GIVEN):
         _delete_contact(rn)
 
 
@@ -953,7 +988,7 @@ class TestContactsE2E:
         """Test full create/delete cycle via push."""
         import time
 
-        test_given = E2E_CONTACT_PREFIX
+        test_given = E2E_CONTACT_GIVEN
         test_family = "contact"
         contacts_file = temp_dir / "contacts.jsonl"
 
@@ -1062,3 +1097,99 @@ class TestContactsE2E:
         finally:
             # Safety cleanup — catches any leftovers from this or stale runs
             _cleanup_test_contacts()
+
+
+# =============================================================================
+# Label E2E Tests
+# =============================================================================
+
+E2E_LABEL_PREFIX = f"{E2E_PREFIX}-label"
+
+
+def _find_test_labels() -> list[dict]:
+    """Find all Gmail labels whose name starts with the e2e prefix."""
+    creds = get_authenticated_credentials()
+    service = build("gmail", "v1", credentials=creds)
+    result = service.users().labels().list(userId="me").execute()
+    return [
+        lbl for lbl in result.get("labels", [])
+        if lbl.get("name", "").startswith(E2E_LABEL_PREFIX)
+    ]
+
+
+def _cleanup_test_labels():
+    """Delete all labels matching the e2e prefix."""
+    creds = get_authenticated_credentials()
+    service = build("gmail", "v1", credentials=creds)
+    for lbl in _find_test_labels():
+        try:
+            service.users().labels().delete(userId="me", id=lbl["id"]).execute()
+        except Exception:
+            pass  # May already be deleted
+
+
+@pytest.mark.e2e
+class TestLabelE2E:
+    """End-to-end smoke test for labels: clone -> add -> apply -> pull -> remove -> apply."""
+
+    def test_create_and_delete_label(self, check_auth, temp_dir):
+        """Test full create/delete cycle via push."""
+        test_label_name = f"{E2E_LABEL_PREFIX}-test"
+        labels_file = temp_dir / "labels.gax.md"
+
+        # Clean up any leftover test labels
+        _cleanup_test_labels()
+
+        try:
+            # Clone labels
+            result = _run_gax(
+                "mail-label", "clone",
+                "-o", str(labels_file),
+            )
+            assert result.returncode == 0, f"Clone failed: {result.stderr}"
+            assert labels_file.exists()
+
+            # Read and parse
+            from gax.label import parse_labels_file, format_labels_file
+            header, labels = parse_labels_file(labels_file)
+            original_count = len(labels)
+
+            # Add a test label
+            labels.append({"name": test_label_name})
+            content = format_labels_file(header, labels)
+            labels_file.write_text(content, encoding="utf-8")
+
+            # Apply (push) — should create the label
+            result = _run_gax("mail-label", "apply", str(labels_file), "-y")
+            assert result.returncode == 0, f"Apply (create) failed: {result.stderr}"
+
+            # Verify label was created
+            test_labels = _find_test_labels()
+            assert len(test_labels) == 1, f"Expected 1 test label, found {len(test_labels)}"
+            assert test_labels[0]["name"] == test_label_name
+
+            # Pull — should include the new label
+            result = _run_gax("mail-label", "pull", str(labels_file))
+            assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+            pulled_content = labels_file.read_text()
+            assert test_label_name in pulled_content
+
+            # Remove the test label from file
+            header, labels = parse_labels_file(labels_file)
+            filtered = [lbl for lbl in labels if lbl.get("name") != test_label_name]
+            assert len(filtered) == original_count, "Test label not found in pulled data"
+
+            content = format_labels_file(header, filtered)
+            labels_file.write_text(content, encoding="utf-8")
+
+            # Apply with --delete — should delete the label
+            result = _run_gax("mail-label", "apply", str(labels_file), "-y", "--delete")
+            assert result.returncode == 0, f"Apply (delete) failed: {result.stderr}"
+
+            # Verify label was deleted
+            test_labels = _find_test_labels()
+            assert len(test_labels) == 0, "Test label was not deleted"
+
+        finally:
+            _cleanup_test_labels()
