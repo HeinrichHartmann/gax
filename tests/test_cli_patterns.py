@@ -75,7 +75,6 @@ PUSH_RESOURCES = [
 WRITABLE_RESOURCES = [
     "mailbox",
     "mail-label",
-    "mail-filter",
     "form",
 ]
 

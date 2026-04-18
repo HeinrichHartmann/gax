@@ -1,115 +1,173 @@
-"""Gmail filter management commands.
+"""Gmail filter management for gax.
 
-Declarative filter management following ADR 011:
-- list: List filters (TSV)
-- pull: Export filters to YAML
-- plan: Generate plan from edited file
-- apply: Execute filter changes
+Resource module -- follows the draft.py reference pattern.
+
+Declarative filter management: clone filters to YAML, edit locally,
+diff to preview changes, push to apply. See ADR 011.
+
+Module structure
+================
+
+  FilterHeader         -- dataclass for file frontmatter
+  File format          -- parse/format filter files
+  API helpers          -- criteria/action conversion (inverse pairs)
+  Comparison helpers   -- diff logic for desired vs current state
+  Filter(Resource)     -- resource class (the public interface for cli.py)
+
+Design decisions
+================
+
+Same conventions as draft.py (see its docstring for full rationale).
+Additional notes specific to filters:
+
+  Gmail applies ALL matching filters simultaneously, not sequentially.
+  Filter order has no significance -- there is no "stop processing" feature.
+  Conflicting actions from multiple filters may neutralize each other.
+
+  Filters are matched by criteria hash (MD5 of normalized JSON).
+  Updates are implemented as delete+recreate since the Gmail API has
+  no patch endpoint for filters.
+
+  Label auto-creation: when a filter references a label that doesn't
+  exist, push() creates it automatically (including parent labels
+  for nested paths like "Projects/Active").
 """
+
+from __future__ import annotations
 
 import hashlib
 import json
 import logging
-import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
-import click
 import yaml
+from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
-from . import docs as doc
-from .ui import operation, success
-from googleapiclient.discovery import build
+from .resource import Resource
 
 logger = logging.getLogger(__name__)
 
 
-@doc.section("resource")
-@doc.maturity("unstable")
-@click.group("filter")
-def filter_group():
-    """Gmail filter management (declarative).
-
-    Note: Gmail applies ALL matching filters simultaneously, not sequentially.
-    Filter order has no significance - there is no "stop processing" feature.
-    Conflicting actions from multiple filters may neutralize each other.
-    """
-    pass
+# =============================================================================
+# Data class
+# =============================================================================
 
 
-def _criteria_hash(criteria: dict) -> str:
-    """Generate hash from filter criteria for matching."""
-    # Normalize and sort keys for consistent hashing
-    normalized = json.dumps(criteria, sort_keys=True)
-    return hashlib.md5(normalized.encode()).hexdigest()[:12]
+@dataclass
+class FilterHeader:
+    """Frontmatter of a filters file."""
+
+    pulled: str = ""
 
 
-def _generate_filter_name(criteria: dict) -> str:
-    """Generate human-readable name from criteria."""
-    parts = []
-    if criteria.get("from"):
-        parts.append(f"from:{criteria['from']}")
-    if criteria.get("to"):
-        parts.append(f"to:{criteria['to']}")
-    if criteria.get("subject"):
-        parts.append(f"subject:{criteria['subject']}")
-    if criteria.get("query"):
-        parts.append(criteria["query"][:30])
-    if criteria.get("hasAttachment"):
-        parts.append("has:attachment")
-    return " ".join(parts) if parts else "filter"
+# =============================================================================
+# File format -- parse/format filter files.
+# =============================================================================
 
 
-def _api_to_yaml_criteria(api_criteria: dict) -> dict:
-    """Convert Gmail API criteria to our YAML format."""
-    result = {}
-    mapping = {
-        "from": "from",
-        "to": "to",
-        "subject": "subject",
-        "query": "query",
-        "negatedQuery": "negatedQuery",
-        "hasAttachment": "hasAttachment",
-        "excludeChats": "excludeChats",
-        "size": "size",
-        "sizeComparison": "sizeComparison",
+def parse_filters_file(path: Path) -> tuple[FilterHeader, list[dict]]:
+    """Parse a filters file into header and filter list."""
+    content = path.read_text(encoding="utf-8")
+
+    # Skip comment lines at start
+    lines = content.split("\n")
+    while lines and lines[0].startswith("#"):
+        lines = lines[1:]
+    content = "\n".join(lines)
+
+    header = FilterHeader()
+
+    if content.startswith("---\n"):
+        parts = content.split("---\n", 2)
+        if len(parts) >= 3:
+            header_data = yaml.safe_load(parts[1]) or {}
+            header.pulled = header_data.get("pulled", "")
+            filters = yaml.safe_load(parts[2]) or []
+            return header, filters
+
+    # Old format: single YAML doc with filters key
+    doc = yaml.safe_load(content)
+    filters = doc.get("filters", []) if doc else []
+    return header, filters
+
+
+def format_filters_file(header: FilterHeader, filters: list[dict]) -> str:
+    """Format header and filter list as file content."""
+    file_header = {
+        "type": "gax/filters",
+        "content-type": "application/yaml",
+        "pulled": header.pulled,
     }
-    for api_key, yaml_key in mapping.items():
-        if api_key in api_criteria:
-            result[yaml_key] = api_criteria[api_key]
-    return result
+
+    parts = [
+        "---\n",
+        yaml.dump(file_header, default_flow_style=False,
+                  allow_unicode=True, sort_keys=False),
+        "---\n",
+        yaml.dump(filters, default_flow_style=False,
+                  allow_unicode=True, sort_keys=False),
+    ]
+    return "".join(parts)
 
 
-def _yaml_to_api_criteria(yaml_criteria: dict) -> dict:
-    """Convert our YAML format to Gmail API criteria."""
+# =============================================================================
+# API helpers -- criteria/action conversion (inverse pairs).
+# =============================================================================
+
+CRITERIA_KEYS = [
+    "from", "to", "subject", "query", "negatedQuery",
+    "hasAttachment", "excludeChats", "size", "sizeComparison",
+]
+
+
+def get_service():
+    """Get authenticated Gmail API service."""
+    creds = get_authenticated_credentials()
+    return build("gmail", "v1", credentials=creds)
+
+
+def fetch_filters(*, service=None) -> list[dict]:
+    """Fetch all filters from Gmail."""
+    service = service or get_service()
+    result = service.users().settings().filters().list(userId="me").execute()
+    return result.get("filter", [])
+
+
+def fetch_label_maps(*, service=None) -> tuple[dict, dict]:
+    """Fetch label ID<->name mappings. Returns (id_to_name, name_to_id)."""
+    service = service or get_service()
+    labels_result = service.users().labels().list(userId="me").execute()
+    labels = labels_result.get("labels", [])
+    id_to_name = {lbl["id"]: lbl["name"] for lbl in labels}
+    name_to_id = {lbl["name"]: lbl["id"] for lbl in labels}
+    return id_to_name, name_to_id
+
+
+# --- Criteria: inverse pair ---
+
+def api_to_criteria(api_criteria: dict) -> dict:
+    """Convert Gmail API criteria to local format."""
+    return {k: api_criteria[k] for k in CRITERIA_KEYS if k in api_criteria}
+
+
+def criteria_to_api(local_criteria: dict) -> dict:
+    """Convert local criteria to Gmail API format."""
+    return {k: local_criteria[k] for k in CRITERIA_KEYS if k in local_criteria}
+
+
+# --- Action: inverse pair ---
+
+def api_to_action(api_action: dict, label_id_to_name: dict) -> dict:
+    """Convert Gmail API action to local format."""
     result = {}
-    mapping = {
-        "from": "from",
-        "to": "to",
-        "subject": "subject",
-        "query": "query",
-        "negatedQuery": "negatedQuery",
-        "hasAttachment": "hasAttachment",
-        "excludeChats": "excludeChats",
-        "size": "size",
-        "sizeComparison": "sizeComparison",
-    }
-    for yaml_key, api_key in mapping.items():
-        if yaml_key in yaml_criteria:
-            result[api_key] = yaml_criteria[yaml_key]
-    return result
 
-
-def _api_to_yaml_action(api_action: dict, label_id_to_name: dict) -> dict:
-    """Convert Gmail API action to our YAML format."""
-    result = {}
-
-    # Label actions - convert IDs to names
     if api_action.get("addLabelIds"):
         labels = []
         for lid in api_action["addLabelIds"]:
             name = label_id_to_name.get(lid, lid)
-            # Skip system labels that are handled by other flags
             if name not in ("INBOX", "TRASH", "SPAM", "STARRED", "IMPORTANT", "UNREAD"):
                 labels.append(name)
             elif name == "STARRED":
@@ -141,52 +199,54 @@ def _api_to_yaml_action(api_action: dict, label_id_to_name: dict) -> dict:
     return result
 
 
-def _yaml_to_api_action(yaml_action: dict, label_name_to_id: dict, service) -> dict:
-    """Convert our YAML format to Gmail API action."""
+def action_to_api(local_action: dict, label_name_to_id: dict,
+                  service=None) -> dict:
+    """Convert local action to Gmail API format.
+
+    If a referenced label doesn't exist and service is provided,
+    creates it automatically.
+    """
     result = {"addLabelIds": [], "removeLabelIds": []}
 
-    # Handle label - may need to create
-    if yaml_action.get("label"):
-        labels = yaml_action["label"]
+    if local_action.get("label"):
+        labels = local_action["label"]
         if isinstance(labels, str):
             labels = [labels]
         for label_name in labels:
-            label_id = _get_or_create_label(service, label_name, label_name_to_id)
+            label_id = get_or_create_label(
+                service, label_name, label_name_to_id
+            )
             result["addLabelIds"].append(label_id)
 
-    if yaml_action.get("removeLabel"):
-        label_name = yaml_action["removeLabel"]
+    if local_action.get("removeLabel"):
+        label_name = local_action["removeLabel"]
         if label_name in label_name_to_id:
             result["removeLabelIds"].append(label_name_to_id[label_name])
 
-    # Boolean flags
-    if yaml_action.get("archive"):
+    if local_action.get("archive"):
         result["removeLabelIds"].append("INBOX")
-    if yaml_action.get("markRead"):
+    if local_action.get("markRead"):
         result["removeLabelIds"].append("UNREAD")
-    if yaml_action.get("star"):
+    if local_action.get("star"):
         result["addLabelIds"].append("STARRED")
-    if yaml_action.get("important"):
+    if local_action.get("important"):
         result["addLabelIds"].append("IMPORTANT")
-    if yaml_action.get("neverImportant"):
+    if local_action.get("neverImportant"):
         result["removeLabelIds"].append("IMPORTANT")
-    if yaml_action.get("trash"):
+    if local_action.get("trash"):
         result["addLabelIds"].append("TRASH")
-    if yaml_action.get("neverSpam"):
+    if local_action.get("neverSpam"):
         result["removeLabelIds"].append("SPAM")
 
-    # Forward
-    if yaml_action.get("forward"):
-        result["forward"] = yaml_action["forward"]
+    if local_action.get("forward"):
+        result["forward"] = local_action["forward"]
 
-    # Category
-    if yaml_action.get("category"):
-        cat = yaml_action["category"].upper()
+    if local_action.get("category"):
+        cat = local_action["category"].upper()
         if not cat.startswith("CATEGORY_"):
             cat = f"CATEGORY_{cat}"
         result["addLabelIds"].append(cat)
 
-    # Clean up empty lists
     if not result["addLabelIds"]:
         del result["addLabelIds"]
     if not result["removeLabelIds"]:
@@ -195,63 +255,202 @@ def _yaml_to_api_action(yaml_action: dict, label_name_to_id: dict, service) -> d
     return result
 
 
-def _get_or_create_label(service, label_name: str, label_name_to_id: dict) -> str:
+def get_or_create_label(service, label_name: str,
+                        label_name_to_id: dict) -> str:
     """Get label ID, creating the label if it doesn't exist."""
     if label_name in label_name_to_id:
         return label_name_to_id[label_name]
+
+    if service is None:
+        raise ValueError(f"Label '{label_name}' does not exist")
 
     # Create parent labels first for nested labels
     if "/" in label_name:
         parts = label_name.split("/")
         for i in range(len(parts) - 1):
-            parent = "/".join(parts[: i + 1])
+            parent = "/".join(parts[:i + 1])
             if parent not in label_name_to_id:
-                result = (
-                    service.users()
-                    .labels()
-                    .create(
-                        userId="me",
-                        body={"name": parent, "labelListVisibility": "labelShow"},
-                    )
-                    .execute()
-                )
+                result = service.users().labels().create(
+                    userId="me",
+                    body={"name": parent, "labelListVisibility": "labelShow"},
+                ).execute()
                 label_name_to_id[parent] = result["id"]
-                click.echo(f"Created label: {parent}")
+                logger.info(f"Created label: {parent}")
 
-    # Create the label
-    result = (
-        service.users()
-        .labels()
-        .create(
-            userId="me", body={"name": label_name, "labelListVisibility": "labelShow"}
-        )
-        .execute()
-    )
+    result = service.users().labels().create(
+        userId="me",
+        body={"name": label_name, "labelListVisibility": "labelShow"},
+    ).execute()
     label_name_to_id[label_name] = result["id"]
-    click.echo(f"Created label: {label_name}")
+    logger.info(f"Created label: {label_name}")
     return result["id"]
 
 
-@filter_group.command("list")
-def filter_list():
-    """List Gmail filters (TSV output)."""
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+# =============================================================================
+# Comparison helpers -- diff logic for desired vs current filters.
+# =============================================================================
 
-        # Get label mappings
-        labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {
-            lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])
+
+def criteria_hash(criteria: dict) -> str:
+    """Generate hash from filter criteria for matching."""
+    normalized = json.dumps(criteria, sort_keys=True)
+    return hashlib.md5(normalized.encode()).hexdigest()[:12]
+
+
+def generate_filter_name(criteria: dict) -> str:
+    """Generate human-readable name from criteria."""
+    parts = []
+    if criteria.get("from"):
+        parts.append(f"from:{criteria['from']}")
+    if criteria.get("to"):
+        parts.append(f"to:{criteria['to']}")
+    if criteria.get("subject"):
+        parts.append(f"subject:{criteria['subject']}")
+    if criteria.get("query"):
+        parts.append(criteria["query"][:30])
+    if criteria.get("hasAttachment"):
+        parts.append("has:attachment")
+    return " ".join(parts) if parts else "filter"
+
+
+def compute_changes(
+    desired_filters: list[dict],
+    current_filters: list[dict],
+    label_id_to_name: dict,
+) -> dict:
+    """Compute changes between desired (local) and current (remote) filters.
+
+    Returns dict with keys: create, update, delete (each a list).
+    """
+    desired_by_hash = {}
+    for f in desired_filters:
+        h = criteria_hash(f.get("criteria", {}))
+        desired_by_hash[h] = f
+
+    current_by_hash = {}
+    for f in current_filters:
+        criteria = api_to_criteria(f.get("criteria", {}))
+        h = criteria_hash(criteria)
+        current_by_hash[h] = {
+            "id": f["id"],
+            "criteria": criteria,
+            "api_filter": f,
         }
 
-        # Get filters
-        result = service.users().settings().filters().list(userId="me").execute()
-        filters = result.get("filter", [])
+    creates = []
+    updates = []
+    deletes = []
 
-        click.echo("id\tfrom\tto\tsubject\tquery\tlabels\tactions")
+    for h, desired in desired_by_hash.items():
+        if h not in current_by_hash:
+            creates.append({
+                "name": desired.get("name", ""),
+                "criteria": desired.get("criteria", {}),
+                "action": desired.get("action", {}),
+            })
+        else:
+            current = current_by_hash[h]
+            current_action = api_to_action(
+                current["api_filter"].get("action", {}), label_id_to_name
+            )
+            desired_action = desired.get("action", {})
+            if current_action != desired_action:
+                updates.append({
+                    "id": current["id"],
+                    "name": desired.get("name", ""),
+                    "criteria": desired.get("criteria", {}),
+                    "action": desired_action,
+                })
 
-        for f in filters:
+    for h, current in current_by_hash.items():
+        if h not in desired_by_hash:
+            deletes.append({
+                "id": current["id"],
+                "criteria": current["criteria"],
+            })
+
+    return {"create": creates, "update": updates, "delete": deletes}
+
+
+def format_diff_summary(changes: dict) -> str:
+    """Format a human-readable diff summary."""
+    creates = changes["create"]
+    updates = changes["update"]
+    deletes = changes["delete"]
+
+    if not creates and not updates and not deletes:
+        return ""
+
+    lines = []
+
+    if creates:
+        lines.append(f"  Create: {len(creates)}")
+        for item in creates:
+            lines.append(f"    + {item.get('name', 'filter')}")
+
+    if updates:
+        lines.append(f"  Update: {len(updates)} (delete+recreate)")
+        for item in updates:
+            lines.append(f"    ~ {item.get('name', 'filter')}")
+
+    if deletes:
+        lines.append(f"  Delete: {len(deletes)}")
+        for item in deletes:
+            name = generate_filter_name(item.get("criteria", {}))
+            lines.append(f"    - {name}")
+
+    return "\n".join(lines)
+
+
+# =============================================================================
+# Resource class -- the public interface for cli.py.
+# =============================================================================
+
+
+class Filter(Resource):
+    """Gmail filter resource."""
+
+    name = "filter"
+
+    def clone(self, url: str = "", output: Path | None = None, **kw) -> Path:
+        """Clone Gmail filters to a local file."""
+        service = get_service()
+        filters = self._fetch_normalized(service=service)
+
+        header = FilterHeader(
+            pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        content = format_filters_file(header, filters)
+
+        file_path = output or Path("mail-filters.gax.md")
+        if file_path.exists():
+            raise ValueError(f"File already exists: {file_path}")
+
+        file_path.write_text(content, encoding="utf-8")
+        logger.info(f"Filters: {len(filters)}")
+        return file_path
+
+    def pull(self, path: Path, **kw) -> None:
+        """Pull latest filters from Gmail."""
+        service = get_service()
+        filters = self._fetch_normalized(service=service)
+
+        header = FilterHeader(
+            pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        content = format_filters_file(header, filters)
+        path.write_text(content, encoding="utf-8")
+        logger.info(f"Filters: {len(filters)}")
+
+    def list(self, out, **kw) -> None:
+        """List Gmail filters as TSV to file descriptor."""
+        service = get_service()
+        id_to_name, _ = fetch_label_maps(service=service)
+        api_filters = fetch_filters(service=service)
+
+        out.write("id\tfrom\tto\tsubject\tquery\tlabels\tactions\n")
+
+        for f in api_filters:
             fid = f.get("id", "")
             criteria = f.get("criteria", {})
             action = f.get("action", {})
@@ -261,15 +460,13 @@ def filter_list():
             subject = criteria.get("subject", "")
             query = criteria.get("query", "")
 
-            # Labels being added
             labels = []
             for lid in action.get("addLabelIds", []):
-                name = label_id_to_name.get(lid, lid)
+                name = id_to_name.get(lid, lid)
                 if name not in ("STARRED", "IMPORTANT", "TRASH"):
                     labels.append(name)
             labels_str = ",".join(labels)
 
-            # Action summary
             actions = []
             if "INBOX" in action.get("removeLabelIds", []):
                 actions.append("archive")
@@ -283,341 +480,87 @@ def filter_list():
                 actions.append(f"fwd:{action['forward']}")
             actions_str = ",".join(actions)
 
-            click.echo(
-                f"{fid}\t{from_addr}\t{to_addr}\t{subject}\t{query}\t{labels_str}\t{actions_str}"
+            out.write(
+                f"{fid}\t{from_addr}\t{to_addr}\t{subject}\t{query}"
+                f"\t{labels_str}\t{actions_str}\n"
             )
 
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    def diff(self, path: Path, **kw) -> str | None:
+        """Preview changes between local filters file and Gmail."""
+        _, desired_filters = parse_filters_file(path)
 
+        service = get_service()
+        current_filters = fetch_filters(service=service)
+        id_to_name, _ = fetch_label_maps(service=service)
 
-def filter_pull_to_file(path) -> int:
-    """Pull filters and write to file. Returns filter count."""
-    from pathlib import Path
+        changes = compute_changes(desired_filters, current_filters, id_to_name)
+        summary = format_diff_summary(changes)
+        return summary or None
 
-    creds = get_authenticated_credentials()
-    service = build("gmail", "v1", credentials=creds)
+    def push(self, path: Path, **kw) -> None:
+        """Push local filter changes to Gmail. Unconditional."""
+        _, desired_filters = parse_filters_file(path)
 
-    # Get label mappings
-    labels_result = service.users().labels().list(userId="me").execute()
-    label_id_to_name = {
-        lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])
-    }
+        service = get_service()
+        current_filters = fetch_filters(service=service)
+        id_to_name, name_to_id = fetch_label_maps(service=service)
 
-    # Get filters
-    result = service.users().settings().filters().list(userId="me").execute()
-    api_filters = result.get("filter", [])
+        changes = compute_changes(desired_filters, current_filters, id_to_name)
 
-    # Convert to YAML format
-    filters = []
-    for f in api_filters:
-        criteria = _api_to_yaml_criteria(f.get("criteria", {}))
-        action = _api_to_yaml_action(f.get("action", {}), label_id_to_name)
+        creates = changes["create"]
+        updates = changes["update"]
+        deletes = changes["delete"]
 
-        entry = {
-            "name": _generate_filter_name(criteria),
-            "criteria": criteria,
-            "action": action,
-        }
-        filters.append(entry)
+        if not creates and not updates and not deletes:
+            logger.info("No changes to apply")
+            return
 
-    header = {
-        "type": "gax/filters",
-        "content-type": "application/yaml",
-        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-
-    with open(Path(path), "w") as f:
-        f.write("---\n")
-        yaml.dump(
-            header, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-        )
-        f.write("---\n")
-        yaml.dump(
-            filters, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-        )
-
-    return len(filters)
-
-
-@filter_group.command("clone")
-@click.option(
-    "-o",
-    "--output",
-    default="mail-filters.gax.md",
-    help="Output file (default: mail-filters.gax.md)",
-)
-def filter_clone(output: str):
-    """Clone Gmail filters to a .gax.md file.
-
-    Creates a state file with all filters and their settings.
-    Edit this file and use 'plan' to preview changes, 'apply' to execute.
-
-    \b
-    Example:
-        gax mail-filter clone
-        gax mail-filter clone -o myfilters.gax.md
-    """
-    from pathlib import Path
-
-    try:
-        if Path(output).exists():
-            click.echo(
-                f"Error: {output} already exists. Use 'pull' to update.", err=True
+        # 1. Delete (including updates -- delete first, recreate later)
+        for item in deletes + updates:
+            name = item.get("name") or generate_filter_name(
+                item.get("criteria", {})
             )
-            sys.exit(1)
-        count = filter_pull_to_file(output)
-        click.echo(f"Cloned {count} filters to {output}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+            logger.info(f"Deleting: {name}")
+            service.users().settings().filters().delete(
+                userId="me", id=item["id"]
+            ).execute()
 
-
-@filter_group.command("pull")
-@click.argument("file", type=click.Path(exists=True))
-def filter_pull(file: str):
-    """Pull latest filters to existing file.
-
-    \b
-    Example:
-        gax mail filter pull filters.yaml
-    """
-    try:
-        count = filter_pull_to_file(file)
-        click.echo(f"Pulled {count} filters to {file}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-def _parse_filters_file(path: str) -> list:
-    """Parse filters file (supports both old and frontmatter format)."""
-    with open(path) as f:
-        content = f.read()
-
-    # Skip comment lines at start
-    lines = content.split("\n")
-    while lines and lines[0].startswith("#"):
-        lines = lines[1:]
-    content = "\n".join(lines)
-
-    # Check for frontmatter format
-    if content.startswith("---\n"):
-        parts = content.split("---\n", 2)
-        if len(parts) >= 3:
-            # parts[0] is empty, parts[1] is header, parts[2] is content
-            return yaml.safe_load(parts[2]) or []
-
-    # Old format: single YAML doc with filters key
-    doc = yaml.safe_load(content)
-    return doc.get("filters", []) if doc else []
-
-
-@filter_group.command("plan")
-@click.argument("file", type=click.Path(exists=True))
-@click.option("-o", "--output", default="filters.plan.yaml", help="Output plan file")
-def filter_plan(file: str, output: str):
-    """Generate plan from edited filters file."""
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        # Load desired state
-        desired_filters = _parse_filters_file(file)
-
-        # Get current state
-        result = service.users().settings().filters().list(userId="me").execute()
-        current_filters = result.get("filter", [])
-
-        # Build maps by criteria hash
-        desired_by_hash = {}
-        for f in desired_filters:
-            h = _criteria_hash(f.get("criteria", {}))
-            desired_by_hash[h] = f
-
-        current_by_hash = {}
-        for f in current_filters:
-            criteria = _api_to_yaml_criteria(f.get("criteria", {}))
-            h = _criteria_hash(criteria)
-            current_by_hash[h] = {
-                "id": f["id"],
-                "criteria": criteria,
-                "api_filter": f,
+        # 2. Create (including recreate for updates)
+        for item in creates + updates:
+            name = item.get("name") or generate_filter_name(
+                item.get("criteria", {})
+            )
+            action_type = "Creating" if item in creates else "Recreating"
+            logger.info(f"{action_type}: {name}")
+            body = {
+                "criteria": criteria_to_api(item.get("criteria", {})),
+                "action": action_to_api(
+                    item.get("action", {}), name_to_id, service
+                ),
             }
+            service.users().settings().filters().create(
+                userId="me", body=body
+            ).execute()
 
-        # Compute changes
-        plan = {
-            "type": "gax/filters-plan",
-            "source": file,
-            "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "create": [],
-            "update": [],
-            "delete": [],
-        }
+        logger.info(
+            f"Applied: {len(creates)} created, {len(updates)} updated, "
+            f"{len(deletes)} deleted"
+        )
 
-        # Get label mappings for action comparison
-        labels_result = service.users().labels().list(userId="me").execute()
-        label_id_to_name = {
-            lbl["id"]: lbl["name"] for lbl in labels_result.get("labels", [])
-        }
+    def _fetch_normalized(self, *, service=None) -> list[dict]:
+        """Fetch filters and normalize to local format."""
+        service = service or get_service()
+        id_to_name, _ = fetch_label_maps(service=service)
+        api_filters = fetch_filters(service=service)
 
-        # Check for creates and updates
-        for h, desired in desired_by_hash.items():
-            if h not in current_by_hash:
-                # New filter
-                plan["create"].append(
-                    {
-                        "name": desired.get("name", ""),
-                        "criteria": desired.get("criteria", {}),
-                        "action": desired.get("action", {}),
-                    }
-                )
-            else:
-                # Check if action changed
-                current = current_by_hash[h]
-                current_action = _api_to_yaml_action(
-                    current["api_filter"].get("action", {}), label_id_to_name
-                )
-                desired_action = desired.get("action", {})
-
-                if current_action != desired_action:
-                    plan["update"].append(
-                        {
-                            "id": current["id"],
-                            "name": desired.get("name", ""),
-                            "criteria": desired.get("criteria", {}),
-                            "action": desired_action,
-                        }
-                    )
-
-        # Check for deletes
-        for h, current in current_by_hash.items():
-            if h not in desired_by_hash:
-                plan["delete"].append(
-                    {
-                        "id": current["id"],
-                        "criteria": current["criteria"],
-                    }
-                )
-
-        # Remove empty lists
-        plan = {
-            k: v for k, v in plan.items() if v or k in ("type", "source", "generated")
-        }
-
-        # Show summary
-        has_changes = any(k in plan for k in ("create", "update", "delete"))
-        if not has_changes:
-            click.echo("No changes to apply.")
-            return
-
-        click.echo("Plan:")
-        if "create" in plan:
-            click.echo(f"  Create: {len(plan['create'])}")
-            for item in plan["create"]:
-                click.echo(f"    + {item.get('name', 'filter')}")
-        if "update" in plan:
-            click.echo(f"  Update: {len(plan['update'])} (delete+recreate)")
-            for item in plan["update"]:
-                click.echo(f"    ~ {item.get('name', 'filter')}")
-        if "delete" in plan:
-            click.echo(f"  Delete: {len(plan['delete'])}")
-            for item in plan["delete"]:
-                name = _generate_filter_name(item.get("criteria", {}))
-                click.echo(f"    - {name}")
-
-        # Write plan
-        with open(output, "w") as f:
-            yaml.dump(
-                plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-            )
-
-        click.echo(f"Wrote plan to {output}")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@filter_group.command("apply")
-@click.argument("plan_file", type=click.Path(exists=True))
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-def filter_apply(plan_file: str, yes: bool):
-    """Apply filter changes from plan file."""
-    try:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
-
-        # Load plan
-        with open(plan_file) as f:
-            plan = yaml.safe_load(f)
-
-        if plan.get("type") != "gax/filters-plan":
-            click.echo("Error: Not a filters plan file", err=True)
-            sys.exit(1)
-
-        to_create = plan.get("create", [])
-        to_update = plan.get("update", [])
-        to_delete = plan.get("delete", [])
-
-        if not to_create and not to_update and not to_delete:
-            click.echo("No changes in plan.")
-            return
-
-        click.echo("Applying:")
-        if to_create:
-            click.echo(f"  Create: {len(to_create)}")
-        if to_update:
-            click.echo(f"  Update: {len(to_update)}")
-        if to_delete:
-            click.echo(f"  Delete: {len(to_delete)}")
-
-        if not yes and not click.confirm("Apply these changes?"):
-            click.echo("Aborted.")
-            return
-
-        # Get label mappings
-        labels_result = service.users().labels().list(userId="me").execute()
-        label_name_to_id = {
-            lbl["name"]: lbl["id"] for lbl in labels_result.get("labels", [])
-        }
-
-        # Total operations: deletes + updates (delete+create) + creates
-        total_ops = len(to_delete) + len(to_update) * 2 + len(to_create)
-
-        with operation("Applying filter changes", total=total_ops) as op:
-            # 1. Delete (including updates - delete first, recreate later)
-            for item in to_delete + to_update:
-                name = item.get("name") or _generate_filter_name(
-                    item.get("criteria", {})
-                )
-                logger.info(f"Deleting: {name}")
-                service.users().settings().filters().delete(
-                    userId="me", id=item["id"]
-                ).execute()
-                op.advance()
-
-            # 2. Create (including recreate for updates)
-            for item in to_create + to_update:
-                name = item.get("name") or _generate_filter_name(
-                    item.get("criteria", {})
-                )
-                action = "Creating" if item in to_create else "Recreating"
-                logger.info(f"{action}: {name}")
-                body = {
-                    "criteria": _yaml_to_api_criteria(item.get("criteria", {})),
-                    "action": _yaml_to_api_action(
-                        item.get("action", {}), label_name_to_id, service
-                    ),
-                }
-                service.users().settings().filters().create(
-                    userId="me", body=body
-                ).execute()
-                op.advance()
-
-        success("Done.")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+        filters = []
+        for f in api_filters:
+            criteria = api_to_criteria(f.get("criteria", {}))
+            action = api_to_action(f.get("action", {}), id_to_name)
+            entry = {
+                "name": generate_filter_name(criteria),
+                "criteria": criteria,
+                "action": action,
+            }
+            filters.append(entry)
+        return filters

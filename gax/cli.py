@@ -40,7 +40,7 @@ from . import docs
 from .gdoc import doc
 from .mail import thread as mail_group, mailbox
 from .label import Label
-from .filter import filter_group as mail_filter
+from .filter import Filter
 from .gcal import cal_cli
 from .form import form
 from .draft import Draft
@@ -781,10 +781,11 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
                 return False, str(e)
 
         if file_type == "gax/filters":
-            from .filter import filter_pull_to_file
-
-            count = filter_pull_to_file(file_path)
-            return True, f"{count} filters"
+            try:
+                Filter().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
         if file_type == "gax/doc":
             from .gdoc import pull_doc, extract_doc_id
             from .gdoc import format_multipart as doc_format_multipart
@@ -2412,14 +2413,118 @@ def label_apply(file, yes, allow_delete):
         sys.exit(1)
 
 
+# =============================================================================
+# Filter commands
+# =============================================================================
+
+
+@docs.section("resource")
+@click.group("mail-filter")
+def mail_filter():
+    """Gmail filter management (declarative).
+
+    Note: Gmail applies ALL matching filters simultaneously, not sequentially.
+    Filter order has no significance - there is no "stop processing" feature.
+    """
+    pass
+
+
+@mail_filter.command("list")
+def filter_list():
+    """List Gmail filters (TSV output)."""
+    try:
+        Filter().list(sys.stdout)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@mail_filter.command("clone")
+@click.option(
+    "-o", "--output",
+    type=click.Path(path_type=Path),
+    help="Output file (default: mail-filters.gax.md)",
+)
+def filter_clone(output):
+    """Clone Gmail filters to a .gax.md file."""
+    try:
+        from .ui import success
+
+        file_path = Filter().clone(output=output)
+        success(f"Created: {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@mail_filter.command("pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def filter_pull(file):
+    """Pull latest filters to existing file."""
+    try:
+        from .ui import success
+
+        Filter().pull(file)
+        success(f"Updated: {file}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@mail_filter.command("plan")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def filter_plan(file):
+    """Preview filter changes (diff)."""
+    try:
+        diff_text = Filter().diff(file)
+        if diff_text is None:
+            click.echo("No changes to apply.")
+            return
+        click.echo(diff_text)
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@mail_filter.command("apply")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def filter_apply(file, yes):
+    """Apply filter changes to Gmail."""
+    try:
+        from .ui import success
+
+        flt = Filter()
+        diff_text = flt.diff(file)
+        if diff_text is None:
+            click.echo("No changes to apply.")
+            return
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Apply these changes?"):
+                click.echo("Aborted.")
+                return
+        flt.push(file)
+        success("Done.")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
 # Register doc, mail, cal, form, file, and contacts command groups
 main.add_command(doc)
 main.add_command(mail_group, name="mail")  # Flattened from mail.thread (ADR 020)
 main.add_command(mailbox)  # Flattened from mail.list (ADR 020)
 main.add_command(mail_label)  # Flattened from mail.label (ADR 020)
-main.add_command(
-    mail_filter, name="mail-filter"
-)  # Flattened from mail.filter (ADR 020)
+main.add_command(mail_filter)  # Flattened from mail.filter (ADR 020)
 main.add_command(cal_cli, name="cal")
 main.add_command(form)
 main.add_command(draft)  # Flattened from mail.draft (ADR 020)
