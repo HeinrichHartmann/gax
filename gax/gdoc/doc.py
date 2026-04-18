@@ -48,7 +48,7 @@ from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
 from .. import multipart
-from . import native_md
+from .native_md import extract_images_to_store, inline_images_from_store
 from ..ui import operation
 from ..resource import Resource
 
@@ -184,7 +184,7 @@ def _tab_content_to_markdown(doc: dict, tab: dict) -> str:
     blocks = ir.from_doc_json(body, lists=doc.get("lists"))
     md = ir.render_markdown(blocks)
     # Post-process: extract base64 images to blob store
-    md = native_md.extract_images_to_store(md)
+    md = extract_images_to_store(md)
     return md
 
 
@@ -193,7 +193,6 @@ def pull_doc(
     source_url: str,
     *,
     docs_service=None,
-    drive_service=None,
     num_retries: int = 0,
 ) -> list[DocSection]:
     """Fetch document from Google Docs API and return list of sections.
@@ -244,7 +243,6 @@ def pull_single_tab(
     source_url: str,
     *,
     docs_service=None,
-    drive_service=None,
     num_retries: int = 0,
 ) -> DocSection:
     """Pull a single tab from a document.
@@ -987,7 +985,7 @@ class Tab(Resource):
             raise ValueError("No source URL found in file")
 
         document_id = extract_doc_id(source_url)
-        content_to_push = native_md.inline_images_from_store(section.content)
+        content_to_push = inline_images_from_store(section.content)
 
         if use_patch:
             from .diff_push import diff_push as _diff_push

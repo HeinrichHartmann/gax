@@ -1,8 +1,4 @@
-"""Native Google Docs Markdown import/export via Drive API.
-
-Uses the Drive API's native text/markdown support for high-quality
-roundtrip conversion of Google Docs to/from Markdown.
-"""
+"""Image blob helpers and Drive API markdown import for Google Docs."""
 
 import base64
 import re
@@ -159,33 +155,3 @@ def create_doc_from_markdown(
     )
 
     return result["id"]
-
-
-def export_tab_markdown(
-    document_id: str,
-    tab_name: str,
-    *,
-    docs_service=None,
-    drive_service=None,
-    source_url: str | None = None,
-    num_retries: int = 0,
-) -> str:
-    """Backwards-compatible tab export helper.
-
-    The native Drive markdown export path was retired in favor of the IR-based
-    Docs JSON pipeline, but some tests and callers still import this helper.
-    """
-    from .doc import pull_single_tab
-
-    if source_url is None:
-        source_url = f"https://docs.google.com/document/d/{document_id}/edit"
-
-    section = pull_single_tab(
-        document_id,
-        tab_name,
-        source_url,
-        docs_service=docs_service,
-        drive_service=drive_service,
-        num_retries=num_retries,
-    )
-    return section.content

@@ -93,11 +93,19 @@ class ListItem(Block):
     ordered: bool = False
     depth: int = 0
 
+    @property
+    def text(self) -> str:
+        return "".join(s.text for s in self.spans)
+
 
 @dataclass
 class CodeBlock(Block):
     code: str = ""
     language: str = ""
+
+    @property
+    def text(self) -> str:
+        return self.code
 
 
 @dataclass
@@ -373,6 +381,9 @@ HEADING_STYLES = {
     "HEADING_5": 5,
     "HEADING_6": 6,
 }
+
+# Inverse: level → named style (used by push and diff_push)
+HEADING_STYLE_MAP = {v: k for k, v in HEADING_STYLES.items()}
 
 
 def _spans_from_textruns(elements: list[dict]) -> list[Span]:
@@ -793,8 +804,8 @@ def _generate_requests(
         if prev_block is not None:
             needs_spacing = False
             if isinstance(prev_block, Paragraph) and isinstance(block, Paragraph):
-                prev_text = "".join(c.text for c in prev_block.spans)
-                curr_text = "".join(c.text for c in block.spans)
+                prev_text = prev_block.text
+                curr_text = block.text
                 if not (prev_text.startswith("> ") and curr_text.startswith("> ")):
                     needs_spacing = True
             if isinstance(block, Heading) and not isinstance(prev_block, Heading):
@@ -897,20 +908,12 @@ def _generate_requests(
                 range_spec["tabId"] = tab_id
 
             if action == "heading":
-                style_map = {
-                    1: "HEADING_1",
-                    2: "HEADING_2",
-                    3: "HEADING_3",
-                    4: "HEADING_4",
-                    5: "HEADING_5",
-                    6: "HEADING_6",
-                }
                 result.append(
                     {
                         "updateParagraphStyle": {
                             "range": range_spec,
                             "paragraphStyle": {
-                                "namedStyleType": style_map.get(params, "HEADING_1")
+                                "namedStyleType": HEADING_STYLE_MAP.get(params, "HEADING_1")
                             },
                             "fields": "namedStyleType",
                         }

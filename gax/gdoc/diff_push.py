@@ -56,6 +56,7 @@ from .ir import (
     Block,
     CodeBlock,
     Heading,
+    HEADING_STYLE_MAP,
     ListItem,
     Paragraph,
     Span,
@@ -89,18 +90,12 @@ def _block_type(block: Block) -> str:
 
 def _block_text(block: Block) -> str:
     """Extract plain text from a block."""
-    if isinstance(block, Heading):
+    if isinstance(block, (Heading, Paragraph, ListItem, CodeBlock)):
         return block.text
-    elif isinstance(block, Paragraph):
-        return block.text
-    elif isinstance(block, ListItem):
-        return "".join(s.text for s in block.spans)
     elif isinstance(block, Table):
         num_rows = len(block.rows)
         num_cols = max(len(r) for r in block.rows) if block.rows else 0
         return f"[table {num_rows}x{num_cols}]"
-    elif isinstance(block, CodeBlock):
-        return block.code
     return ""
 
 
@@ -345,11 +340,8 @@ def _update_paragraph_requests(
     )
 
     # Step 2: Insert new text
-    if isinstance(new_block, Heading):
+    if isinstance(new_block, (Heading, Paragraph, ListItem)):
         new_text = new_block.text
-        spans = new_block.spans
-    elif isinstance(new_block, (Paragraph, ListItem)):
-        new_text = "".join(s.text for s in new_block.spans)
         spans = new_block.spans
     else:
         return requests
@@ -364,16 +356,8 @@ def _update_paragraph_requests(
     )
 
     # Step 3: Apply paragraph style (heading level or reset to normal)
-    style_map = {
-        1: "HEADING_1",
-        2: "HEADING_2",
-        3: "HEADING_3",
-        4: "HEADING_4",
-        5: "HEADING_5",
-        6: "HEADING_6",
-    }
     if isinstance(new_block, Heading):
-        named_style = style_map.get(new_block.level, "HEADING_1")
+        named_style = HEADING_STYLE_MAP.get(new_block.level, "HEADING_1")
     elif isinstance(base, Heading):
         # Heading → Paragraph/ListItem: reset to NORMAL_TEXT
         named_style = "NORMAL_TEXT"
@@ -396,7 +380,17 @@ def _update_paragraph_requests(
         )
 
     # Step 4: Apply inline formatting
-    offset = start
+    requests.extend(_span_style_requests(spans, start, tab_id))
+
+    return requests
+
+
+def _span_style_requests(
+    spans: list[Span], start_offset: int, tab_id: str
+) -> list[dict]:
+    """Generate updateTextStyle requests for inline formatting on spans."""
+    requests: list[dict] = []
+    offset = start_offset
     for span in spans:
         span_end = offset + _utf16_len(span.text)
         if span.bold:
@@ -456,7 +450,6 @@ def _update_paragraph_requests(
                 }
             )
         offset = span_end
-
     return requests
 
 
@@ -547,66 +540,7 @@ def _update_table_requests(
                     }
                 )
 
-            offset = cell_start
-            for span in edit_spans:
-                span_end = offset + _utf16_len(span.text)
-                if span.bold:
-                    requests.append(
-                        {
-                            "updateTextStyle": {
-                                "range": {
-                                    "startIndex": offset,
-                                    "endIndex": span_end,
-                                    "tabId": tab_id,
-                                },
-                                "textStyle": {"bold": True},
-                                "fields": "bold",
-                            }
-                        }
-                    )
-                if span.italic:
-                    requests.append(
-                        {
-                            "updateTextStyle": {
-                                "range": {
-                                    "startIndex": offset,
-                                    "endIndex": span_end,
-                                    "tabId": tab_id,
-                                },
-                                "textStyle": {"italic": True},
-                                "fields": "italic",
-                            }
-                        }
-                    )
-                if span.strikethrough:
-                    requests.append(
-                        {
-                            "updateTextStyle": {
-                                "range": {
-                                    "startIndex": offset,
-                                    "endIndex": span_end,
-                                    "tabId": tab_id,
-                                },
-                                "textStyle": {"strikethrough": True},
-                                "fields": "strikethrough",
-                            }
-                        }
-                    )
-                if span.url:
-                    requests.append(
-                        {
-                            "updateTextStyle": {
-                                "range": {
-                                    "startIndex": offset,
-                                    "endIndex": span_end,
-                                    "tabId": tab_id,
-                                },
-                                "textStyle": {"link": {"url": span.url}},
-                                "fields": "link",
-                            }
-                        }
-                    )
-                offset = span_end
+            requests.extend(_span_style_requests(edit_spans, cell_start, tab_id))
 
     return requests
 
@@ -619,11 +553,8 @@ def _insert_block_requests(
     """Generate requests to insert a new block at a given index."""
     requests: list[dict] = []
 
-    if isinstance(block, Heading):
+    if isinstance(block, (Heading, Paragraph, ListItem)):
         text = block.text + "\n"
-        spans = block.spans
-    elif isinstance(block, (Paragraph, ListItem)):
-        text = "".join(s.text for s in block.spans) + "\n"
         spans = block.spans
     elif isinstance(block, CodeBlock):
         prefixed = "\n".join(f"> {line}" for line in block.code.split("\n"))
@@ -642,14 +573,6 @@ def _insert_block_requests(
     )
 
     if isinstance(block, Heading):
-        style_map = {
-            1: "HEADING_1",
-            2: "HEADING_2",
-            3: "HEADING_3",
-            4: "HEADING_4",
-            5: "HEADING_5",
-            6: "HEADING_6",
-        }
         requests.append(
             {
                 "updateParagraphStyle": {
@@ -659,7 +582,7 @@ def _insert_block_requests(
                         "tabId": tab_id,
                     },
                     "paragraphStyle": {
-                        "namedStyleType": style_map.get(block.level, "HEADING_1")
+                        "namedStyleType": HEADING_STYLE_MAP.get(block.level, "HEADING_1")
                     },
                     "fields": "namedStyleType",
                 }
@@ -684,68 +607,42 @@ def _insert_block_requests(
             }
         )
 
-    offset = insert_idx
-    for span in spans:
-        span_end = offset + _utf16_len(span.text)
-        if span.bold:
-            requests.append(
-                {
-                    "updateTextStyle": {
-                        "range": {
-                            "startIndex": offset,
-                            "endIndex": span_end,
-                            "tabId": tab_id,
-                        },
-                        "textStyle": {"bold": True},
-                        "fields": "bold",
-                    }
-                }
-            )
-        if span.italic:
-            requests.append(
-                {
-                    "updateTextStyle": {
-                        "range": {
-                            "startIndex": offset,
-                            "endIndex": span_end,
-                            "tabId": tab_id,
-                        },
-                        "textStyle": {"italic": True},
-                        "fields": "italic",
-                    }
-                }
-            )
-        if span.strikethrough:
-            requests.append(
-                {
-                    "updateTextStyle": {
-                        "range": {
-                            "startIndex": offset,
-                            "endIndex": span_end,
-                            "tabId": tab_id,
-                        },
-                        "textStyle": {"strikethrough": True},
-                        "fields": "strikethrough",
-                    }
-                }
-            )
-        if span.url:
-            requests.append(
-                {
-                    "updateTextStyle": {
-                        "range": {
-                            "startIndex": offset,
-                            "endIndex": span_end,
-                            "tabId": tab_id,
-                        },
-                        "textStyle": {"link": {"url": span.url}},
-                        "fields": "link",
-                    }
-                }
-            )
-        offset = span_end
+    requests.extend(_span_style_requests(spans, insert_idx, tab_id))
 
     return requests
+
+
+# =============================================================================
+# Helpers: doc fetch + tab lookup
+# =============================================================================
+
+
+def _fetch_tab(document_id: str, tab_name: str, *, docs_service=None):
+    """Fetch doc JSON and locate a tab by name.
+
+    Returns (doc, tab_id, tab_body). Raises ValueError if tab not found.
+    """
+    from googleapiclient.discovery import build
+    from ..auth import get_authenticated_credentials
+
+    if docs_service is None:
+        creds = get_authenticated_credentials()
+        docs_service = build("docs", "v1", credentials=creds)
+
+    doc = (
+        docs_service.documents()
+        .get(documentId=document_id, includeTabsContent=True)
+        .execute()
+    )
+
+    for tab in doc.get("tabs", []):
+        props = tab.get("tabProperties", {})
+        if props.get("title") == tab_name:
+            tab_id = props.get("tabId")
+            tab_body = tab.get("documentTab", {}).get("body", {}).get("content", [])
+            return doc, tab_id, tab_body, docs_service
+
+    raise ValueError(f"Tab not found: {tab_name}")
 
 
 # =============================================================================
@@ -761,7 +658,6 @@ class DiffPreview:
     summary_lines: list[str]
     warnings: list[str]
     docs_service: object = field(default=None, repr=False)
-    drive_service: object = field(default=None, repr=False)
 
 
 def _op_summary(op: EditOp) -> str:
@@ -790,43 +686,22 @@ def preview_diff(
     edited_markdown: str,
     *,
     docs_service=None,
-    drive_service=None,
 ) -> DiffPreview:
     """Compute the diff without applying it. Returns a preview for the user."""
-    from googleapiclient.discovery import build
-    from ..auth import get_authenticated_credentials
-
-    if docs_service is None:
-        creds = get_authenticated_credentials()
-        docs_service = build("docs", "v1", credentials=creds)
-
     warnings: list[str] = []
 
-    # Single API call: get doc JSON with tab content
-    doc = (
-        docs_service.documents()
-        .get(documentId=document_id, includeTabsContent=True)
-        .execute()
-    )
-
-    tab_id = None
-    tab_body = None
-    for tab in doc.get("tabs", []):
-        props = tab.get("tabProperties", {})
-        if props.get("title") == tab_name:
-            tab_id = props.get("tabId")
-            tab_body = tab.get("documentTab", {}).get("body", {}).get("content", [])
-            break
-
-    if not tab_id or tab_body is None:
+    try:
+        doc, tab_id, tab_body, docs_service = _fetch_tab(
+            document_id, tab_name, docs_service=docs_service
+        )
+    except ValueError as e:
         return DiffPreview(
             ops=[],
             summary_lines=[],
-            warnings=[f"Tab not found: {tab_name}"],
+            warnings=[str(e)],
             docs_service=docs_service,
         )
 
-    # Build remote blocks (with doc_range) and local blocks
     remote_blocks = from_doc_json(tab_body, lists=doc.get("lists"))
     local_blocks = from_markdown(edited_markdown)
 
@@ -881,42 +756,18 @@ def diff_push(
     edited_markdown: str,
     *,
     docs_service=None,
-    drive_service=None,
 ) -> list[str]:
     """Push local markdown changes using diff-based mutations.
 
     Single API call to read remote state, diff against local, apply mutations.
     No Drive API export or fuzzy alignment needed.
     """
-    from googleapiclient.discovery import build
-    from ..auth import get_authenticated_credentials
-
-    if docs_service is None:
-        creds = get_authenticated_credentials()
-        docs_service = build("docs", "v1", credentials=creds)
-
     warnings: list[str] = []
 
-    # Step 1: Read doc JSON (single API call)
-    doc = (
-        docs_service.documents()
-        .get(documentId=document_id, includeTabsContent=True)
-        .execute()
+    doc, tab_id, tab_body, docs_service = _fetch_tab(
+        document_id, tab_name, docs_service=docs_service
     )
 
-    tab_id = None
-    tab_body = None
-    for tab in doc.get("tabs", []):
-        props = tab.get("tabProperties", {})
-        if props.get("title") == tab_name:
-            tab_id = props.get("tabId")
-            tab_body = tab.get("documentTab", {}).get("body", {}).get("content", [])
-            break
-
-    if not tab_id or not tab_body:
-        raise ValueError(f"Tab not found: {tab_name}")
-
-    # Step 2: Build remote blocks (with doc_range) and local blocks
     remote_blocks = from_doc_json(tab_body, lists=doc.get("lists"))
     local_blocks = from_markdown(edited_markdown)
 
