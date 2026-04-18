@@ -731,52 +731,132 @@ def _create_nested_tabs(doc_id: str) -> dict:
     tab_ids = {}
 
     # Create Overview tab
-    resp = service.documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": [{"addDocumentTab": {"tabProperties": {"title": "Overview"}}}]},
-    ).execute()
+    resp = (
+        service.documents()
+        .batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {"addDocumentTab": {"tabProperties": {"title": "Overview"}}}
+                ]
+            },
+        )
+        .execute()
+    )
     tab_ids["Overview"] = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
 
     # Insert content into Overview
     service.documents().batchUpdate(
         documentId=doc_id,
-        body={"requests": [{"insertText": {"text": "Project goals.\n", "location": {"index": 1, "tabId": tab_ids["Overview"]}}}]},
+        body={
+            "requests": [
+                {
+                    "insertText": {
+                        "text": "Project goals.\n",
+                        "location": {"index": 1, "tabId": tab_ids["Overview"]},
+                    }
+                }
+            ]
+        },
     ).execute()
 
     # Create Design tab
-    resp = service.documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": [{"addDocumentTab": {"tabProperties": {"title": "Design"}}}]},
-    ).execute()
+    resp = (
+        service.documents()
+        .batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [{"addDocumentTab": {"tabProperties": {"title": "Design"}}}]
+            },
+        )
+        .execute()
+    )
     tab_ids["Design"] = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
 
     service.documents().batchUpdate(
         documentId=doc_id,
-        body={"requests": [{"insertText": {"text": "Design intro.\n", "location": {"index": 1, "tabId": tab_ids["Design"]}}}]},
+        body={
+            "requests": [
+                {
+                    "insertText": {
+                        "text": "Design intro.\n",
+                        "location": {"index": 1, "tabId": tab_ids["Design"]},
+                    }
+                }
+            ]
+        },
     ).execute()
 
     # Create Frontend as child of Design
-    resp = service.documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": [{"addDocumentTab": {"tabProperties": {"title": "Frontend", "parentTabId": tab_ids["Design"]}}}]},
-    ).execute()
+    resp = (
+        service.documents()
+        .batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "addDocumentTab": {
+                            "tabProperties": {
+                                "title": "Frontend",
+                                "parentTabId": tab_ids["Design"],
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+        .execute()
+    )
     tab_ids["Frontend"] = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
 
     service.documents().batchUpdate(
         documentId=doc_id,
-        body={"requests": [{"insertText": {"text": "React components.\n", "location": {"index": 1, "tabId": tab_ids["Frontend"]}}}]},
+        body={
+            "requests": [
+                {
+                    "insertText": {
+                        "text": "React components.\n",
+                        "location": {"index": 1, "tabId": tab_ids["Frontend"]},
+                    }
+                }
+            ]
+        },
     ).execute()
 
     # Create Backend as child of Design
-    resp = service.documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": [{"addDocumentTab": {"tabProperties": {"title": "Backend", "parentTabId": tab_ids["Design"]}}}]},
-    ).execute()
+    resp = (
+        service.documents()
+        .batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "addDocumentTab": {
+                            "tabProperties": {
+                                "title": "Backend",
+                                "parentTabId": tab_ids["Design"],
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+        .execute()
+    )
     tab_ids["Backend"] = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
 
     service.documents().batchUpdate(
         documentId=doc_id,
-        body={"requests": [{"insertText": {"text": "Python services.\n", "location": {"index": 1, "tabId": tab_ids["Backend"]}}}]},
+        body={
+            "requests": [
+                {
+                    "insertText": {
+                        "text": "Python services.\n",
+                        "location": {"index": 1, "tabId": tab_ids["Backend"]},
+                    }
+                }
+            ]
+        },
     ).execute()
 
     return tab_ids
@@ -885,10 +965,14 @@ class TestDraftE2E:
         try:
             # Create new draft file
             result = _run_gax(
-                "draft", "new",
-                "--to", "test@example.com",
-                "--subject", E2E_DRAFT_SUBJECT,
-                "-o", str(draft_file),
+                "draft",
+                "new",
+                "--to",
+                "test@example.com",
+                "--subject",
+                E2E_DRAFT_SUBJECT,
+                "-o",
+                str(draft_file),
             )
             assert result.returncode == 0, f"New failed: {result.stderr}"
             assert draft_file.exists()
@@ -918,6 +1002,146 @@ class TestDraftE2E:
             # Push with no changes should report no changes
             result = _run_gax("push", str(draft_file))
             assert "no changes" in result.stdout.lower() or result.returncode == 0
+
+        finally:
+            _cleanup_test_drafts()
+
+    def test_list(self, check_auth, temp_dir):
+        """Test: create draft -> list -> verify it appears in output."""
+        _cleanup_test_drafts()
+
+        draft_file = temp_dir / "list.draft.gax.md"
+
+        try:
+            # Create and push a draft so there's at least one
+            result = _run_gax(
+                "draft",
+                "new",
+                "--to",
+                "test@example.com",
+                "--subject",
+                f"{E2E_DRAFT_SUBJECT}-list",
+                "-o",
+                str(draft_file),
+            )
+            assert result.returncode == 0, f"New failed: {result.stderr}"
+
+            result = _run_gax("push", str(draft_file), "-y")
+            assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+            # List drafts
+            result = _run_gax("draft", "list", "--limit", "50")
+            assert result.returncode == 0, f"List failed: {result.stderr}"
+
+            # Should have TSV header
+            assert "draft_id\t" in result.stdout
+            assert "subject" in result.stdout
+
+            # Our test draft should appear
+            assert E2E_DRAFT_SUBJECT in result.stdout
+
+        finally:
+            _cleanup_test_drafts()
+
+    def test_clone(self, check_auth, temp_dir):
+        """Test: create draft -> push -> clone by ID -> verify content matches."""
+        _cleanup_test_drafts()
+
+        draft_file = temp_dir / "original.draft.gax.md"
+
+        try:
+            # Create and push a draft
+            result = _run_gax(
+                "draft",
+                "new",
+                "--to",
+                "test@example.com",
+                "--subject",
+                f"{E2E_DRAFT_SUBJECT}-clone",
+                "-o",
+                str(draft_file),
+            )
+            assert result.returncode == 0, f"New failed: {result.stderr}"
+
+            # Add body content before pushing
+            content = draft_file.read_text()
+            draft_file.write_text(content.rstrip() + "\nClone test body.\n")
+
+            result = _run_gax("push", str(draft_file), "-y")
+            assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+            # Extract draft_id from file
+            import re
+
+            content = draft_file.read_text()
+            match = re.search(r"^draft_id:\s*(\S+)", content, re.MULTILINE)
+            assert match, "draft_id not found after push"
+            draft_id = match.group(1)
+
+            # Clone by ID into a new file
+            clone_file = temp_dir / "cloned.draft.gax.md"
+            result = _run_gax(
+                "draft",
+                "clone",
+                draft_id,
+                "-o",
+                str(clone_file),
+            )
+            assert result.returncode == 0, f"Clone failed: {result.stderr}"
+            assert clone_file.exists()
+
+            # Verify cloned content
+            cloned = clone_file.read_text()
+            assert f"{E2E_DRAFT_SUBJECT}-clone" in cloned
+            assert "Clone test body." in cloned
+            assert draft_id in cloned
+
+        finally:
+            _cleanup_test_drafts()
+
+    def test_diff_shows_changes(self, check_auth, temp_dir):
+        """Test: push draft -> modify locally -> diff shows changes."""
+        _cleanup_test_drafts()
+
+        draft_file = temp_dir / "diff.draft.gax.md"
+
+        try:
+            # Create and push
+            result = _run_gax(
+                "draft",
+                "new",
+                "--to",
+                "test@example.com",
+                "--subject",
+                f"{E2E_DRAFT_SUBJECT}-diff",
+                "-o",
+                str(draft_file),
+            )
+            assert result.returncode == 0, f"New failed: {result.stderr}"
+
+            result = _run_gax("push", str(draft_file), "-y")
+            assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+            # Modify body locally
+            content = draft_file.read_text()
+            draft_file.write_text(content.rstrip() + "\nDiff test line.\n")
+
+            # Push without -y: output should show the diff
+            # (will auto-decline since no TTY, but we check stdout)
+            result = _run_gax("draft", "push", str(draft_file))
+            # Should show changes (diff output) or prompt
+            assert "Diff test line" in result.stdout or result.returncode == 0
+
+            # Use generic push with -y to confirm it works
+            result = _run_gax("push", str(draft_file), "-y")
+            assert result.returncode == 0, f"Push with changes failed: {result.stderr}"
+
+            # Now push again — no changes
+            result = _run_gax("push", str(draft_file))
+            assert (
+                "no changes" in result.stdout.lower()
+                or "no diff" in result.stdout.lower()
+            )
 
         finally:
             _cleanup_test_drafts()
@@ -998,9 +1222,12 @@ class TestContactsE2E:
         try:
             # Clone contacts as JSONL
             result = _run_gax(
-                "contacts", "clone",
-                "-f", "jsonl",
-                "-o", str(contacts_file),
+                "contacts",
+                "clone",
+                "-f",
+                "jsonl",
+                "-o",
+                str(contacts_file),
             )
             assert result.returncode == 0, f"Clone failed: {result.stderr}"
             assert contacts_file.exists()
@@ -1012,6 +1239,7 @@ class TestContactsE2E:
 
             # Count original contacts
             from gax.contacts import parse_contacts_file, parse_jsonl_body
+
             header, body = parse_contacts_file(contacts_file)
             original_contacts = parse_jsonl_body(body)
             original_count = len(original_contacts)
@@ -1038,6 +1266,7 @@ class TestContactsE2E:
 
             # Write back with new contact
             from gax.contacts import format_jsonl, format_contacts_file, ContactsHeader
+
             new_body = format_jsonl(original_contacts)
             new_header = ContactsHeader(
                 format="jsonl",
@@ -1070,7 +1299,9 @@ class TestContactsE2E:
             header, body = parse_contacts_file(contacts_file)
             pulled_contacts = parse_jsonl_body(body)
             filtered = [c for c in pulled_contacts if c.get("givenName") != test_given]
-            assert len(filtered) == original_count, "Test contact not found in pulled data"
+            assert len(filtered) == original_count, (
+                "Test contact not found in pulled data"
+            )
 
             # Write back without the test contact
             new_body = format_jsonl(filtered)
@@ -1112,7 +1343,8 @@ def _find_test_labels() -> list[dict]:
     service = build("gmail", "v1", credentials=creds)
     result = service.users().labels().list(userId="me").execute()
     return [
-        lbl for lbl in result.get("labels", [])
+        lbl
+        for lbl in result.get("labels", [])
         if lbl.get("name", "").startswith(E2E_LABEL_PREFIX)
     ]
 
@@ -1143,14 +1375,17 @@ class TestLabelE2E:
         try:
             # Clone labels
             result = _run_gax(
-                "mail-label", "clone",
-                "-o", str(labels_file),
+                "mail-label",
+                "clone",
+                "-o",
+                str(labels_file),
             )
             assert result.returncode == 0, f"Clone failed: {result.stderr}"
             assert labels_file.exists()
 
             # Read and parse
             from gax.label import parse_labels_file, format_labels_file
+
             header, labels = parse_labels_file(labels_file)
             original_count = len(labels)
 
@@ -1165,7 +1400,9 @@ class TestLabelE2E:
 
             # Verify label was created
             test_labels = _find_test_labels()
-            assert len(test_labels) == 1, f"Expected 1 test label, found {len(test_labels)}"
+            assert len(test_labels) == 1, (
+                f"Expected 1 test label, found {len(test_labels)}"
+            )
             assert test_labels[0]["name"] == test_label_name
 
             # Pull — should include the new label
@@ -1178,7 +1415,9 @@ class TestLabelE2E:
             # Remove the test label from file
             header, labels = parse_labels_file(labels_file)
             filtered = [lbl for lbl in labels if lbl.get("name") != test_label_name]
-            assert len(filtered) == original_count, "Test label not found in pulled data"
+            assert len(filtered) == original_count, (
+                "Test label not found in pulled data"
+            )
 
             content = format_labels_file(header, filtered)
             labels_file.write_text(content, encoding="utf-8")

@@ -20,7 +20,9 @@ from gax.contacts import (
 
 SAMPLE_API_CONTACT = {
     "resourceName": "people/c123",
-    "names": [{"displayName": "Alice Smith", "givenName": "Alice", "familyName": "Smith"}],
+    "names": [
+        {"displayName": "Alice Smith", "givenName": "Alice", "familyName": "Smith"}
+    ],
     "emailAddresses": [{"value": "alice@example.com"}, {"value": "alice@work.com"}],
     "phoneNumbers": [{"value": "+1-555-0100"}],
     "organizations": [{"name": "Acme Corp", "title": "Engineer", "department": "R&D"}],
@@ -70,7 +72,8 @@ class TestApiRoundTrip:
 
         # Lists
         assert [e["value"] for e in rebuilt["emailAddresses"]] == [
-            "alice@example.com", "alice@work.com"
+            "alice@example.com",
+            "alice@work.com",
         ]
         assert [p["value"] for p in rebuilt["phoneNumbers"]] == ["+1-555-0100"]
 
@@ -86,9 +89,12 @@ class TestApiRoundTrip:
         assert rebuilt["urls"][0]["value"] == "https://alice.dev"
 
         # Labels
-        assert rebuilt["memberships"][0]["contactGroupMembership"][
-            "contactGroupResourceName"
-        ] == "contactGroups/abc"
+        assert (
+            rebuilt["memberships"][0]["contactGroupMembership"][
+                "contactGroupResourceName"
+            ]
+            == "contactGroups/abc"
+        )
 
     def test_empty_contact_round_trip(self):
         """Empty API contact should round-trip without errors."""
@@ -113,7 +119,6 @@ class TestApiRoundTrip:
 
 
 class TestContactDiff:
-
     def test_no_diff_identical(self):
         c = {"name": "Alice", "email": ["a@b.com"], "phone": [], "labels": []}
         assert contact_diff(c, c) == {}
@@ -128,7 +133,12 @@ class TestContactDiff:
 
     def test_diff_list_order_independent(self):
         local = {"name": "", "email": ["b@x.com", "a@x.com"], "phone": [], "labels": []}
-        remote = {"name": "", "email": ["a@x.com", "b@x.com"], "phone": [], "labels": []}
+        remote = {
+            "name": "",
+            "email": ["a@x.com", "b@x.com"],
+            "phone": [],
+            "labels": [],
+        }
         assert contact_diff(local, remote) == {}
 
     def test_compare_creates_updates_deletes(self):
@@ -155,7 +165,6 @@ class TestContactDiff:
 
 
 class TestFileFormat:
-
     def test_jsonl_round_trip(self):
         contacts = [
             {"name": "Alice", "email": ["a@b.com"]},

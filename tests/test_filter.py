@@ -174,14 +174,17 @@ class TestActionRoundTrip:
 
 
 class TestComputeChanges:
-
     def test_no_changes(self):
-        desired = [{"name": "f1", "criteria": {"from": "a@b.com"}, "action": {"archive": True}}]
-        current = [{
-            "id": "id1",
-            "criteria": {"from": "a@b.com"},
-            "action": {"removeLabelIds": ["INBOX"]},
-        }]
+        desired = [
+            {"name": "f1", "criteria": {"from": "a@b.com"}, "action": {"archive": True}}
+        ]
+        current = [
+            {
+                "id": "id1",
+                "criteria": {"from": "a@b.com"},
+                "action": {"removeLabelIds": ["INBOX"]},
+            }
+        ]
         changes = compute_changes(desired, current, {})
         assert changes["create"] == []
         assert changes["update"] == []
@@ -202,23 +205,35 @@ class TestComputeChanges:
         assert changes["delete"][0]["id"] == "id1"
 
     def test_update_changed_action(self):
-        desired = [{"name": "f1", "criteria": {"from": "a@b.com"}, "action": {"star": True}}]
-        current = [{
-            "id": "id1",
-            "criteria": {"from": "a@b.com"},
-            "action": {"removeLabelIds": ["INBOX"]},
-        }]
+        desired = [
+            {"name": "f1", "criteria": {"from": "a@b.com"}, "action": {"star": True}}
+        ]
+        current = [
+            {
+                "id": "id1",
+                "criteria": {"from": "a@b.com"},
+                "action": {"removeLabelIds": ["INBOX"]},
+            }
+        ]
         changes = compute_changes(desired, current, {})
         assert len(changes["update"]) == 1
         assert changes["update"][0]["id"] == "id1"
 
     def test_mixed_changes(self):
         desired = [
-            {"name": "keep", "criteria": {"from": "keep@x.com"}, "action": {"archive": True}},
+            {
+                "name": "keep",
+                "criteria": {"from": "keep@x.com"},
+                "action": {"archive": True},
+            },
             {"name": "new", "criteria": {"from": "new@x.com"}, "action": {}},
         ]
         current = [
-            {"id": "id1", "criteria": {"from": "keep@x.com"}, "action": {"removeLabelIds": ["INBOX"]}},
+            {
+                "id": "id1",
+                "criteria": {"from": "keep@x.com"},
+                "action": {"removeLabelIds": ["INBOX"]},
+            },
             {"id": "id2", "criteria": {"from": "delete@x.com"}, "action": {}},
         ]
         changes = compute_changes(desired, current, {})
@@ -228,7 +243,6 @@ class TestComputeChanges:
 
 
 class TestFormatDiffSummary:
-
     def test_empty_changes(self):
         changes = {"create": [], "update": [], "delete": []}
         assert format_diff_summary(changes) == ""
@@ -270,7 +284,6 @@ class TestFormatDiffSummary:
 
 
 class TestHelpers:
-
     def test_criteria_hash_deterministic(self):
         c = {"from": "a@b.com", "subject": "test"}
         assert criteria_hash(c) == criteria_hash(c)
@@ -307,11 +320,14 @@ class TestHelpers:
 
 
 class TestFileFormat:
-
     def test_header_round_trip(self, tmp_path):
         header = FilterHeader(pulled="2026-01-01T00:00:00Z")
         filters = [
-            {"name": "from:alice@x.com", "criteria": {"from": "alice@x.com"}, "action": {"archive": True}},
+            {
+                "name": "from:alice@x.com",
+                "criteria": {"from": "alice@x.com"},
+                "action": {"archive": True},
+            },
         ]
         content = format_filters_file(header, filters)
 

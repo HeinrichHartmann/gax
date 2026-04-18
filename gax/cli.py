@@ -145,7 +145,9 @@ def _detect_file_type(file_path: Path) -> str | None:
     return None
 
 
-def _pull_folder(folder_path: Path, verbose: bool = False, yes: bool = False) -> tuple[bool, str]:
+def _pull_folder(
+    folder_path: Path, verbose: bool = False, yes: bool = False
+) -> tuple[bool, str]:
     """Pull a .gax.d folder. Returns (success, message).
 
     Performs a checkout to a scratch directory, shows diff, and asks for confirmation.
@@ -264,12 +266,14 @@ def _pull_folder(folder_path: Path, verbose: bool = False, yes: bool = False) ->
             for section, fpath in zip(sections, tab_paths):
                 if section.section_type == "comments":
                     continue
-                tab_tree.append({
-                    "id": section.tab_id,
-                    "title": section.section_title,
-                    "path": str(fpath.relative_to(scratch_path)),
-                    "depth": section.tab_depth,
-                })
+                tab_tree.append(
+                    {
+                        "id": section.tab_id,
+                        "title": section.section_title,
+                        "path": str(fpath.relative_to(scratch_path)),
+                        "depth": section.tab_depth,
+                    }
+                )
 
             new_metadata = {
                 "type": "gax/doc-checkout",
@@ -1308,7 +1312,9 @@ def man(ctx, md: bool):
         click.echo(_format_man_plain(sections))
 
 
-def _format_man_plain(sections: list[tuple[str, dict[str, tuple[str | None, list]]]]) -> str:
+def _format_man_plain(
+    sections: list[tuple[str, dict[str, tuple[str | None, list]]]],
+) -> str:
     """Format manual as plain text."""
     lines = ["GAX(1)", "", "NAME", "    gax - Google Access CLI", ""]
     lines.append("COMMANDS")
@@ -1333,14 +1339,16 @@ def _format_man_plain(sections: list[tuple[str, dict[str, tuple[str | None, list
     return "\n".join(lines)
 
 
-def _format_man_md(sections: list[tuple[str, dict[str, tuple[str | None, list]]]]) -> str:
+def _format_man_md(
+    sections: list[tuple[str, dict[str, tuple[str | None, list]]]],
+) -> str:
     """Format manual as Markdown (suitable for pandoc conversion to man page)."""
     lines = [
         "---",
-        'title: GAX',
-        'section: 1',
-        'header: User Manual',
-        'footer: gax',
+        "title: GAX",
+        "section: 1",
+        "header: User Manual",
+        "footer: gax",
         "---",
         "",
         "# NAME",
@@ -1532,7 +1540,8 @@ def sheet():
     help="Output format: md, csv, tsv, psv, json, jsonl",
 )
 @click.option(
-    "-q", "--quiet",
+    "-q",
+    "--quiet",
     is_flag=True,
     help="Suppress multi-tab status message",
 )
@@ -1557,6 +1566,7 @@ def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
         data = formatter.write(df)
 
         from .formats import get_content_type
+
         section = Section(
             headers={
                 "type": "gax/sheet",
@@ -2180,13 +2190,16 @@ def contacts():
 
 @contacts.command("clone")
 @click.option(
-    "-f", "--format", "fmt",
+    "-f",
+    "--format",
+    "fmt",
     type=click.Choice(["md", "jsonl"]),
     default="md",
     help="Output format: md (view-only) or jsonl (editable)",
 )
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(path_type=Path),
     help="Output file (default: contacts.<format>)",
 )
@@ -2284,7 +2297,8 @@ def label_list():
 
 @mail_label.command("clone")
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(path_type=Path),
     help="Output file (default: mail-labels.gax.md)",
 )
@@ -2322,8 +2336,13 @@ def label_pull(file, include_all):
 
 @mail_label.command("plan")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option("-o", "--output", type=click.Path(path_type=Path),
-              default="labels.plan.yaml", help="Output plan file")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default="labels.plan.yaml",
+    help="Output plan file",
+)
 @click.option("--delete", "allow_delete", is_flag=True, help="Include deletions")
 def label_plan(file, output, allow_delete):
     """Preview label changes (diff)."""
@@ -2396,7 +2415,8 @@ def filter_list():
 
 @mail_filter.command("clone")
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(path_type=Path),
     help="Output file (default: mail-filters.gax.md)",
 )
@@ -2881,10 +2901,11 @@ def _fetch_commits_since(sha: str, verbose: bool) -> list[str] | None:
     try:
         result = subprocess.run(
             [
-                "gh", "api",
+                "gh",
+                "api",
                 f"repos/{REPO}/commits?sha=main&per_page=100",
                 "--jq",
-                ".[] | .sha + \" \" + (.commit.message | split(\"\\n\")[0])",
+                '.[] | .sha + " " + (.commit.message | split("\\n")[0])',
             ],
             capture_output=True,
             text=True,

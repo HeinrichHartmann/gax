@@ -104,11 +104,13 @@ def format_filters_file(header: FilterHeader, filters: list[dict]) -> str:
 
     parts = [
         "---\n",
-        yaml.dump(file_header, default_flow_style=False,
-                  allow_unicode=True, sort_keys=False),
+        yaml.dump(
+            file_header, default_flow_style=False, allow_unicode=True, sort_keys=False
+        ),
         "---\n",
-        yaml.dump(filters, default_flow_style=False,
-                  allow_unicode=True, sort_keys=False),
+        yaml.dump(
+            filters, default_flow_style=False, allow_unicode=True, sort_keys=False
+        ),
     ]
     return "".join(parts)
 
@@ -118,8 +120,15 @@ def format_filters_file(header: FilterHeader, filters: list[dict]) -> str:
 # =============================================================================
 
 CRITERIA_KEYS = [
-    "from", "to", "subject", "query", "negatedQuery",
-    "hasAttachment", "excludeChats", "size", "sizeComparison",
+    "from",
+    "to",
+    "subject",
+    "query",
+    "negatedQuery",
+    "hasAttachment",
+    "excludeChats",
+    "size",
+    "sizeComparison",
 ]
 
 
@@ -148,6 +157,7 @@ def fetch_label_maps(*, service=None) -> tuple[dict, dict]:
 
 # --- Criteria: inverse pair ---
 
+
 def api_to_criteria(api_criteria: dict) -> dict:
     """Convert Gmail API criteria to local format."""
     return {k: api_criteria[k] for k in CRITERIA_KEYS if k in api_criteria}
@@ -159,6 +169,7 @@ def criteria_to_api(local_criteria: dict) -> dict:
 
 
 # --- Action: inverse pair ---
+
 
 def api_to_action(api_action: dict, label_id_to_name: dict) -> dict:
     """Convert Gmail API action to local format."""
@@ -199,8 +210,7 @@ def api_to_action(api_action: dict, label_id_to_name: dict) -> dict:
     return result
 
 
-def action_to_api(local_action: dict, label_name_to_id: dict,
-                  service=None) -> dict:
+def action_to_api(local_action: dict, label_name_to_id: dict, service=None) -> dict:
     """Convert local action to Gmail API format.
 
     If a referenced label doesn't exist and service is provided,
@@ -213,9 +223,7 @@ def action_to_api(local_action: dict, label_name_to_id: dict,
         if isinstance(labels, str):
             labels = [labels]
         for label_name in labels:
-            label_id = get_or_create_label(
-                service, label_name, label_name_to_id
-            )
+            label_id = get_or_create_label(service, label_name, label_name_to_id)
             result["addLabelIds"].append(label_id)
 
     if local_action.get("removeLabel"):
@@ -255,8 +263,7 @@ def action_to_api(local_action: dict, label_name_to_id: dict,
     return result
 
 
-def get_or_create_label(service, label_name: str,
-                        label_name_to_id: dict) -> str:
+def get_or_create_label(service, label_name: str, label_name_to_id: dict) -> str:
     """Get label ID, creating the label if it doesn't exist."""
     if label_name in label_name_to_id:
         return label_name_to_id[label_name]
@@ -268,19 +275,29 @@ def get_or_create_label(service, label_name: str,
     if "/" in label_name:
         parts = label_name.split("/")
         for i in range(len(parts) - 1):
-            parent = "/".join(parts[:i + 1])
+            parent = "/".join(parts[: i + 1])
             if parent not in label_name_to_id:
-                result = service.users().labels().create(
-                    userId="me",
-                    body={"name": parent, "labelListVisibility": "labelShow"},
-                ).execute()
+                result = (
+                    service.users()
+                    .labels()
+                    .create(
+                        userId="me",
+                        body={"name": parent, "labelListVisibility": "labelShow"},
+                    )
+                    .execute()
+                )
                 label_name_to_id[parent] = result["id"]
                 logger.info(f"Created label: {parent}")
 
-    result = service.users().labels().create(
-        userId="me",
-        body={"name": label_name, "labelListVisibility": "labelShow"},
-    ).execute()
+    result = (
+        service.users()
+        .labels()
+        .create(
+            userId="me",
+            body={"name": label_name, "labelListVisibility": "labelShow"},
+        )
+        .execute()
+    )
     label_name_to_id[label_name] = result["id"]
     logger.info(f"Created label: {label_name}")
     return result["id"]
@@ -343,11 +360,13 @@ def compute_changes(
 
     for h, desired in desired_by_hash.items():
         if h not in current_by_hash:
-            creates.append({
-                "name": desired.get("name", ""),
-                "criteria": desired.get("criteria", {}),
-                "action": desired.get("action", {}),
-            })
+            creates.append(
+                {
+                    "name": desired.get("name", ""),
+                    "criteria": desired.get("criteria", {}),
+                    "action": desired.get("action", {}),
+                }
+            )
         else:
             current = current_by_hash[h]
             current_action = api_to_action(
@@ -355,19 +374,23 @@ def compute_changes(
             )
             desired_action = desired.get("action", {})
             if current_action != desired_action:
-                updates.append({
-                    "id": current["id"],
-                    "name": desired.get("name", ""),
-                    "criteria": desired.get("criteria", {}),
-                    "action": desired_action,
-                })
+                updates.append(
+                    {
+                        "id": current["id"],
+                        "name": desired.get("name", ""),
+                        "criteria": desired.get("criteria", {}),
+                        "action": desired_action,
+                    }
+                )
 
     for h, current in current_by_hash.items():
         if h not in desired_by_hash:
-            deletes.append({
-                "id": current["id"],
-                "criteria": current["criteria"],
-            })
+            deletes.append(
+                {
+                    "id": current["id"],
+                    "criteria": current["criteria"],
+                }
+            )
 
     return {"create": creates, "update": updates, "delete": deletes}
 
@@ -517,9 +540,7 @@ class Filter(Resource):
 
         # 1. Delete (including updates -- delete first, recreate later)
         for item in deletes + updates:
-            name = item.get("name") or generate_filter_name(
-                item.get("criteria", {})
-            )
+            name = item.get("name") or generate_filter_name(item.get("criteria", {}))
             logger.info(f"Deleting: {name}")
             service.users().settings().filters().delete(
                 userId="me", id=item["id"]
@@ -527,16 +548,12 @@ class Filter(Resource):
 
         # 2. Create (including recreate for updates)
         for item in creates + updates:
-            name = item.get("name") or generate_filter_name(
-                item.get("criteria", {})
-            )
+            name = item.get("name") or generate_filter_name(item.get("criteria", {}))
             action_type = "Creating" if item in creates else "Recreating"
             logger.info(f"{action_type}: {name}")
             body = {
                 "criteria": criteria_to_api(item.get("criteria", {})),
-                "action": action_to_api(
-                    item.get("action", {}), name_to_id, service
-                ),
+                "action": action_to_api(item.get("action", {}), name_to_id, service),
             }
             service.users().settings().filters().create(
                 userId="me", body=body
