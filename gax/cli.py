@@ -41,7 +41,7 @@ from .gdoc import doc
 from .mail import thread as mail_group, mailbox
 from .label import Label
 from .filter import Filter
-from .gcal import cal_cli
+from .gcal import Cal
 from .form import form
 from .draft import Draft
 from .contacts import Contacts
@@ -559,42 +559,22 @@ def _push_file(
                 return False, str(e)
 
         elif file_type == "gax/cal":
-            from .gcal import yaml_to_event, create_event, update_event, event_to_yaml
+            from .gcal import yaml_to_event
 
             content = file_path.read_text(encoding="utf-8")
             local_event = yaml_to_event(content)
 
-            if local_event.id:
-                # Update existing event
-                if not yes:
-                    click.echo(f"Update event '{local_event.title}'?")
-                    if not click.confirm("Proceed?"):
-                        return False, "cancelled"
+            action = "Update" if local_event.id else "Create"
+            if not yes:
+                click.echo(f"{action} event '{local_event.title}'?")
+                if not click.confirm("Proceed?"):
+                    return False, "cancelled"
 
-                result = update_event(local_event)
-                return True, f"updated {result.get('htmlLink', '')}"
-            else:
-                # Create new event
-                if not yes:
-                    click.echo(f"Create new event '{local_event.title}'?")
-                    if not click.confirm("Proceed?"):
-                        return False, "cancelled"
-
-                result = create_event(local_event)
-
-                # Update local file with new ID
-                local_event.id = result["id"]
-                local_event.source = (
-                    f"https://calendar.google.com/calendar/event?eid={result['id']}"
-                )
-                local_event.synced = (
-                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                )
-
-                new_content = event_to_yaml(local_event)
-                file_path.write_text(new_content, encoding="utf-8")
-
-                return True, f"created {result.get('htmlLink', '')}"
+            try:
+                link = Cal().event_push(file_path)
+                return True, f"{action.lower()}d {link}"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/file":
             # This is a tracking file, find the actual file
@@ -860,43 +840,18 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             return True, f"{len(thread_data)} threads"
 
         elif file_type == "gax/cal":
-            from .gcal import yaml_to_event, api_event_to_dataclass, event_to_yaml
-            from .auth import get_authenticated_credentials
-            from googleapiclient.discovery import build
-
-            content = file_path.read_text(encoding="utf-8")
-            local_event = yaml_to_event(content)
-            if not local_event.id:
-                return False, "No event ID found"
-            creds = get_authenticated_credentials()
-            service = build("calendar", "v3", credentials=creds)
-            api_event = (
-                service.events()
-                .get(calendarId=local_event.calendar, eventId=local_event.id)
-                .execute()
-            )
-            updated_event = api_event_to_dataclass(api_event, local_event.calendar, "")
-            new_content = event_to_yaml(updated_event)
-            file_path.write_text(new_content, encoding="utf-8")
-            return True, "updated"
+            try:
+                Cal().event_pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/cal-list":
-            from .gcal import _parse_cal_list_file, _clone_events_to_file
-            import yaml as _yaml
-
-            time_min, time_max, calendar, verbose = _parse_cal_list_file(file_path)
-            _header = _yaml.safe_load(file_path.read_text().split("---", 2)[1])
-            count = _clone_events_to_file(
-                file_path,
-                time_min=time_min,
-                time_max=time_max,
-                calendar=calendar,
-                verbose=verbose,
-                days=_header.get("days"),
-                date_from=str(_header["from"]) if "from" in _header else None,
-                date_to=str(_header["to"]) if "to" in _header else None,
-            )
-            return True, f"{count} events"
+            try:
+                Cal().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
 
         elif file_type == "gax/form":
             from .form import (
@@ -1227,7 +1182,7 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
     # Calendar events
     elif re.search(r"calendar\.google\.com/calendar/", url):
         ctx.invoke(
-            cal_cli.commands["event"].commands["clone"],
+            cal_event_group.commands["clone"],
             id_or_url=url,
             output_path=output,
         )
@@ -1274,7 +1229,7 @@ def checkout(ctx, url: str, output: Path | None, fmt: str):
         kwargs = {}
         if output:
             kwargs["output"] = output
-        ctx.invoke(cal_cli.commands["checkout"], **kwargs)
+        ctx.invoke(cal_checkout_cmd, **kwargs)
 
     else:
         click.echo(f"Unrecognized URL: {url}", err=True)
@@ -2539,13 +2494,334 @@ def filter_apply(file, yes):
         sys.exit(1)
 
 
+# =============================================================================
+# Calendar commands
+# =============================================================================
+
+
+@docs.section("resource")
+@click.group(name="cal")
+def cal_group():
+    """Google Calendar sync commands."""
+    pass
+
+
+@cal_group.command(name="calendars")
+def cal_calendars_cmd():
+    """List available calendars."""
+    try:
+        Cal().calendars(sys.stdout)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cal_group.command(name="list")
+@click.argument("calendar", required=False)
+@click.option(
+    "--days", "-d", default=None, type=int, help="Number of days to show (default: 7)"
+)
+@click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
+@click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
+@click.option(
+    "--format", "-f", "fmt",
+    type=click.Choice(["md", "tsv"]),
+    default="md",
+    help="Output format (default: md)",
+)
+@click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
+def cal_list_cmd(
+    calendar: str | None,
+    days: int | None,
+    date_from: str | None,
+    date_to: str | None,
+    fmt: str,
+    verbose: bool,
+):
+    """List events from a calendar.
+
+    CALENDAR is a calendar name, ID, or numeric index (from 'gax cal calendars').
+    Defaults to the primary calendar.
+
+    \b
+    Examples:
+        gax cal list                  # Primary calendar, next 7 days
+        gax cal list -d 14            # Next 14 days
+        gax cal list Work             # "Work" calendar
+        gax cal list --from 2026-03-01 --to 2026-03-15
+        gax cal list -f tsv           # TSV output
+    """
+    from .gcal import (
+        resolve_time_range, resolve_calendar_id,
+        list_events, format_events_tsv, format_events_markdown,
+    )
+
+    try:
+        time_min, time_max = resolve_time_range(days, date_from, date_to)
+        calendar_id = resolve_calendar_id(calendar)
+        events = list_events(
+            time_min=time_min, time_max=time_max, calendar_id=calendar_id
+        )
+
+        if fmt == "tsv":
+            click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
+        else:
+            click.echo(
+                format_events_markdown(events, include_desc=verbose), nl=False
+            )
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@cal_group.command(name="clone")
+@click.argument("calendar", required=False)
+@click.option(
+    "-o", "--output",
+    type=click.Path(path_type=Path),
+    help="Output file (default: calendar.cal.gax.md)",
+)
+@click.option(
+    "--days", "-d", default=None, type=int, help="Number of days (default: 7)"
+)
+@click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
+@click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
+@click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
+def cal_clone_cmd(
+    calendar: str | None,
+    output: Path | None,
+    days: int | None,
+    date_from: str | None,
+    date_to: str | None,
+    verbose: bool,
+):
+    """Clone events to a .cal.gax.md file.
+
+    Creates a file with all events that can be updated with 'gax cal pull'.
+    CALENDAR defaults to primary calendar.
+
+    \b
+    Examples:
+        gax cal clone
+        gax cal clone Work -o week.cal.gax.md -d 7
+        gax cal clone --from 2026-03-01 --to 2026-03-31 -o march.cal.gax.md
+    """
+    try:
+        from .ui import success
+
+        file_path = Cal().clone(
+            output=output, calendar=calendar,
+            days=days, date_from=date_from, date_to=date_to,
+            verbose=verbose,
+        )
+        success(f"Created: {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@cal_group.command(name="pull")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def cal_pull_cmd(file: Path):
+    """Pull latest events to existing file.
+
+    \b
+    Example:
+        gax cal pull week.cal.gax.md
+    """
+    try:
+        from .ui import success
+
+        Cal().pull(file)
+        success(f"Updated: {file}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@cal_group.command(name="checkout")
+@click.argument("calendar", required=False)
+@click.option(
+    "-o", "--output",
+    default="calendar.cal.gax.md.d",
+    type=click.Path(path_type=Path),
+    help="Output folder (default: calendar.cal.gax.md.d)",
+)
+@click.option(
+    "--days", "-d", default=None, type=int, help="Number of days (default: 7)"
+)
+@click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
+@click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
+def cal_checkout_cmd(
+    calendar: str | None,
+    output: Path,
+    days: int | None,
+    date_from: str | None,
+    date_to: str | None,
+):
+    """Checkout events as individual .cal.gax.md files into a folder.
+
+    Each event becomes a separate file that can be edited and pushed.
+    CALENDAR defaults to primary calendar.
+
+    \b
+    Examples:
+        gax cal checkout
+        gax cal checkout -o Week/
+        gax cal checkout Work -o Week/ -d 7
+    """
+    try:
+        from .ui import success
+
+        cloned, skipped = Cal().checkout(
+            output=output, calendar=calendar,
+            days=days, date_from=date_from, date_to=date_to,
+        )
+        success(f"Checked out: {cloned}, Skipped: {skipped} (already present)")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@cal_group.group(name="event")
+def cal_event_group():
+    """Event operations (clone, new, pull, push, delete)."""
+    pass
+
+
+@cal_event_group.command(name="clone")
+@click.argument("id_or_url")
+@click.option(
+    "--cal", "-c", "calendar", default="primary", help="Calendar ID (default: primary)"
+)
+@click.option("-o", "--output", "output_path", type=click.Path(path_type=Path),
+              help="Output file path")
+def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None):
+    """Clone an event to a local .cal.gax.md file."""
+    try:
+        from .ui import success
+
+        file_path = Cal().event_clone(
+            id_or_url, calendar=calendar, output=output_path
+        )
+        success(f"Cloned event to {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@cal_event_group.command(name="new")
+@click.option(
+    "--cal", "-c", "calendar", default="primary", help="Calendar ID (default: primary)"
+)
+@click.option("-o", "--output", "output_path", type=click.Path(path_type=Path),
+              help="Output file path")
+def cal_event_new_cmd(calendar: str, output_path: Path | None):
+    """Create a new event file (edit and push to create upstream)."""
+    try:
+        from .ui import success
+
+        file_path = Cal().event_new(calendar=calendar, output=output_path)
+        success(f"Created event template at {file_path}")
+        click.echo(f"Edit the file, then run: gax cal event push {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@cal_event_group.command(name="pull")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+def cal_event_pull_cmd(file_path: Path):
+    """Pull latest event data from API."""
+    try:
+        from .ui import success
+
+        Cal().event_pull(file_path)
+        success(f"Pulled latest data to {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@cal_event_group.command(name="push")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def cal_event_push_cmd(file_path: Path, yes: bool):
+    """Push local changes to API."""
+    from .gcal import yaml_to_event
+
+    try:
+        from .ui import success
+
+        content = file_path.read_text()
+        local_event = yaml_to_event(content)
+
+        action = "Update" if local_event.id else "Create new"
+        if not yes:
+            click.echo(f"{action} event '{local_event.title}'?")
+            if not click.confirm("Proceed?"):
+                click.echo("Cancelled.")
+                return
+
+        link = Cal().event_push(file_path)
+        success(f"{action}d event: {link}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@cal_event_group.command(name="delete")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def cal_event_delete_cmd(file_path: Path, yes: bool):
+    """Delete event from calendar."""
+    from .gcal import yaml_to_event
+
+    try:
+        from .ui import success
+
+        content = file_path.read_text()
+        local_event = yaml_to_event(content)
+
+        if not yes:
+            click.echo(f"Delete event '{local_event.title}' from calendar?")
+            click.echo("This will also delete the local file.")
+            if not click.confirm("Proceed?"):
+                click.echo("Cancelled.")
+                return
+
+        title = Cal().event_delete(file_path)
+        success(f"Deleted event '{title}'")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
 # Register doc, mail, cal, form, file, and contacts command groups
 main.add_command(doc)
 main.add_command(mail_group, name="mail")  # Flattened from mail.thread (ADR 020)
 main.add_command(mailbox)  # Flattened from mail.list (ADR 020)
 main.add_command(mail_label)  # Flattened from mail.label (ADR 020)
 main.add_command(mail_filter)  # Flattened from mail.filter (ADR 020)
-main.add_command(cal_cli, name="cal")
+main.add_command(cal_group)
 main.add_command(form)
 main.add_command(draft)  # Flattened from mail.draft (ADR 020)
 main.add_command(contacts)
