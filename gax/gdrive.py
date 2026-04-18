@@ -388,6 +388,12 @@ class File(Resource):
         logger.info(f"View: {metadata.get('webViewLink', '')}")
 
 
+def _safe_name(name: str) -> str:
+    """Sanitize a file/folder name for use as a local path component."""
+    safe = re.sub(r'[<>:"/\\|?*]', "-", name)
+    return re.sub(r"\s+", "_", safe)
+
+
 # =============================================================================
 # Folder — collection manager for Drive folders (checkout/pull).
 # =============================================================================
@@ -421,9 +427,7 @@ class Folder:
         if output:
             folder = output
         else:
-            safe = re.sub(r'[<>:"/\\|?*]', "-", title)
-            safe = re.sub(r"\s+", "_", safe)
-            folder = Path(f"{safe}.drive.gax.md.d")
+            folder = Path(f"{_safe_name(title)}.drive.gax.md.d")
 
         folder.mkdir(parents=True, exist_ok=True)
 
@@ -517,16 +521,7 @@ class Folder:
         # Pull existing tracked files
         updated = 0
         for sidecar in path.rglob("*.gax.md"):
-            if sidecar.name == ".gax.yaml":
-                continue
-            # Skip gax resource files (they have their own pull)
-            if not sidecar.name.endswith(".gax.md"):
-                continue
-            # Sidecar → actual file
-            name = sidecar.name
-            if not name.endswith(".gax.md"):
-                continue
-            actual = sidecar.parent / name[:-7]  # strip .gax.md
+            actual = sidecar.parent / sidecar.name[:-7]  # strip .gax.md
             if actual.exists():
                 try:
                     File().pull(actual)
@@ -580,7 +575,22 @@ class Folder:
                 sort_keys=False,
             )
 
-        logger.info(f"Updated: {updated}, New: {new_files}")
+        # Report remotely deleted files
+        local_sidecars = set()
+        for sidecar in path.rglob("*.gax.md"):
+            rel = sidecar.parent / sidecar.name[:-7]  # strip .gax.md
+            try:
+                local_sidecars.add(str(rel.relative_to(path)))
+            except ValueError:
+                continue
+        remote_paths = set(remote_by_path.keys())
+        deleted = local_sidecars - remote_paths
+        for d in sorted(deleted):
+            logger.info(f"Deleted remotely: {d}")
+
+        logger.info(
+            f"Updated: {updated}, New: {new_files}, Deleted remotely: {len(deleted)}"
+        )
 
     def _clone_workspace_file(self, item: dict, folder: Path) -> None:
         """Clone a Google Workspace file using its native gax resource."""
@@ -591,8 +601,7 @@ class Folder:
         target_dir = folder / parent if parent else folder
 
         url = f"https://docs.google.com/{_workspace_url_path(resource_type)}/d/{file_id}/edit"
-        safe_name = re.sub(r'[<>:"/\\|?*]', "-", item["name"])
-        safe_name = re.sub(r"\s+", "_", safe_name)
+        safe_name = _safe_name(item["name"])
 
         if resource_type == "doc":
             from .gdoc.doc import Tab
@@ -627,8 +636,7 @@ def _workspace_file_exists(folder: Path, item: dict) -> bool:
     """Check if a Workspace file was already cloned as a .gax.md file."""
     mime = item["mimeType"]
     resource_type = WORKSPACE_MIME_TYPES.get(mime, "")
-    safe_name = re.sub(r'[<>:"/\\|?*]', "-", item["name"])
-    safe_name = re.sub(r"\s+", "_", safe_name)
+    safe_name = _safe_name(item["name"])
     parent = item["path"].rsplit("/", 1)[0] if "/" in item["path"] else ""
     target_dir = folder / parent if parent else folder
 
