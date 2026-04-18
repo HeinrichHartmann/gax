@@ -3,6 +3,7 @@
 Package structure:
   shared   -- dataclasses, format helpers, Gmail API helpers
   thread   -- Thread(Resource) class
+  mailbox  -- Mailbox class
   _legacy  -- CLI commands (being moved to cli.py)
 """
 
@@ -18,11 +19,14 @@ from .shared import (  # noqa: F401 — public API
     _get_header as _get_header,
 )
 from .thread import Thread as Thread  # noqa: F401
-from ._legacy import *  # noqa: F401,F403
-from ._legacy import (  # noqa: F401 — explicit re-exports for cli.py
-    thread as thread,
-    mailbox as mailbox,
+from .mailbox import (  # noqa: F401
+    Mailbox as Mailbox,
     _parse_gax_header as _parse_gax_header,
     _relabel_fetch_threads as _relabel_fetch_threads,
     _write_gax_file as _write_gax_file,
+)
+from ._legacy import *  # noqa: F401,F403
+from ._legacy import (  # noqa: F401 — CLI groups for cli.py registration
+    thread as thread,
+    mailbox as mailbox,
 )
