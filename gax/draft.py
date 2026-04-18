@@ -11,7 +11,7 @@ Module structure
   DraftHeader          — dataclass for .draft.gax.md frontmatter
   File format          — parse/format .draft.gax.md files
   Gmail API helpers    — wrappers around Gmail API quirks
-  Draft(ResourceItem)  — resource class (the public interface for cli.py)
+  Draft(Resource)  — resource class (the public interface for cli.py)
 
 Design decisions
 ================
@@ -25,7 +25,7 @@ Separation of concerns:
 Resource class as public interface:
   The Draft class is what cli.py calls. All core operations (new, clone,
   list, pull, diff, push) are methods on this class. The class is stateless —
-  just a namespace conforming to the ResourceItem interface.
+  just a namespace conforming to the Resource interface.
 
 Communication conventions:
   - logging.info()  — status messages (picked up by the spinner)
@@ -67,7 +67,7 @@ from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
 from . import multipart
-from .resource import ResourceItem
+from .resource import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +276,7 @@ def fetch_draft(draft_id: str, *, service=None) -> tuple[DraftHeader, str]:
 # =============================================================================
 
 
-class Draft(ResourceItem):
+class Draft(Resource):
     """Gmail draft resource."""
 
     name = "draft"
