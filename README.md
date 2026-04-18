@@ -1,20 +1,19 @@
-# gax - Google Access CLI
-
 <p align="center">
   <img src="assets/logo.png" alt="gax logo" width="480">
 </p>
 
-Sync Google Workspace (Docs, Sheets, Gmail, Calendar) to local files that are human-readable, machine-readable, and git-friendly.
+# gax - Google Access CLI
+
+Sync Google Workspace (Docs, Sheets, Gmail, Calendar) to local files that are human-readable, LLM-readable, and git-friendly.
 
 Designed to be equally usable by humans and AI agents, gax facilitates AI-enhanced workflows where LLMs can read, analyze, and modify Google Workspace content through familiar file operations.
 
 ## Design
 
-- **Native abstractions** - Work at the same level as upstream: email threads (not individual messages), documents and sheets with tabs (not pages or cells)
-- **YAML + Markdown format** - Each `.gax.md` file has a YAML header with provenance metadata, followed by plain text content (Markdown, CSV, TSV). Editors see markdown; gax sees a sync file
-- **Clone/Checkout pattern** - `clone` creates a single file (one tab), `checkout` creates a directory (all tabs). `pull` updates existing files from remote
-- **Push with confirmation** - Sheets and Docs support `push` for local edits. Shows diff and prompts before overwriting remote content
-- **Plan/Apply pattern** - Bulk operations (labels, filters, mail triage) go through a two-phase workflow: `plan` generates a changeset for review, `apply` executes it
+- **YAML + Markdown format** - Each `.gax.md` file has a YAML header with provenance metadata, followed by plain text content (Markdown, CSV, TSV). Editors see markdown; gax sees a sync file.
+- **Clone/Checkout pattern** - `clone` creates a single file (one tab), `checkout` creates a directory (all tabs). `pull` updates existing files from remote.
+- **Push with confirmation** - Sheets and Docs support `push` for local edits. Shows diff and prompts before overwriting remote content.
+- **Plan/Apply pattern** - Bulk operations (labels, filters, mail triage) go through a two-phase workflow: `plan` generates a changeset for review, `apply` executes it.
 
 ## Quick Start
 
