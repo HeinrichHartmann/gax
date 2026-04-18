@@ -1750,3 +1750,121 @@ class TestDriveFileE2E:
 
         finally:
             _delete_drive_file(file_id)
+
+
+def _create_drive_folder(
+    name: str, file_contents: dict[str, str]
+) -> tuple[str, list[str]]:
+    """Create a Drive folder with text files. Returns (folder_id, [file_ids])."""
+    creds = get_authenticated_credentials()
+    service = build("drive", "v3", credentials=creds)
+
+    # Create folder
+    folder = (
+        service.files()
+        .create(
+            body={"name": name, "mimeType": "application/vnd.google-apps.folder"},
+            fields="id",
+        )
+        .execute()
+    )
+    folder_id = folder["id"]
+    file_ids = [folder_id]
+
+    # Create files in folder
+    import io
+    from googleapiclient.http import MediaIoBaseUpload
+
+    for fname, content in file_contents.items():
+        media = MediaIoBaseUpload(
+            io.BytesIO(content.encode("utf-8")), mimetype="text/plain"
+        )
+        f = (
+            service.files()
+            .create(
+                body={"name": fname, "parents": [folder_id]},
+                media_body=media,
+                fields="id",
+            )
+            .execute()
+        )
+        file_ids.append(f["id"])
+
+    return folder_id, file_ids
+
+
+def _delete_drive_files(file_ids: list[str]) -> None:
+    """Delete multiple Drive files/folders."""
+    for fid in file_ids:
+        _delete_drive_file(fid)
+
+
+@pytest.mark.e2e
+class TestDriveFolderE2E:
+    """End-to-end tests for Google Drive folder checkout."""
+
+    def test_checkout_pull_cycle(self, check_auth, temp_dir):
+        """Test: create folder with files -> checkout -> verify -> pull."""
+        folder_id, file_ids = _create_drive_folder(
+            f"{E2E_PREFIX}_folder",
+            {
+                "readme.txt": f"{E2E_PREFIX} readme content\n",
+                "notes.txt": f"{E2E_PREFIX} notes content\n",
+            },
+        )
+        try:
+            # Checkout
+            output = temp_dir / "test.drive.gax.md.d"
+            result = _run_gax("file", "checkout", folder_id, "-o", str(output))
+            assert result.returncode == 0, f"Checkout failed: {result.stderr}"
+            assert output.exists()
+            assert (output / ".gax.yaml").exists()
+
+            # Verify files
+            assert (output / "readme.txt").exists()
+            assert f"{E2E_PREFIX} readme content" in (output / "readme.txt").read_text()
+            assert (output / "notes.txt").exists()
+
+            # Verify sidecars
+            assert Path(str(output / "readme.txt") + ".gax.md").exists()
+            assert Path(str(output / "notes.txt") + ".gax.md").exists()
+
+            # Verify .gax.yaml
+            import yaml
+
+            meta = yaml.safe_load((output / ".gax.yaml").read_text())
+            assert meta["type"] == "gax/drive-checkout"
+            assert meta["folder_id"] == folder_id
+
+            # Pull
+            result = _run_gax("pull", str(output))
+            assert result.returncode == 0, f"Pull failed: {result.stderr}"
+
+            # Content should still be valid after pull
+            assert f"{E2E_PREFIX} readme content" in (output / "readme.txt").read_text()
+
+        finally:
+            _delete_drive_files(file_ids)
+
+    def test_checkout_incremental(self, check_auth, temp_dir):
+        """Test: checkout skips existing files on re-run."""
+        folder_id, file_ids = _create_drive_folder(
+            f"{E2E_PREFIX}_incr",
+            {"file1.txt": "content1\n"},
+        )
+        try:
+            output = temp_dir / "incr.drive.gax.md.d"
+
+            # First checkout
+            result = _run_gax("file", "checkout", folder_id, "-o", str(output))
+            assert result.returncode == 0
+
+            # Second checkout — should skip existing
+            result = _run_gax("file", "checkout", folder_id, "-o", str(output))
+            assert result.returncode == 0
+
+            # File should still be there
+            assert (output / "file1.txt").exists()
+
+        finally:
+            _delete_drive_files(file_ids)

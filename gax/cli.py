@@ -1110,6 +1110,37 @@ def file_clone(url_or_id, output):
         sys.exit(1)
 
 
+@file_group.command("checkout")
+@click.argument("url_or_id")
+@click.option(
+    "-o", "--output", type=click.Path(path_type=Path), help="Output folder path"
+)
+@click.option("-R", "--recursive", is_flag=True, help="Recurse into subfolders")
+def file_checkout(url_or_id, output, recursive):
+    """Checkout a Google Drive folder to a local directory.
+
+    Downloads all files. Google Workspace files (Docs, Sheets, Forms)
+    are cloned via their native gax resource.
+
+    \b
+    Examples:
+        gax file checkout https://drive.google.com/drive/folders/abc123
+        gax file checkout abc123 -o my_folder
+        gax file checkout abc123 -R
+    """
+    try:
+        from .ui import success
+        from .gdrive import Folder
+
+        folder_path = Folder().checkout(url_or_id, output=output, recursive=recursive)
+        success(f"Checked out: {folder_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
 @file_group.command("pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 def file_pull(file_path):
