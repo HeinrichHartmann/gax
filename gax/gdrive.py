@@ -437,28 +437,25 @@ def _safe_name(name: str) -> str:
 # =============================================================================
 
 
-class Folder:
-    """Google Drive folder — checkout/pull a folder tree.
-
-    Not a Resource subclass (collection manager, like Mailbox and Sheet).
-    Dispatches to native gax resources for Google Workspace files.
-    """
+class Folder(Resource):
+    """Google Drive folder — checkout/pull a folder tree."""
 
     name = "folder"
+    CHECKOUT_TYPE = "gax/drive-checkout"
 
     def checkout(
         self,
-        url: str,
         output: Path | None = None,
         *,
         recursive: bool = False,
+        **kw,
     ) -> Path:
         """Checkout a Drive folder to a local directory. Returns path created.
 
         Downloads all files. Google Workspace files (Docs, Sheets, Forms)
         are cloned via their native gax resource.
         """
-        folder_id = extract_folder_id(url)
+        folder_id = extract_folder_id(self.url)
         meta = get_folder_metadata(folder_id)
         title = meta["name"]
 
@@ -533,12 +530,13 @@ class Folder:
         logger.info(f"Cloned: {cloned}, Skipped: {skipped}")
         return folder
 
-    def pull(self, path: Path) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest files for a checkout folder.
 
         Re-lists the remote folder and downloads new/updated files.
         Existing files are refreshed via their sidecar.
         """
+        path = self.path
         metadata_path = path / ".gax.yaml"
         if not metadata_path.exists():
             raise ValueError(f"No .gax.yaml found in {path}")
@@ -658,7 +656,7 @@ class Folder:
 
             output = target_dir / f"{safe_name}.form.gax.md"
             if not output.exists():
-                Form().clone(url, output=output)
+                Form.from_url(url).clone(output=output)
         elif resource_type == "slides":
             from .gslides import Presentation
 

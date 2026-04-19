@@ -1321,9 +1321,9 @@ class Doc(Resource):
 
     # Non-standard operations
 
-    def tab_list(self, url: str, out) -> None:
+    def tab_list(self, out) -> None:
         """Write tab listing to file descriptor."""
-        document_id = extract_doc_id(url)
+        document_id = extract_doc_id(self.url)
         info = get_tabs_list(document_id)
 
         out.write(f"# {info['title']}\n")
@@ -1332,12 +1332,12 @@ class Doc(Resource):
             indent = "  " * t.depth
             out.write(f"{t.index}\t{t.id}\t{indent}{t.title}\n")
 
-    def tab_import(self, url: str, file: Path, output: Path | None = None) -> Path:
+    def tab_import(self, file: Path, output: Path | None = None) -> Path:
         """Import a markdown file as a new tab in a document.
 
         Returns path to the tracking file created.
         """
-        document_id = extract_doc_id(url)
+        document_id = extract_doc_id(self.url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
         tab_name = file.stem

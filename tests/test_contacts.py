@@ -379,7 +379,7 @@ class TestContactsCheckout:
 
 
 # =============================================================================
-# Contacts.pull_checkout
+# Contacts.pull (checkout folder)
 # =============================================================================
 
 
@@ -396,7 +396,7 @@ class TestCheckoutPull:
 
         # Remote now has only one contact
         mock_fetch.return_value = (SAMPLE_NORMALIZED[:1], {})
-        Contacts().pull_checkout(output)
+        Contacts(path=output).pull()
 
         files = list(output.glob("*.contact.gax.yaml"))
         assert len(files) == 1
@@ -417,7 +417,7 @@ class TestCheckoutPull:
             "name": "Charlie Brown",
         }
         mock_fetch.return_value = (SAMPLE_NORMALIZED + [new_contact], {})
-        Contacts().pull_checkout(output)
+        Contacts(path=output).pull()
 
         files = list(output.glob("*.contact.gax.yaml"))
         assert len(files) == 3
@@ -437,7 +437,7 @@ class TestCheckoutPull:
             SAMPLE_NORMALIZED[1],
         ]
         mock_fetch.return_value = (updated, {})
-        Contacts().pull_checkout(output)
+        Contacts(path=output).pull()
 
         # Find the file for people/c1 and verify
         for f in output.glob("*.contact.gax.yaml"):

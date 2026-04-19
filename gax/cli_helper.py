@@ -3,239 +3,22 @@
 import click
 from pathlib import Path
 
-from .gtask import Task as TaskSingleResource
 from .gdrive import File
 
 
 def _pull_folder(
     folder_path: Path, verbose: bool = False, yes: bool = False
 ) -> tuple[bool, str]:
-    """Pull a .gax.d folder. Returns (success, message).
-
-    Performs a checkout to a scratch directory, shows diff, and asks for confirmation.
-    """
-    import shutil
-    import yaml
-    from filecmp import dircmp
-
-    # Read .gax.yaml metadata
-    metadata_path = folder_path / ".gax.yaml"
-    if not metadata_path.exists():
-        return False, "No .gax.yaml metadata file found"
+    """Pull a .gax.d folder. Returns (success, message)."""
+    from .resource import Resource
 
     try:
-        with open(metadata_path, "r") as f:
-            metadata = yaml.safe_load(f)
+        r = Resource.from_file(folder_path)
+        r.pull()
+        return True, "updated"
+    except ValueError as e:
+        return False, str(e)
     except Exception as e:
-        return False, f"Failed to read .gax.yaml: {e}"
-
-    checkout_type = metadata.get("type")
-    if not checkout_type:
-        return False, "No type in .gax.yaml"
-
-    # Create scratch directory in .gax/
-    scratch_base = Path(".gax")
-    scratch_base.mkdir(exist_ok=True)
-
-    # Use folder name for scratch dir
-    scratch_name = f"{folder_path.name}.tmp"
-    scratch_path = scratch_base / scratch_name
-
-    # Remove scratch dir if it exists
-    if scratch_path.exists():
-        shutil.rmtree(scratch_path)
-
-    try:
-        # Perform checkout to scratch directory
-        if checkout_type == "gax/sheet-checkout":
-            url = metadata.get("url")
-            if not url:
-                return False, "No URL in .gax.yaml"
-            fmt = metadata.get("format", "md")
-
-            from .gsheet import Sheet
-
-            Sheet.from_url(url).checkout(output=scratch_path, fmt=fmt)
-
-        elif checkout_type == "gax/doc-checkout":
-            url = metadata.get("url")
-            if not url:
-                return False, "No URL in .gax.yaml"
-
-            from .gdoc import Doc
-
-            Doc.from_url(url).checkout(output=scratch_path)
-
-        elif checkout_type == "gax/slides-checkout":
-            url = metadata.get("url")
-            if not url:
-                return False, "No URL in .gax.yaml"
-            fmt = metadata.get("format", "md")
-
-            from .gslides import Presentation
-
-            Presentation.from_url(url).checkout(output=scratch_path, fmt=fmt)
-
-        elif checkout_type == "gax/drive-checkout":
-            # Drive folders pull in-place (no scratch dir diffing for binary files)
-            if scratch_path.exists():
-                shutil.rmtree(scratch_path)
-            from .gdrive import Folder
-
-            Folder().pull(folder_path)
-            return True, "updated"
-
-        elif checkout_type == "gax/task-checkout":
-            # Task checkouts pull in-place
-            if scratch_path.exists():
-                shutil.rmtree(scratch_path)
-            for task_file in sorted(folder_path.glob("*.task.gax.yaml")):
-                try:
-                    TaskSingleResource.from_file(task_file).pull()
-                except ValueError:
-                    pass
-            return True, "updated"
-
-        elif checkout_type == "gax/contacts-checkout":
-            # Contacts checkouts pull in-place
-            if scratch_path.exists():
-                shutil.rmtree(scratch_path)
-            from .contacts import Contacts
-
-            Contacts().pull_checkout(folder_path)
-            return True, "updated"
-
-        else:
-            return False, f"Unsupported checkout type: {checkout_type}"
-
-        # Show diff
-        click.echo(f"\nChanges for {folder_path}/:")
-        click.echo("-" * 60)
-
-        def filter_timestamps(lines: list[str]) -> list[str]:
-            """Remove timestamp lines from YAML headers."""
-            import re
-
-            filtered = []
-            for line in lines:
-                # Skip lines that are just timestamps
-                if re.match(
-                    r"^\s*(pulled|checked_out|time):\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$",
-                    line,
-                ):
-                    continue
-                filtered.append(line)
-            return filtered
-
-        def count_diff_lines(file1: Path, file2: Path) -> tuple[int, int] | None:
-            """Count added/removed lines between two files, excluding timestamps.
-
-            Returns (added, removed) or None if files are identical after filtering.
-            """
-            import difflib
-
-            try:
-                content1 = file1.read_text(encoding="utf-8").splitlines(keepends=True)
-                content2 = file2.read_text(encoding="utf-8").splitlines(keepends=True)
-
-                # Filter timestamps
-                filtered1 = filter_timestamps(content1)
-                filtered2 = filter_timestamps(content2)
-
-                # Check if identical after filtering
-                if filtered1 == filtered2:
-                    return None
-
-                # Count changes
-                diff = list(difflib.unified_diff(filtered1, filtered2, lineterm=""))
-                added = sum(
-                    1
-                    for line in diff
-                    if line.startswith("+") and not line.startswith("+++")
-                )
-                removed = sum(
-                    1
-                    for line in diff
-                    if line.startswith("-") and not line.startswith("---")
-                )
-
-                return (added, removed)
-            except Exception:
-                # If we can't read/diff, treat as changed
-                return (1, 1)
-
-        real_changes = 0
-
-        def show_diff(dcmp: dircmp, prefix: str = ""):
-            nonlocal real_changes
-
-            # Files only in scratch (new files)
-            for name in dcmp.left_only:
-                if not name.startswith("."):
-                    click.echo(f"  + {prefix}{name}")
-                    real_changes += 1
-
-            # Files only in current (deleted files)
-            for name in dcmp.right_only:
-                if not name.startswith("."):
-                    click.echo(f"  - {prefix}{name}")
-                    real_changes += 1
-
-            # Modified files - check if really changed beyond timestamps
-            for name in dcmp.diff_files:
-                if not name.startswith("."):
-                    scratch_file = Path(dcmp.left) / name
-                    current_file = Path(dcmp.right) / name
-
-                    diff_stats = count_diff_lines(scratch_file, current_file)
-                    if diff_stats is not None:
-                        added, removed = diff_stats
-                        click.echo(f"  M {prefix}{name} (+{added}/-{removed} lines)")
-                        real_changes += 1
-                    # else: only timestamps changed, don't show or count
-
-            # Recurse into subdirectories
-            for sub_dcmp in dcmp.subdirs.values():
-                show_diff(sub_dcmp, prefix + sub_dcmp.left + "/")
-
-        dcmp = dircmp(str(scratch_path), str(folder_path))
-        show_diff(dcmp)
-
-        if real_changes == 0:
-            click.echo("  (no changes)")
-            shutil.rmtree(scratch_path)
-            return True, "up to date"
-
-        click.echo("-" * 60)
-
-        # Prompt for confirmation
-        if not yes and not click.confirm(f"\nApply these changes to {folder_path}?"):
-            shutil.rmtree(scratch_path)
-            return False, "cancelled"
-
-        # Apply changes by syncing scratch to folder
-        # Delete files that are in folder but not in scratch
-        for name in dcmp.right_only:
-            if not name.startswith("."):
-                (folder_path / name).unlink()
-
-        # Copy new and modified files from scratch to folder
-        for name in dcmp.left_only + dcmp.diff_files:
-            if not name.startswith("."):
-                shutil.copy2(scratch_path / name, folder_path / name)
-
-        # Copy metadata file
-        shutil.copy2(scratch_path / ".gax.yaml", folder_path / ".gax.yaml")
-
-        # Clean up scratch
-        shutil.rmtree(scratch_path)
-
-        return True, f"{real_changes} changes applied"
-
-    except Exception as e:
-        # Clean up scratch on error
-        if scratch_path.exists():
-            shutil.rmtree(scratch_path)
         return False, str(e)
 
 
@@ -359,65 +142,29 @@ def _push_folder(
         return False, "No type in .gax.yaml"
 
     try:
-        if checkout_type == "gax/sheet-checkout":
-            from .gsheet import Sheet
+        from .resource import Resource
 
-            s = Sheet(path=folder_path)
-            diff_text = s.diff()
-            if diff_text is None:
-                return True, "no changes"
-            if not yes:
-                click.echo("\n" + diff_text)
-                if not click.confirm("\nPush these changes?"):
-                    return False, "cancelled"
-            s.push(with_formulas=with_formulas)
-            return True, "pushed"
-
-        elif checkout_type == "gax/doc-checkout":
-            return (
-                False,
-                "Doc folder push not yet supported. Use 'gax doc tab push' for individual tabs.",
-            )
-
-        elif checkout_type == "gax/slides-checkout":
-            fmt = metadata.get("format", "md")
-            if fmt != "json":
-                return (
-                    False,
-                    "Push is not supported for markdown format.\n"
-                    "Re-checkout with --format json to enable push:\n"
-                    "  gax slides checkout <url> --format json",
-                )
-            from .gslides import Presentation
-
-            p = Presentation.from_file(folder_path)
-            diff_text = p.diff()
-            if diff_text is None:
-                return True, "no changes"
-            if not yes:
-                click.echo("\n" + diff_text)
-                if not click.confirm("\nPush these changes?"):
-                    return False, "cancelled"
-            p.push()
-            return True, "pushed"
-
-        elif checkout_type == "gax/contacts-checkout":
-            from .contacts import Contacts
-
-            c = Contacts()
-            diff_text = c.diff_checkout(folder_path)
-            if diff_text is None:
-                return True, "no changes"
-            if not yes:
-                click.echo("\n" + diff_text)
-                if not click.confirm("\nPush these changes?"):
-                    return False, "cancelled"
-            c.push_checkout(folder_path)
-            return True, "pushed"
-
-        else:
+        try:
+            r = Resource.from_file(folder_path)
+        except ValueError:
             return False, f"Push not supported for checkout type: {checkout_type}"
 
+        try:
+            diff_text = r.diff()
+        except NotImplementedError:
+            return False, f"Push not supported for checkout type: {checkout_type}"
+
+        if diff_text is None:
+            return True, "no changes"
+        if not yes:
+            click.echo("\n" + diff_text)
+            if not click.confirm("\nPush these changes?"):
+                return False, "cancelled"
+        r.push(with_formulas=with_formulas)
+        return True, "pushed"
+
+    except ValueError as e:
+        return False, str(e)
     except Exception as e:
         return False, str(e)
 

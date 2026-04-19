@@ -55,6 +55,18 @@ def _read_file_type(path: Path) -> str | None:
     return None
 
 
+def _read_checkout_url(gax_yaml_path: Path) -> str:
+    """Read the url field from a .gax.yaml checkout metadata file."""
+    try:
+        content = gax_yaml_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for line in content.split("\n"):
+        if line.startswith("url:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 class Resource:
     """Base class for all gax resources.
 
@@ -151,9 +163,11 @@ class Resource:
 
         if path.is_dir():
             if cls.CHECKOUT_TYPE:
-                checkout_type = _read_file_type(path / ".gax.yaml")
+                gax_yaml = path / ".gax.yaml"
+                checkout_type = _read_file_type(gax_yaml)
                 if checkout_type == cls.CHECKOUT_TYPE:
-                    return cls(path=path)
+                    url = _read_checkout_url(gax_yaml)
+                    return cls(path=path, url=url)
             raise ValueError(f"{cls.__name__} does not handle file: {path}")
 
         name = path.name.lower()

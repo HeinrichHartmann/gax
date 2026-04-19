@@ -1163,7 +1163,7 @@ def file_checkout(url_or_id, output, recursive):
         from .ui import success
         from .gdrive import Folder
 
-        folder_path = Folder().checkout(url_or_id, output=output, recursive=recursive)
+        folder_path = Folder(url=url_or_id).checkout(output=output, recursive=recursive)
         success(f"Checked out: {folder_path}")
     except ValueError as e:
         from .ui import error
@@ -1336,7 +1336,15 @@ def mail_reply(file_or_url, output):
     try:
         from .ui import success
 
-        out_path = Thread(url=file_or_url).reply(file_or_url, output=output)
+        file_path = Path(file_or_url)
+        if file_path.exists():
+            thread = Thread(path=file_path)
+        else:
+            try:
+                thread = Thread.from_url(file_or_url)
+            except ValueError:
+                thread = Thread.from_id(file_or_url)
+        out_path = thread.reply(output=output)
         success(f"Created: {out_path}")
         click.echo(f"Edit the file, then run: gax draft push {out_path}")
     except ValueError as e:
@@ -2494,7 +2502,7 @@ def doc_tab_list(url: str):
     """List tabs in a document (TSV output)."""
 
     try:
-        Doc.from_url(url).tab_list(url, sys.stdout)
+        Doc.from_url(url).tab_list(sys.stdout)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -2515,7 +2523,7 @@ def doc_tab_import(url: str, file: Path, output: Path | None):
     try:
         from .ui import success
 
-        tracking_path = Doc.from_url(url).tab_import(url, file, output=output)
+        tracking_path = Doc.from_url(url).tab_import(file, output=output)
         success(f"Created: {tracking_path}")
     except ValueError as e:
         from .ui import error

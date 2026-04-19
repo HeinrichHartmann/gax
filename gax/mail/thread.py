@@ -224,12 +224,10 @@ class Thread(Resource):
 
         return "\n".join(lines).rstrip() if lines else None
 
-    def reply(self, file_or_url: str, output: Path | None = None) -> Path:
+    def reply(self, output: Path | None = None) -> Path:
         """Create a reply draft from a thread file or URL. Returns path created."""
-        file_path = Path(file_or_url)
-
-        if file_path.exists() and file_path.name.endswith(".gax.md"):
-            content = file_path.read_text(encoding="utf-8")
+        if self.path and self.path.exists() and self.path.name.endswith(".gax.md"):
+            content = self.path.read_text(encoding="utf-8")
             sections = multipart.parse_multipart(content)
             if not sections:
                 raise ValueError("No sections found in file")
@@ -240,7 +238,7 @@ class Thread(Resource):
             from_addr = last_section.headers.get("from", "")
             in_reply_to = ""
         else:
-            thread_id = extract_thread_id(file_or_url)
+            thread_id = extract_thread_id(self.url)
             logger.info(f"Fetching thread: {thread_id}")
 
             sections = pull_thread(thread_id)

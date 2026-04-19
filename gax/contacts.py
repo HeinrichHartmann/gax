@@ -582,6 +582,7 @@ class Contacts(Resource):
     name = "contacts"
     FILE_TYPE = "gax/contacts"
     FILE_EXTENSIONS = (".contacts.gax.md",)
+    CHECKOUT_TYPE = "gax/contacts-checkout"
 
     def _fetch_and_normalize(self, *, service=None):
         """Fetch contacts from API and normalize. Returns (normalized, groups)."""
@@ -620,6 +621,10 @@ class Contacts(Resource):
 
     def pull(self, **kw) -> None:
         """Pull latest contacts from Google."""
+        if self.path.is_dir():
+            self._pull_checkout()
+            return
+
         header, _ = parse_contacts_file(self.path)
 
         logger.info("Fetching contacts...")
@@ -640,7 +645,10 @@ class Contacts(Resource):
         logger.info(f"Contacts: {len(normalized)}")
 
     def diff(self, **kw) -> str | None:
-        """Preview changes between local JSONL and remote contacts."""
+        """Preview changes between local and remote contacts."""
+        if self.path.is_dir():
+            return self._diff_checkout()
+
         header, body = parse_contacts_file(self.path)
         if header.format != "jsonl":
             raise ValueError("diff/push only works with JSONL format")
@@ -654,7 +662,11 @@ class Contacts(Resource):
         return format_diff_summary(creates, updates, deletes) or None
 
     def push(self, **kw) -> None:
-        """Push local JSONL contacts to Google. Unconditional."""
+        """Push local contacts to Google. Unconditional."""
+        if self.path.is_dir():
+            self._push_checkout()
+            return
+
         header, body = parse_contacts_file(self.path)
         if header.format != "jsonl":
             raise ValueError("push only works with JSONL format")
@@ -724,8 +736,9 @@ class Contacts(Resource):
         logger.info(f"Contacts: {cloned} cloned, {skipped} skipped")
         return cloned, skipped
 
-    def pull_checkout(self, folder: Path, **kw) -> None:
+    def _pull_checkout(self) -> None:
         """Pull latest contacts into checkout folder, updating/adding/removing files."""
+        folder = self.path
         logger.info("Fetching contacts...")
         normalized, _ = self._fetch_and_normalize()
         remote_by_id = {
@@ -782,9 +795,9 @@ class Contacts(Resource):
             f"{len(local_files) - sum(1 for rn in local_files if rn in remote_by_id)} removed"
         )
 
-    def diff_checkout(self, folder: Path, **kw) -> str | None:
+    def _diff_checkout(self) -> str | None:
         """Preview changes between checkout folder and remote contacts."""
-        local_contacts = self._read_checkout_contacts(folder)
+        local_contacts = self._read_checkout_contacts(self.path)
 
         logger.info("Fetching remote contacts...")
         remote_contacts, _ = self._fetch_and_normalize()
@@ -792,9 +805,9 @@ class Contacts(Resource):
         creates, updates, deletes = compare_contacts(local_contacts, remote_contacts)
         return format_diff_summary(creates, updates, deletes) or None
 
-    def push_checkout(self, folder: Path, **kw) -> None:
+    def _push_checkout(self) -> None:
         """Push checkout folder contacts to Google."""
-        local_contacts = self._read_checkout_contacts(folder)
+        local_contacts = self._read_checkout_contacts(self.path)
         self._push_contacts(local_contacts)
 
     # ── Private helpers ──────────────────────────────────────────────────

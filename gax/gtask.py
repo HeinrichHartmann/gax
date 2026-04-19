@@ -491,6 +491,7 @@ class TaskList(Resource):
     name = "task-list"
     FILE_TYPE = "gax/task-list"
     FILE_EXTENSIONS = (".tasks.gax.md", ".tasks.gax.yaml")
+    CHECKOUT_TYPE = "gax/task-checkout"
 
     def lists(self, out) -> None:
         """List available task lists to file descriptor."""
@@ -541,7 +542,15 @@ class TaskList(Resource):
         return file_path
 
     def pull(self, **kw) -> None:
-        """Pull latest tasks to existing list file."""
+        """Pull latest tasks to existing list file or checkout folder."""
+        if self.path.is_dir():
+            for task_file in sorted(self.path.glob("*.task.gax.yaml")):
+                try:
+                    Task.from_file(task_file).pull()
+                except ValueError:
+                    pass
+            return
+
         content = self.path.read_text()
         if not content.startswith("---"):
             raise ValueError("File must start with YAML header (---)")
