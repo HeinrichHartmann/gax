@@ -120,7 +120,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
             try:
                 Resource.from_file(path).pull()
                 results.append((path, True, "updated"))
-            except (ValueError, Exception) as e:
+            except Exception as e:
                 results.append((path, False, str(e)))
 
             op.advance()
@@ -304,36 +304,32 @@ def checkout(ctx, url: str, output: Path | None, fmt: str):
         gax checkout <sheets-url> -f csv
         gax checkout <calendar-url> -o Week/
     """
-    from .gsheet import Sheet
-    from .gcal import Cal
+    try:
+        r = Resource.from_url(url)
+    except ValueError:
+        click.echo(f"Unrecognized URL: {url}", err=True)
+        click.echo("Supported: Google Docs, Sheets, Slides, Calendar", err=True)
+        sys.exit(1)
 
-    for cls in [Doc, Sheet, Cal, Presentation]:
-        try:
-            r = cls.from_url(url)
-        except ValueError:
-            continue
+    try:
+        from .ui import success
 
-        try:
-            from .ui import success
+        kwargs = {"output": output, "fmt": fmt}
+        path = r.checkout(**kwargs)
+        success(f"Checked out: {path}")
+    except NotImplementedError:
+        click.echo("Error: checkout not supported for this resource", err=True)
+        sys.exit(1)
+    except ValueError as e:
+        from .ui import error
 
-            kwargs = {"output": output, "fmt": fmt}
-            path = r.checkout(**kwargs)
-            success(f"Checked out: {path}")
-        except ValueError as e:
-            from .ui import error
+        error(str(e))
+        sys.exit(1)
+    except Exception as e:
+        from .ui import error
 
-            error(str(e))
-            sys.exit(1)
-        except Exception as e:
-            from .ui import error
-
-            error(f"Error: {e}")
-            sys.exit(1)
-        return
-
-    click.echo(f"Unrecognized URL: {url}", err=True)
-    click.echo("Supported: Google Docs, Sheets, Slides, Calendar", err=True)
-    sys.exit(1)
+        error(f"Error: {e}")
+        sys.exit(1)
 
 
 @main.command()
@@ -858,7 +854,7 @@ def draft_clone(draft_id_or_url, output):
             draft = Draft.from_id(draft_id_or_url)
         file_path = draft.clone(output=output)
         success(f"Created: {file_path}")
-    except (ValueError, Exception) as e:
+    except Exception as e:
         from .ui import error
 
         error(str(e))
@@ -1129,7 +1125,11 @@ def file_checkout(url_or_id, output, recursive):
         from .ui import success
         from .gdrive import Folder
 
-        folder_path = Folder(url=url_or_id).checkout(output=output, recursive=recursive)
+        try:
+            folder_resource = Folder.from_url(url_or_id)
+        except ValueError:
+            folder_resource = Folder.from_id(url_or_id)
+        folder_path = folder_resource.checkout(output=output, recursive=recursive)
         success(f"Checked out: {folder_path}")
     except ValueError as e:
         from .ui import error
@@ -1250,7 +1250,7 @@ def mail_clone(thread_id_or_url, output):
             thread = Thread.from_id(thread_id_or_url)
         file_path = thread.clone(output=output)
         success(f"Created: {file_path}")
-    except (ValueError, Exception) as e:
+    except Exception as e:
         from .ui import error
 
         error(str(e))
@@ -1567,7 +1567,7 @@ def label_clone(output, include_all):
     try:
         from .ui import success
 
-        file_path = Label(path=output).clone(output=output, include_all=include_all)
+        file_path = Label().clone(output=output, include_all=include_all)
         success(f"Created: {file_path}")
     except ValueError as e:
         from .ui import error

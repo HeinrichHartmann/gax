@@ -449,7 +449,15 @@ class Folder(Resource):
     """Google Drive folder — checkout/pull a folder tree."""
 
     name = "folder"
+    URL_PATTERN = r"drive\.google\.com/(drive/folders/|folders/)"
     CHECKOUT_TYPE = "gax/drive-checkout"
+
+    @classmethod
+    def from_id(cls, id_value: str) -> "Folder":
+        """Construct from a Google Drive folder ID."""
+        if re.fullmatch(r"[a-zA-Z0-9_-]+", id_value):
+            return cls(url=id_value)
+        raise ValueError(f"Not a Google Drive folder ID: {id_value}")
 
     def checkout(
         self,
