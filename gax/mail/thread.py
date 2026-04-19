@@ -84,9 +84,48 @@ def _pull_single_file(file_path: Path) -> tuple[int, int]:
 
 
 class Thread(Resource):
-    """Gmail thread resource."""
+    """Gmail thread resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "thread"
+
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
+
+    @classmethod
+    def from_url(cls, url: str) -> "Thread":
+        """Construct from a Gmail thread URL or thread ID."""
+        # Must NOT match draft URLs
+        if re.search(r"mail\.google\.com/mail/", url) and "#drafts/" not in url:
+            return cls(url=url)
+        # Also accept raw thread IDs
+        if _is_thread_id(url):
+            return cls(url=url)
+        raise ValueError(f"Not a Gmail thread URL: {url}")
+
+    @classmethod
+    def from_file(cls, path: Path) -> "Thread":
+        """Construct from a .mail.gax.md file."""
+        name = path.name.lower()
+        if name.endswith(".mail.gax.md"):
+            return cls(path=path)
+        # Check YAML header for type field or thread_id
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        if content.startswith("---"):
+            from .. import multipart as mp
+            sections = mp.parse_multipart(content)
+            if sections and sections[0].headers.get("type") == "gax/mail":
+                return cls(path=path)
+            if sections and "thread_id" in sections[0].headers:
+                return cls(path=path)
+        raise ValueError(f"Not a thread file: {path}")
 
     def _output_path(self, subject: str, thread_id: str, output: Path | None) -> Path:
         if output:
@@ -95,15 +134,15 @@ class Thread(Resource):
         safe = re.sub(r"\s+", "_", safe)[:50]
         return Path(f"{safe}_{thread_id}.mail.gax.md")
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a single email thread to a local file. Returns path created."""
-        if not _is_thread_id(url):
+        if not _is_thread_id(self.url):
             raise ValueError(
-                f"'{url}' is not a valid thread ID or URL.\n"
+                f"'{self.url}' is not a valid thread ID or URL.\n"
                 "For bulk cloning, use: gax mailbox fetch -q QUERY"
             )
 
-        thread_id = extract_thread_id(url)
+        thread_id = extract_thread_id(self.url)
         logger.info(f"Fetching thread: {thread_id}")
 
         sections = pull_thread(thread_id)
@@ -125,8 +164,9 @@ class Thread(Resource):
 
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest messages for a .mail.gax.md file or folder."""
+        path = self.path
         if path.is_dir():
             files = list(path.glob("*.mail.gax.md"))
             if not files:
@@ -156,12 +196,13 @@ class Thread(Resource):
             old_count, new_count = _pull_single_file(path)
             logger.info(f"Messages: {old_count} -> {new_count}")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Compare local file with remote thread.
 
         Returns human-readable summary of differences, or None if unchanged.
         For threads this means checking for new messages in the conversation.
         """
+        path = self.path
         content = path.read_text(encoding="utf-8")
 
         match = re.search(r"^thread_id:\s*(\S+)", content, re.MULTILINE)

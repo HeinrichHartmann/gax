@@ -12,14 +12,7 @@ from pathlib import Path
 from .multipart import parse_multipart
 from .gsheet import pull_all
 from .gsheet.frontmatter import parse_content
-from .label import Label
-from .filter import Filter
-from .gcal import Cal, Event
-from .gtask import TaskList as TaskListResource, Task as TaskSingleResource
-from .form import Form
-from .draft import Draft
-from .contacts import Contacts
-from .mail import Thread, Mailbox
+from .gtask import Task as TaskSingleResource
 from .gdrive import File
 
 
@@ -169,7 +162,7 @@ def _pull_folder(
 
             from .gsheet import Sheet
 
-            Sheet().clone(url, output=scratch_path, fmt=fmt)
+            Sheet.from_url(url).clone(output=scratch_path, fmt=fmt)
 
         elif checkout_type == "gax/doc-checkout":
             url = metadata.get("url")
@@ -178,7 +171,7 @@ def _pull_folder(
 
             from .gdoc import Doc
 
-            Doc().clone(url, output=scratch_path)
+            Doc.from_url(url).clone(output=scratch_path)
 
         elif checkout_type == "gax/slides-checkout":
             url = metadata.get("url")
@@ -188,7 +181,7 @@ def _pull_folder(
 
             from .gslides import Presentation
 
-            Presentation().clone(url, output=scratch_path, fmt=fmt)
+            Presentation.from_url(url).clone(output=scratch_path, fmt=fmt)
 
         elif checkout_type == "gax/drive-checkout":
             # Drive folders pull in-place (no scratch dir diffing for binary files)
@@ -205,7 +198,7 @@ def _pull_folder(
                 shutil.rmtree(scratch_path)
             for task_file in sorted(folder_path.glob("*.task.gax.yaml")):
                 try:
-                    TaskSingleResource().pull(task_file)
+                    TaskSingleResource.from_file(task_file).pull()
                 except ValueError:
                     pass
             return True, "updated"
@@ -214,6 +207,8 @@ def _pull_folder(
             # Contacts checkouts pull in-place
             if scratch_path.exists():
                 shutil.rmtree(scratch_path)
+            from .contacts import Contacts
+
             Contacts().pull_checkout(folder_path)
             return True, "updated"
 
@@ -364,12 +359,15 @@ def _push_file(
     Returns:
         Tuple of (success, message)
     """
+    from .resource import Resource
+
     file_type = _detect_file_type(file_path)
 
     if not file_type:
         return False, f"Unknown file type for {file_path}"
 
     try:
+        # Special case: sheet-tab has custom confirmation with row count
         if file_type == "gax/sheet-tab":
             try:
                 from .gsheet import SheetTab
@@ -388,75 +386,20 @@ def _push_file(
                     if not click.confirm("Proceed?"):
                         return False, "cancelled"
 
-                SheetTab().push(file_path, with_formulas=with_formulas)
+                SheetTab(path=file_path).push(with_formulas=with_formulas)
                 return True, f"pushed {row_count} rows"
             except ValueError as e:
                 return False, str(e)
 
-        elif file_type == "gax/doc":
-            try:
-                from .gdoc import Tab
+        # Special case: multipart sheet push not supported
+        if file_type == "gax/sheet":
+            return (
+                False,
+                "Multipart sheet push not supported. Use 'gax push <folder>.sheet.gax.md.d' or 'gax sheet tab push' for individual tabs.",
+            )
 
-                t = Tab()
-                diff_text = t.diff(file_path)
-                if diff_text is None:
-                    return True, "no changes"
-                if not yes:
-                    click.echo(diff_text)
-                    if not click.confirm("Push these changes?"):
-                        return False, "cancelled"
-                t.push(file_path)
-                return True, "pushed"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/draft":
-            try:
-                d = Draft()
-                diff_text = d.diff(file_path)
-                if diff_text is None:
-                    return True, "no changes"
-                if not yes:
-                    click.echo(diff_text)
-                    if not click.confirm("Push these changes?"):
-                        return False, "cancelled"
-                d.push(file_path)
-                return True, "pushed"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/cal":
-            try:
-                e = Event()
-                diff_text = e.diff(file_path)
-                if diff_text is None:
-                    return True, "no changes"
-                if not yes:
-                    click.echo(diff_text)
-                    if not click.confirm("Push these changes?"):
-                        return False, "cancelled"
-                link = e.push(file_path)
-                return True, f"pushed {link}"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/task":
-            try:
-                t = TaskSingleResource()
-                diff_text = t.diff(file_path)
-                if diff_text is None:
-                    return True, "no changes"
-                if not yes:
-                    click.echo(diff_text)
-                    if not click.confirm("Push these changes?"):
-                        return False, "cancelled"
-                t.push(file_path)
-                return True, "pushed"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/file":
-            # This is a tracking file, find the actual file
+        # Special case: Drive file tracking indirection
+        if file_type == "gax/file":
             from .gdrive import read_tracking_file
 
             tracking_data = read_tracking_file(file_path)
@@ -465,8 +408,6 @@ def _push_file(
             if not file_id:
                 return False, "No file_id in tracking file"
 
-            # Find the actual file (tracking file without .gax.md suffix)
-            # e.g. report.pdf.gax.md -> report.pdf
             name = file_path.name
             if not name.endswith(".gax.md"):
                 return False, f"Cannot find actual file for {file_path}"
@@ -480,35 +421,31 @@ def _push_file(
                 if not click.confirm("Proceed?"):
                     return False, "cancelled"
 
-            File().push(actual_file)
+            File(path=actual_file).push()
             return True, "pushed to Drive"
 
-        elif file_type == "gax/sheet":
-            return (
-                False,
-                "Multipart sheet push not supported. Use 'gax push <folder>.sheet.gax.md.d' or 'gax sheet tab push' for individual tabs.",
-            )
-
-        elif file_type == "gax/slides":
-            try:
-                from .gslides import Slide
-
-                s = Slide()
-                diff_text = s.diff(file_path)
-                if diff_text is None:
-                    return True, "no changes"
-                if not yes:
-                    click.echo(diff_text)
-                    if not click.confirm("Push these changes?"):
-                        return False, "cancelled"
-                s.push(file_path)
-                return True, "pushed"
-            except ValueError as e:
-                return False, str(e)
-
-        else:
+        # Generic dispatch: diff → confirm → push
+        try:
+            r = Resource.from_file(file_path)
+        except ValueError:
             return False, f"Push not supported for type: {file_type}"
 
+        try:
+            diff_text = r.diff()
+        except NotImplementedError:
+            return False, f"Push not supported for type: {file_type}"
+
+        if diff_text is None:
+            return True, "no changes"
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Push these changes?"):
+                return False, "cancelled"
+        r.push()
+        return True, "pushed"
+
+    except ValueError as e:
+        return False, str(e)
     except Exception as e:
         return False, str(e)
 
@@ -547,15 +484,15 @@ def _push_folder(
         if checkout_type == "gax/sheet-checkout":
             from .gsheet import Sheet
 
-            s = Sheet()
-            diff_text = s.diff(folder_path)
+            s = Sheet(path=folder_path)
+            diff_text = s.diff()
             if diff_text is None:
                 return True, "no changes"
             if not yes:
                 click.echo("\n" + diff_text)
                 if not click.confirm("\nPush these changes?"):
                     return False, "cancelled"
-            s.push(folder_path, with_formulas=with_formulas)
+            s.push(with_formulas=with_formulas)
             return True, "pushed"
 
         elif checkout_type == "gax/doc-checkout":
@@ -575,18 +512,20 @@ def _push_folder(
                 )
             from .gslides import Presentation
 
-            p = Presentation()
-            diff_text = p.diff(folder_path)
+            p = Presentation.from_file(folder_path)
+            diff_text = p.diff()
             if diff_text is None:
                 return True, "no changes"
             if not yes:
                 click.echo("\n" + diff_text)
                 if not click.confirm("\nPush these changes?"):
                     return False, "cancelled"
-            p.push(folder_path)
+            p.push()
             return True, "pushed"
 
         elif checkout_type == "gax/contacts-checkout":
+            from .contacts import Contacts
+
             c = Contacts()
             diff_text = c.diff_checkout(folder_path)
             if diff_text is None:
@@ -607,146 +546,44 @@ def _push_folder(
 
 def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
     """Pull a single .gax.md file. Returns (success, message)."""
+    from .resource import Resource
+
+    # Special case: multipart sheet uses pull_all (not a Resource)
     file_type = _detect_file_type(file_path)
+    if file_type == "gax/sheet":
+        try:
+            rows = pull_all(file_path)
+            return True, f"{rows} rows"
+        except ValueError as e:
+            return False, str(e)
 
-    if not file_type:
-        return False, f"Unknown file type for {file_path}"
+    # Special case: single contact (not a Resource)
+    if file_type == "gax/contact":
+        try:
+            from .contacts import yaml_to_contact, contact_to_yaml
 
+            c = yaml_to_contact(file_path.read_text(encoding="utf-8"))
+            rn = c.get("resourceName", "")
+            if not rn:
+                return False, "Contact has no resourceName"
+            from .contacts import fetch_contacts, api_to_contact
+
+            raw, groups = fetch_contacts()
+            for raw_c in raw:
+                if raw_c.get("resourceName") == rn:
+                    updated = api_to_contact(raw_c, groups)
+                    file_path.write_text(contact_to_yaml(updated), encoding="utf-8")
+                    return True, "updated"
+            return False, f"Contact {rn} not found remotely"
+        except ValueError as e:
+            return False, str(e)
+
+    # Generic dispatch via Resource.from_file
     try:
-        # Handle labels and filters first (YAML-only, not multipart)
-        if file_type == "gax/labels":
-            try:
-                Label().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        if file_type == "gax/filters":
-            try:
-                Filter().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-        if file_type == "gax/doc":
-            try:
-                from .gdoc import Tab
-
-                Tab().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/sheet":
-            try:
-                rows = pull_all(file_path)
-                return True, f"{rows} rows"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/sheet-tab":
-            try:
-                from .gsheet import SheetTab
-
-                SheetTab().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/mail":
-            try:
-                Thread().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/draft":
-            try:
-                Draft().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/list":
-            try:
-                Mailbox().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/cal":
-            try:
-                Event().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/cal-list":
-            try:
-                Cal().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/task":
-            try:
-                TaskSingleResource().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/task-list":
-            try:
-                TaskListResource().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/form":
-            try:
-                Form().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/contact":
-            try:
-                from .contacts import yaml_to_contact, contact_to_yaml
-
-                c = yaml_to_contact(file_path.read_text(encoding="utf-8"))
-                rn = c.get("resourceName", "")
-                if not rn:
-                    return False, "Contact has no resourceName"
-                # Re-fetch and overwrite
-                from .contacts import fetch_contacts, api_to_contact
-
-                raw, groups = fetch_contacts()
-                for raw_c in raw:
-                    if raw_c.get("resourceName") == rn:
-                        updated = api_to_contact(raw_c, groups)
-                        file_path.write_text(contact_to_yaml(updated), encoding="utf-8")
-                        return True, "updated"
-                return False, f"Contact {rn} not found remotely"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/contacts":
-            try:
-                Contacts().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        elif file_type == "gax/slides":
-            try:
-                from .gslides import Slide
-
-                Slide().pull(file_path)
-                return True, "updated"
-            except ValueError as e:
-                return False, str(e)
-
-        else:
-            return False, f"Unsupported type: {file_type}"
-
+        r = Resource.from_file(file_path)
+        r.pull()
+        return True, "updated"
+    except ValueError as e:
+        return False, str(e)
     except Exception as e:
         return False, str(e)

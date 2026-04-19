@@ -431,11 +431,38 @@ def format_diff_summary(changes: dict) -> str:
 
 
 class Filter(Resource):
-    """Gmail filter resource."""
+    """Gmail filter resource.
+
+    Constructed via from_file(path) or directly with Filter(path=...).
+    Account-level resource (no URL dispatch).
+    """
 
     name = "filter"
 
-    def clone(self, url: str = "", output: Path | None = None, **kw) -> Path:
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
+
+    @classmethod
+    def from_file(cls, path: Path) -> "Filter":
+        """Construct from a filters file."""
+        name = path.name.lower()
+        if "filters" in name:
+            return cls(path=path)
+        # Check YAML header for type field
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        if content.startswith("---\n"):
+            parts = content.split("---\n", 2)
+            if len(parts) >= 3:
+                header_data = yaml.safe_load(parts[1]) or {}
+                if header_data.get("type") == "gax/filters":
+                    return cls(path=path)
+        raise ValueError(f"Not a filters file: {path}")
+
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone Gmail filters to a local file."""
         service = get_service()
         filters = self._fetch_normalized(service=service)
@@ -453,7 +480,7 @@ class Filter(Resource):
         logger.info(f"Filters: {len(filters)}")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest filters from Gmail."""
         service = get_service()
         filters = self._fetch_normalized(service=service)
@@ -462,7 +489,7 @@ class Filter(Resource):
             pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         content = format_filters_file(header, filters)
-        path.write_text(content, encoding="utf-8")
+        self.path.write_text(content, encoding="utf-8")
         logger.info(f"Filters: {len(filters)}")
 
     def list(self, out, **kw) -> None:
@@ -508,9 +535,9 @@ class Filter(Resource):
                 f"\t{labels_str}\t{actions_str}\n"
             )
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local filters file and Gmail."""
-        _, desired_filters = parse_filters_file(path)
+        _, desired_filters = parse_filters_file(self.path)
 
         service = get_service()
         current_filters = fetch_filters(service=service)
@@ -520,9 +547,9 @@ class Filter(Resource):
         summary = format_diff_summary(changes)
         return summary or None
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push local filter changes to Gmail. Unconditional."""
-        _, desired_filters = parse_filters_file(path)
+        _, desired_filters = parse_filters_file(self.path)
 
         service = get_service()
         current_filters = fetch_filters(service=service)

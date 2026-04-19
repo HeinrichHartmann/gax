@@ -16,9 +16,9 @@ Design decisions
 
 Same conventions as draft.py (see its docstring for full rationale).
 
-  Mailbox does NOT inherit from Resource — its operations don't map
-  cleanly to clone(url)/pull(path)/diff/push. Instead it has
-  domain-specific methods: list, clone, pull, compute_plan, apply_plan, fetch.
+  Mailbox inherits from Resource and follows the constructor pattern
+  (from_file, from_url). It also has domain-specific methods beyond
+  the standard Resource interface: list, compute_plan, apply_plan, fetch.
 
   The plan/apply workflow uses an intermediate YAML file. compute_plan
   returns the plan dict; apply_plan takes the plan dict. cli.py handles
@@ -35,6 +35,7 @@ from typing import Any
 from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
+from ..resource import Resource
 
 from .shared import (
     _get_header,
@@ -414,8 +415,48 @@ def _get_label_mappings(service) -> tuple[dict, dict]:
 # =============================================================================
 
 
-class Mailbox:
-    """Gmail mailbox operations — thread list management."""
+class Mailbox(Resource):
+    """Gmail mailbox operations — thread list management.
+
+    Constructed via from_file(path) for file-based operations,
+    or directly for list/clone/fetch operations.
+    """
+
+    name = "mailbox"
+
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
+
+    @classmethod
+    def from_url(cls, url: str) -> "Mailbox":
+        """Mailbox has no URL pattern (account-level)."""
+        raise ValueError(f"Mailbox does not support URL construction: {url}")
+
+    @classmethod
+    def from_file(cls, path: Path) -> "Mailbox":
+        """Construct from a mailbox list file."""
+        name = path.name.lower()
+        # Check for mailbox extension
+        if name.endswith(".mailbox.gax.md"):
+            return cls(path=path)
+        # Check YAML header for type or query field
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        if content.startswith("---"):
+            for line in content.split("\n"):
+                if line.startswith("type:"):
+                    file_type = line.split(":", 1)[1].strip()
+                    if file_type == "gax/list":
+                        return cls(path=path)
+                    break
+                if line.startswith("query:"):
+                    return cls(path=path)
+                if line == "---" and content.index(line) > 0:
+                    break
+        raise ValueError(f"Not a mailbox file: {path}")
 
     def list(self, out, *, query: str = "in:inbox", limit: int = 20) -> None:
         """List threads matching query as TSV to file descriptor."""
@@ -487,8 +528,9 @@ class Mailbox:
         logger.info(f"Cloned {len(thread_data)} threads")
         return output_path
 
-    def pull(self, path: Path) -> None:
+    def pull(self, **kw) -> None:
         """Re-fetch thread list from Gmail."""
+        path = self.path
         header = _parse_gax_header(path)
         if not header["query"]:
             raise ValueError(f"No query found in {path} header")
@@ -504,12 +546,13 @@ class Mailbox:
         _write_gax_file(path, header["query"], header["limit"], thread_data)
         logger.info(f"Pulled {len(thread_data)} threads")
 
-    def compute_plan(self, path: Path) -> dict:
+    def compute_plan(self) -> dict:
         """Compute label changes between local file and Gmail.
 
         Returns plan dict with 'source', 'generated', 'changes' keys.
         Raises ValueError on parsing errors or API failures.
         """
+        path = self.path
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
 

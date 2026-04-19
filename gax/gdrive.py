@@ -315,17 +315,62 @@ def list_folder(folder_id: str, *, recursive: bool = False, service=None) -> lis
 
 
 class File(Resource):
-    """Google Drive file resource."""
+    """Google Drive file resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "file"
 
-    def _tracking_path(self, path: Path) -> Path:
-        """Compute sidecar tracking file path for an actual file."""
-        return path.with_suffix(path.suffix + ".gax.md")
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    @classmethod
+    def from_url(cls, url: str) -> "File":
+        """Construct from a Google Drive URL or file ID."""
+        if re.search(r"drive\.google\.com/file/d/", url):
+            return cls(url=url)
+        if re.search(r"drive\.google\.com/open\?id=", url):
+            return cls(url=url)
+        # Also accept raw file IDs
+        if re.fullmatch(r"[a-zA-Z0-9_-]+", url):
+            return cls(url=url)
+        raise ValueError(f"Not a Google Drive file URL: {url}")
+
+    @classmethod
+    def from_file(cls, path: Path) -> "File":
+        """Construct from a file that has a .gax.md tracking sidecar."""
+        # Check if this is a tracking file itself
+        name = path.name.lower()
+        if name.endswith(".gax.md"):
+            try:
+                data = read_tracking_file(path)
+                if data.get("type") == "gax/file" or "file_id" in data:
+                    # The path points to the tracking file; derive actual file path
+                    actual = path.parent / path.name[:-7]  # strip .gax.md
+                    return cls(path=actual)
+            except Exception:
+                pass
+        # Check if a sidecar tracking file exists for this file
+        tracking = path.with_suffix(path.suffix + ".gax.md")
+        if tracking.exists():
+            try:
+                data = read_tracking_file(tracking)
+                if data.get("type") == "gax/file" or "file_id" in data:
+                    return cls(path=path)
+            except Exception:
+                pass
+        raise ValueError(f"Not a tracked Drive file: {path}")
+
+    def _tracking_path(self) -> Path:
+        """Compute sidecar tracking file path for the actual file."""
+        return self.path.with_suffix(self.path.suffix + ".gax.md")
+
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a file from Google Drive. Returns path created."""
-        file_id = extract_file_id(url)
+        file_id = extract_file_id(self.url)
         logger.info(f"Fetching file: {file_id}")
 
         creds = get_authenticated_credentials()
@@ -350,9 +395,9 @@ class File(Resource):
         logger.info(f"Size: {metadata.get('size', 'unknown')} bytes")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest version from Google Drive."""
-        tracking_path = self._tracking_path(path)
+        tracking_path = self._tracking_path()
         if not tracking_path.exists():
             raise ValueError(
                 f"No tracking file found: {tracking_path}\n"
@@ -365,13 +410,13 @@ class File(Resource):
             raise ValueError("No file_id in tracking file")
 
         logger.info("Downloading latest version")
-        metadata = download_file(file_id, path)
-        create_tracking_file(path, metadata)
+        metadata = download_file(file_id, self.path)
+        create_tracking_file(self.path, metadata)
         logger.info(f"Size: {metadata.get('size', 'unknown')} bytes")
 
-    def push(self, path: Path, *, public: bool = False, **kw) -> None:
+    def push(self, *, public: bool = False, **kw) -> None:
         """Push local file to Google Drive. Unconditional."""
-        tracking_path = self._tracking_path(path)
+        tracking_path = self._tracking_path()
 
         if tracking_path.exists():
             tracking_data = read_tracking_file(tracking_path)
@@ -380,12 +425,12 @@ class File(Resource):
                 raise ValueError("No file_id in tracking file")
 
             logger.info(f"Updating Drive file: {file_id}")
-            metadata = update_file(file_id, path, public=public if public else None)
+            metadata = update_file(file_id, self.path, public=public if public else None)
         else:
-            logger.info(f"Uploading: {path.name}")
-            metadata = upload_file(path, public=public)
+            logger.info(f"Uploading: {self.path.name}")
+            metadata = upload_file(self.path, public=public)
 
-        create_tracking_file(path, metadata)
+        create_tracking_file(self.path, metadata)
         logger.info(f"View: {metadata.get('webViewLink', '')}")
 
 
@@ -525,7 +570,7 @@ class Folder:
             actual = sidecar.parent / sidecar.name[:-7]  # strip .gax.md
             if actual.exists():
                 try:
-                    File().pull(actual)
+                    File(path=actual).pull()
                     updated += 1
                 except Exception as e:
                     logger.warning(f"{actual}: {e}")
@@ -609,13 +654,13 @@ class Folder:
 
             output = target_dir / f"{safe_name}.doc.gax.md"
             if not output.exists():
-                Tab().clone(url, output=output)
+                Tab.from_url(url).clone(output=output)
         elif resource_type == "sheet":
             from .gsheet.sheet import SheetTab
 
             output = target_dir / f"{safe_name}.sheet.gax.md"
             if not output.exists():
-                SheetTab().clone(url, output=output)
+                SheetTab.from_url(url).clone(output=output)
         elif resource_type == "form":
             from .form import Form
 
@@ -627,7 +672,7 @@ class Folder:
 
             output = target_dir / f"{safe_name}.slides.gax.md.d"
             if not output.exists():
-                Presentation().clone(url, output=output)
+                Presentation.from_url(url).clone(output=output)
 
 
 def _workspace_url_path(resource_type: str) -> str:

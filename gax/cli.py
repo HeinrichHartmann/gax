@@ -41,6 +41,8 @@ from .form import Form
 from .draft import Draft
 from .contacts import Contacts
 from .gdrive import File
+from .gdoc import Tab, Doc  # noqa: F401 — registers with Resource._subclasses
+from .gslides import Slide, Presentation  # noqa: F401
 from .cli_helper import (
     _detect_file_type,
     _pull_folder,
@@ -127,7 +129,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
                     if tracking_path.exists():
                         try:
                             logger.info(f"Pulling Drive file {path}")
-                            File().pull(path)
+                            File(path=path).pull()
                             results.append((path, True, "updated"))
                             op.advance()
                             continue
@@ -251,7 +253,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
                                 click.echo("Cancelled.")
                                 continue
 
-                        File().push(path)
+                        File(path=path).push()
 
                         click.echo(f"Pushed {path} to Drive")
                         success_count += 1
@@ -298,43 +300,31 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
 
     Supports Google Docs, Sheets, Forms, Gmail, and Calendar events.
     """
-    # Google Docs
-    if re.search(r"docs\.google\.com/document/d/", url):
-        ctx.invoke(doc.commands["clone"], url=url, output=output)
+    from .resource import Resource
 
-    # Google Sheets
-    elif re.search(r"docs\.google\.com/spreadsheets/d/", url):
-        ctx.invoke(sheet_clone, url=url, output=output)
-
-    # Google Forms
-    elif re.search(r"docs\.google\.com/forms/d/", url):
-        ctx.invoke(form_clone, url=url, output=output, fmt=fmt)
-
-    # Gmail drafts (must come before general mail pattern)
-    elif re.search(r"mail\.google\.com/mail/[^#]*#drafts/", url):
-        ctx.invoke(draft_clone, draft_id_or_url=url, output=output)
-
-    # Gmail threads
-    elif re.search(r"mail\.google\.com/mail/", url):
-        ctx.invoke(mail_clone, thread_id_or_url=url, output=output)
-
-    # Calendar events
-    elif re.search(r"calendar\.google\.com/calendar/", url):
-        ctx.invoke(
-            cal_event_group.commands["clone"],
-            id_or_url=url,
-            output_path=output,
-        )
-
-    # Google Slides (always checkout — no single-file clone)
-    elif re.search(r"docs\.google\.com/presentation/d/", url):
-        ctx.invoke(slides_checkout, url=url, output=output, fmt="md")
-
-    else:
+    try:
+        r = Resource.from_url(url)
+    except ValueError:
         click.echo(f"Unrecognized URL: {url}", err=True)
         click.echo(
             "Supported: Google Docs/Sheets/Forms/Slides, Gmail, Calendar", err=True
         )
+        sys.exit(1)
+
+    try:
+        from .ui import success
+
+        path = r.clone(output=output, fmt=fmt)
+        success(f"Created: {path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+    except Exception as e:
+        from .ui import error
+
+        error(f"Error: {e}")
         sys.exit(1)
 
 
@@ -347,7 +337,7 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
 def checkout(ctx, url: str, output: Path | None, fmt: str):
     """Checkout a Google resource from URL into a folder of individual files.
 
-    Supports Google Docs, Sheets, and Calendar.
+    Supports Google Docs, Sheets, Slides, and Calendar.
 
     \b
     Examples:
@@ -355,38 +345,35 @@ def checkout(ctx, url: str, output: Path | None, fmt: str):
         gax checkout <sheets-url> -f csv
         gax checkout <calendar-url> -o Week/
     """
-    # Google Docs
-    if re.search(r"docs\.google\.com/document/d/", url):
-        kwargs = {"url": url}
-        if output:
-            kwargs["output"] = output
-        ctx.invoke(doc.commands["checkout"], **kwargs)
+    from .gsheet import Sheet
+    from .gcal import Cal
 
-    # Google Sheets
-    elif re.search(r"docs\.google\.com/spreadsheets/d/", url):
-        kwargs = {"url": url, "fmt": fmt}
-        if output:
-            kwargs["output"] = output
-        ctx.invoke(sheet_checkout, **kwargs)
+    for cls in [Doc, Sheet, Cal, Presentation]:
+        try:
+            r = cls.from_url(url)
+        except ValueError:
+            continue
 
-    # Calendar
-    elif re.search(r"calendar\.google\.com/calendar/", url):
-        kwargs = {}
-        if output:
-            kwargs["output"] = output
-        ctx.invoke(cal_checkout_cmd, **kwargs)
+        try:
+            from .ui import success
 
-    # Google Slides
-    elif re.search(r"docs\.google\.com/presentation/d/", url):
-        kwargs = {"url": url, "fmt": fmt if fmt in ("md", "json") else "md"}
-        if output:
-            kwargs["output"] = output
-        ctx.invoke(slides_checkout, **kwargs)
+            path = r.clone(output=output, fmt=fmt)
+            success(f"Checked out: {path}")
+        except ValueError as e:
+            from .ui import error
 
-    else:
-        click.echo(f"Unrecognized URL: {url}", err=True)
-        click.echo("Supported: Google Docs, Sheets, Slides, Calendar", err=True)
-        sys.exit(1)
+            error(str(e))
+            sys.exit(1)
+        except Exception as e:
+            from .ui import error
+
+            error(f"Error: {e}")
+            sys.exit(1)
+        return
+
+    click.echo(f"Unrecognized URL: {url}", err=True)
+    click.echo("Supported: Google Docs, Sheets, Slides, Calendar", err=True)
+    sys.exit(1)
 
 
 @main.command()
@@ -550,7 +537,7 @@ def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
     from .gsheet.client import GSheetClient
 
     try:
-        file_path = SheetTab().clone(url, output=output, fmt=fmt)
+        file_path = SheetTab.from_url(url).clone(output=output, fmt=fmt)
         click.echo(f"Created: {file_path}")
 
         if not quiet:
@@ -578,7 +565,7 @@ def sheet_pull(file: Path):
         if file.is_dir():
             from .gsheet import Sheet
 
-            Sheet().pull(file)
+            Sheet(path=file).pull()
             ui_success(f"Pulled: {file}")
         else:
             rows = pull_all(file)
@@ -620,7 +607,7 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
     try:
         from .ui import success as ui_success
 
-        folder = Sheet().clone(url, output=output, fmt=fmt)
+        folder = Sheet.from_url(url).clone(output=output, fmt=fmt)
         ui_success(f"Checked out to: {folder}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -647,8 +634,8 @@ def sheet_push(folder: Path, with_formulas: bool, yes: bool):
     from .gsheet import Sheet
 
     try:
-        s = Sheet()
-        diff_text = s.diff(folder)
+        s = Sheet(path=folder)
+        diff_text = s.diff()
         if diff_text is None:
             click.echo("No changes to push.")
             return
@@ -657,7 +644,7 @@ def sheet_push(folder: Path, with_formulas: bool, yes: bool):
             if not click.confirm("\nPush these changes?"):
                 click.echo("Cancelled.")
                 return
-        s.push(folder, with_formulas=with_formulas)
+        s.push(with_formulas=with_formulas)
         click.echo("Pushed successfully.")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -683,7 +670,7 @@ def sheet_plan(folder):
         if folder is None:
             folder = _find_sheet_folder()
 
-        diff_text = Sheet().diff(folder)
+        diff_text = Sheet(path=folder).diff()
         if diff_text is None:
             click.echo("No changes to push.")
         else:
@@ -721,8 +708,8 @@ def sheet_apply(folder, with_formulas: bool, yes: bool):
         if folder is None:
             folder = _find_sheet_folder()
 
-        s = Sheet()
-        diff_text = s.diff(folder)
+        s = Sheet(path=folder)
+        diff_text = s.diff()
         if diff_text is None:
             click.echo("Nothing to apply.")
             return
@@ -733,7 +720,7 @@ def sheet_apply(folder, with_formulas: bool, yes: bool):
             click.echo("Cancelled.")
             return
 
-        s.push(folder, with_formulas=with_formulas)
+        s.push(with_formulas=with_formulas)
         click.echo("Applied successfully.")
 
     except Exception as e:
@@ -754,7 +741,7 @@ def tab_list(url: str):
     from .gsheet import Sheet
 
     try:
-        Sheet().tab_list(url, sys.stdout)
+        Sheet.from_url(url).tab_list(sys.stdout)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -781,7 +768,7 @@ def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
     from .gsheet import SheetTab
 
     try:
-        file_path = SheetTab().clone(url, output=output, tab_name=tab_name, fmt=fmt)
+        file_path = SheetTab.from_url(url).clone(output=output, tab_name=tab_name, fmt=fmt)
         click.echo(f"Created: {file_path}")
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
@@ -798,7 +785,7 @@ def tab_pull(file: Path):
     from .gsheet import SheetTab
 
     try:
-        SheetTab().pull(file)
+        SheetTab(path=file).pull()
         click.echo(f"Pulled: {file}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -828,7 +815,7 @@ def tab_push(file: Path, with_formulas: bool, yes: bool):
             click.echo("Aborted.")
             return
 
-        SheetTab().push(file, with_formulas=with_formulas)
+        SheetTab(path=file).push(with_formulas=with_formulas)
         click.echo(f"Pushed {row_count} rows")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -905,7 +892,7 @@ def draft_clone(draft_id_or_url, output):
     try:
         from .ui import success
 
-        file_path = Draft().clone(url=draft_id_or_url, output=output)
+        file_path = Draft.from_url(draft_id_or_url).clone(output=output)
         success(f"Created: {file_path}")
     except (ValueError, Exception) as e:
         from .ui import error
@@ -945,8 +932,8 @@ def draft_push(file, yes):
     try:
         from .ui import success
 
-        d = Draft()
-        diff_text = d.diff(file)
+        d = Draft.from_file(file)
+        diff_text = d.diff()
         if diff_text is None:
             click.echo("No differences to push.")
             return
@@ -955,7 +942,7 @@ def draft_push(file, yes):
             if not click.confirm("Push these changes?"):
                 click.echo("Aborted.")
                 return
-        d.push(file)
+        d.push()
         success("Pushed successfully.")
     except ValueError as e:
         from .ui import error
@@ -978,7 +965,7 @@ def draft_pull(file):
     try:
         from .ui import success
 
-        Draft().pull(file)
+        Draft.from_file(file).pull()
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -1044,7 +1031,7 @@ def contacts_pull(file):
     try:
         from .ui import success
 
-        Contacts().pull(file)
+        Contacts(path=file).pull()
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -1065,8 +1052,8 @@ def contacts_push(file, yes):
     try:
         from .ui import success
 
-        c = Contacts()
-        diff_text = c.diff(file)
+        c = Contacts(path=file)
+        diff_text = c.diff()
         if diff_text is None:
             click.echo("No changes to push.")
             return
@@ -1075,7 +1062,7 @@ def contacts_push(file, yes):
             if not click.confirm("Push these changes?"):
                 click.echo("Aborted.")
                 return
-        c.push(file)
+        c.push()
         success("Pushed successfully.")
     except ValueError as e:
         from .ui import error
@@ -1143,7 +1130,7 @@ def file_clone(url_or_id, output):
     try:
         from .ui import success
 
-        file_path = File().clone(url=url_or_id, output=output)
+        file_path = File(url=url_or_id).clone(output=output)
         success(f"Created: {file_path}")
     except ValueError as e:
         from .ui import error
@@ -1197,7 +1184,7 @@ def file_pull(file_path):
     try:
         from .ui import success
 
-        File().pull(file_path)
+        File(path=file_path).pull()
         success(f"Updated: {file_path}")
     except ValueError as e:
         from .ui import error
@@ -1248,7 +1235,7 @@ def file_push(file_path, public, yes):
                     click.echo("Aborted.")
                     return
 
-        File().push(file_path, public=public)
+        File(path=file_path).push(public=public)
         success("Pushed successfully.")
     except ValueError as e:
         from .ui import error
@@ -1289,7 +1276,7 @@ def mail_clone(thread_id_or_url, output):
     try:
         from .ui import success
 
-        file_path = Thread().clone(url=thread_id_or_url, output=output)
+        file_path = Thread.from_url(thread_id_or_url).clone(output=output)
         success(f"Created: {file_path}")
     except (ValueError, Exception) as e:
         from .ui import error
@@ -1314,7 +1301,7 @@ def mail_pull(path):
     try:
         from .ui import success
 
-        Thread().pull(path)
+        Thread(path=path).pull()
         success(f"Updated: {path}")
     except ValueError as e:
         from .ui import error
@@ -1343,7 +1330,7 @@ def mail_reply(file_or_url, output):
     try:
         from .ui import success
 
-        out_path = Thread().reply(file_or_url, output=output)
+        out_path = Thread(url=file_or_url).reply(file_or_url, output=output)
         success(f"Created: {out_path}")
         click.echo(f"Edit the file, then run: gax draft push {out_path}")
     except ValueError as e:
@@ -1444,7 +1431,7 @@ def mailbox_pull(file):
     try:
         from .ui import success
 
-        Mailbox().pull(Path(file))
+        Mailbox(path=Path(file)).pull()
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -1466,7 +1453,7 @@ def mailbox_plan_cmd(file, output):
     import yaml
 
     try:
-        plan = Mailbox().compute_plan(Path(file))
+        plan = Mailbox(path=Path(file)).compute_plan()
 
         if not plan["changes"]:
             click.echo("No changes to apply.")
@@ -1600,7 +1587,7 @@ def label_clone(output, include_all):
     try:
         from .ui import success
 
-        file_path = Label().clone(output=output, include_all=include_all)
+        file_path = Label(path=output).clone(output=output, include_all=include_all)
         success(f"Created: {file_path}")
     except ValueError as e:
         from .ui import error
@@ -1617,7 +1604,7 @@ def label_pull(file, include_all):
     try:
         from .ui import success
 
-        Label().pull(file, include_all=include_all)
+        Label.from_file(file).pull(include_all=include_all)
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -1639,7 +1626,7 @@ def label_pull(file, include_all):
 def label_plan(file, output, allow_delete):
     """Preview label changes (diff)."""
     try:
-        diff_text = Label().diff(file, allow_delete=allow_delete)
+        diff_text = Label.from_file(file).diff(allow_delete=allow_delete)
         if diff_text is None:
             click.echo("No changes to apply.")
             return
@@ -1660,8 +1647,8 @@ def label_apply(file, yes, allow_delete):
     try:
         from .ui import success
 
-        lbl = Label()
-        diff_text = lbl.diff(file, allow_delete=allow_delete)
+        lbl = Label.from_file(file)
+        diff_text = lbl.diff(allow_delete=allow_delete)
         if diff_text is None:
             click.echo("No changes to apply.")
             return
@@ -1670,7 +1657,7 @@ def label_apply(file, yes, allow_delete):
             if not click.confirm("Apply these changes?"):
                 click.echo("Aborted.")
                 return
-        lbl.push(file, allow_delete=allow_delete)
+        lbl.push(allow_delete=allow_delete)
         success("Done.")
     except ValueError as e:
         from .ui import error
@@ -1717,7 +1704,7 @@ def filter_clone(output):
     try:
         from .ui import success
 
-        file_path = Filter().clone(output=output)
+        file_path = Filter(path=output).clone(output=output)
         success(f"Created: {file_path}")
     except ValueError as e:
         from .ui import error
@@ -1733,7 +1720,7 @@ def filter_pull(file):
     try:
         from .ui import success
 
-        Filter().pull(file)
+        Filter.from_file(file).pull()
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -1747,7 +1734,7 @@ def filter_pull(file):
 def filter_plan(file):
     """Preview filter changes (diff)."""
     try:
-        diff_text = Filter().diff(file)
+        diff_text = Filter.from_file(file).diff()
         if diff_text is None:
             click.echo("No changes to apply.")
             return
@@ -1767,8 +1754,8 @@ def filter_apply(file, yes):
     try:
         from .ui import success
 
-        flt = Filter()
-        diff_text = flt.diff(file)
+        flt = Filter.from_file(file)
+        diff_text = flt.diff()
         if diff_text is None:
             click.echo("No changes to apply.")
             return
@@ -1777,7 +1764,7 @@ def filter_apply(file, yes):
             if not click.confirm("Apply these changes?"):
                 click.echo("Aborted.")
                 return
-        flt.push(file)
+        flt.push()
         success("Done.")
     except ValueError as e:
         from .ui import error
@@ -1935,7 +1922,7 @@ def cal_pull_cmd(file: Path):
     try:
         from .ui import success
 
-        Cal().pull(file)
+        Cal(path=file).pull()
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -2017,7 +2004,7 @@ def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None)
     try:
         from .ui import success
 
-        file_path = Event().clone(id_or_url, calendar=calendar, output=output_path)
+        file_path = Event.from_url(id_or_url).clone(calendar=calendar, output=output_path)
         success(f"Cloned event to {file_path}")
     except ValueError as e:
         from .ui import error
@@ -2059,7 +2046,7 @@ def cal_event_pull_cmd(file_path: Path):
     try:
         from .ui import success
 
-        Event().pull(file_path)
+        Event(path=file_path).pull()
         success(f"Pulled latest data to {file_path}")
     except ValueError as e:
         from .ui import error
@@ -2076,8 +2063,8 @@ def cal_event_push_cmd(file_path: Path, yes: bool):
     try:
         from .ui import success
 
-        e = Event()
-        diff_text = e.diff(file_path)
+        ev = Event(path=file_path)
+        diff_text = ev.diff()
         if diff_text is None:
             click.echo("No changes to push.")
             return
@@ -2087,7 +2074,7 @@ def cal_event_push_cmd(file_path: Path, yes: bool):
                 click.echo("Cancelled.")
                 return
 
-        link = e.push(file_path)
+        link = ev.push()
         success(f"Pushed event: {link}")
     except ValueError as e:
         from .ui import error
@@ -2116,7 +2103,7 @@ def cal_event_delete_cmd(file_path: Path, yes: bool):
                 click.echo("Cancelled.")
                 return
 
-        title = Event().delete(file_path)
+        title = Event(path=file_path).delete()
         success(f"Deleted event '{title}'")
     except ValueError as e:
         from .ui import error
@@ -2232,9 +2219,9 @@ def task_pull_cmd(file_path: Path):
     try:
         name = file_path.name
         if name.endswith(".tasks.gax.md") or name.endswith(".tasks.gax.yaml"):
-            TaskList().pull(file_path)
+            TaskList.from_file(file_path).pull()
         else:
-            TaskResource().pull(file_path)
+            TaskResource.from_file(file_path).pull()
         from .ui import success
 
         success(f"Updated: {file_path}")
@@ -2276,7 +2263,7 @@ def task_new_cmd(title: str, tasklist: str | None, output: Path | None):
 def task_diff_cmd(file_path: Path):
     """Show differences between local task and remote."""
     try:
-        diff_text = TaskResource().diff(file_path)
+        diff_text = TaskResource.from_file(file_path).diff()
         if diff_text is None:
             click.echo("No changes.")
         else:
@@ -2294,8 +2281,8 @@ def task_diff_cmd(file_path: Path):
 def task_push_cmd(file_path: Path, yes: bool):
     """Push local task changes to API."""
     try:
-        t = TaskResource()
-        diff_text = t.diff(file_path)
+        t = TaskResource.from_file(file_path)
+        diff_text = t.diff()
         if diff_text is None:
             click.echo("No changes to push.")
             return
@@ -2304,7 +2291,7 @@ def task_push_cmd(file_path: Path, yes: bool):
             if not click.confirm("Push these changes?"):
                 click.echo("Cancelled.")
                 return
-        title = t.push(file_path)
+        title = t.push()
         from .ui import success
 
         success(f"Pushed: {title}")
@@ -2325,7 +2312,7 @@ def task_done_cmd(file_path: Path, yes: bool):
             if not click.confirm(f"Mark {file_path.name} as done?"):
                 click.echo("Cancelled.")
                 return
-        title = TaskResource().done(file_path)
+        title = TaskResource.from_file(file_path).done()
         from .ui import success
 
         success(f"Done: {title}")
@@ -2346,7 +2333,7 @@ def task_delete_cmd(file_path: Path, yes: bool):
             if not click.confirm(f"Delete {file_path.name}?"):
                 click.echo("Cancelled.")
                 return
-        title = TaskResource().delete(file_path)
+        title = TaskResource.from_file(file_path).delete()
         from .ui import success
 
         success(f"Deleted: {title}")
@@ -2395,7 +2382,7 @@ def form_clone(url, output, fmt):
     try:
         from .ui import success
 
-        file_path = Form().clone(url=url, output=output, format=fmt)
+        file_path = Form.from_url(url).clone(output=output, format=fmt)
         success(f"Created: {file_path}")
         if fmt == "md":
             click.echo("Note: Use --format yaml for round-trip safe format")
@@ -2413,7 +2400,7 @@ def form_pull(file):
     try:
         from .ui import success
 
-        Form().pull(file)
+        Form.from_file(file).pull()
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -2434,7 +2421,7 @@ def form_pull(file):
 def form_plan(file, output):
     """Preview form changes (diff)."""
     try:
-        diff_text = Form().diff(file)
+        diff_text = Form.from_file(file).diff()
         if diff_text is None:
             click.echo("No changes to apply.")
             return
@@ -2454,8 +2441,8 @@ def form_apply(file, yes):
     try:
         from .ui import success
 
-        f = Form()
-        diff_text = f.diff(file)
+        f = Form.from_file(file)
+        diff_text = f.diff()
         if diff_text is None:
             click.echo("No changes to apply.")
             return
@@ -2464,7 +2451,7 @@ def form_apply(file, yes):
             if not click.confirm("Apply these changes?"):
                 click.echo("Aborted.")
                 return
-        f.push(file)
+        f.push()
         success("Done.")
     except ValueError as e:
         from .ui import error
@@ -2495,10 +2482,9 @@ def doc_tab():
 @click.argument("url")
 def doc_tab_list(url: str):
     """List tabs in a document (TSV output)."""
-    from .gdoc import Doc
 
     try:
-        Doc().tab_list(url, sys.stdout)
+        Doc.from_url(url).tab_list(url, sys.stdout)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -2515,12 +2501,11 @@ def doc_tab_list(url: str):
 )
 def doc_tab_import(url: str, file: Path, output: Path | None):
     """Import a markdown file as a new tab in a document."""
-    from .gdoc import Doc
 
     try:
         from .ui import success
 
-        tracking_path = Doc().tab_import(url, file, output=output)
+        tracking_path = Doc.from_url(url).tab_import(url, file, output=output)
         success(f"Created: {tracking_path}")
     except ValueError as e:
         from .ui import error
@@ -2545,12 +2530,11 @@ def doc_tab_import(url: str, file: Path, output: Path | None):
 )
 def doc_tab_clone(url: str, tab_name: str, output: Path | None):
     """Clone a single tab to a .tab.gax.md file."""
-    from .gdoc import Tab
 
     try:
         from .ui import success
 
-        file_path = Tab().clone(url, output=output, tab_name=tab_name)
+        file_path = Tab.from_url(url).clone(output=output, tab_name=tab_name)
         success(f"Created: {file_path}")
     except ValueError as e:
         from .ui import error
@@ -2568,12 +2552,11 @@ def doc_tab_clone(url: str, tab_name: str, output: Path | None):
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def doc_tab_pull(file: Path):
     """Pull latest content for a single tab."""
-    from .gdoc import Tab
 
     try:
         from .ui import success
 
-        Tab().pull(file)
+        Tab.from_file(file).pull()
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -2591,10 +2574,9 @@ def doc_tab_pull(file: Path):
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def doc_tab_diff(file: Path):
     """Show diff between local file and remote tab."""
-    from .gdoc import Tab
 
     try:
-        diff_text = Tab().diff(file)
+        diff_text = Tab.from_file(file).diff()
         if diff_text is None:
             click.echo("No differences.")
         else:
@@ -2622,12 +2604,12 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
     elements. The ``--patch`` path is under evaluation and may fail on
     structural changes; when in doubt, omit the flag.
     """
-    from .gdoc import Tab, parse_multipart, extract_doc_id
+    from .gdoc import parse_multipart, extract_doc_id
 
     try:
         from .ui import success, error
 
-        t = Tab()
+        t = Tab.from_file(file)
 
         if use_patch:
             from .gdoc.diff_push import preview_diff
@@ -2663,10 +2645,10 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
                     click.echo("Aborted.")
                     return
 
-            t.push(file, use_patch=True)
+            t.push(use_patch=True)
             success("Patched successfully.")
         else:
-            diff_text = t.diff(file)
+            diff_text = t.diff()
             if diff_text is None:
                 click.echo("No differences to push.")
                 return
@@ -2695,7 +2677,7 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
                     click.echo("Aborted.")
                     return
 
-            t.push(file)
+            t.push()
             success("Pushed successfully.")
 
     except Exception as e:
@@ -2729,12 +2711,12 @@ def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
 
     Clones a single tab. For multi-tab documents, use 'gax doc checkout'.
     """
-    from .gdoc import Tab, extract_doc_id, get_tabs_list
+    from .gdoc import extract_doc_id, get_tabs_list
 
     try:
         from .ui import success
 
-        file_path = Tab().clone(url, output=output, with_comments=with_comments)
+        file_path = Tab.from_url(url).clone(output=output, with_comments=with_comments)
         success(f"Created: {file_path}")
 
         if not quiet:
@@ -2768,12 +2750,11 @@ def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
 )
 def doc_pull(file: Path, with_comments: bool):
     """Pull latest content from Google Docs to local file."""
-    from .gdoc import Tab
 
     try:
         from .ui import success
 
-        Tab().pull(file, with_comments=with_comments)
+        Tab.from_file(file).pull(with_comments=with_comments)
         success(f"Updated: {file}")
     except ValueError as e:
         from .ui import error
@@ -2800,12 +2781,11 @@ def doc_checkout(url: str, output: Path | None):
 
     Creates a folder with individual .doc.gax.md files for each tab.
     """
-    from .gdoc import Doc
 
     try:
         from .ui import success
 
-        folder = Doc().clone(url, output=output)
+        folder = Doc.from_url(url).clone(output=output)
         success(f"Checked out to: {folder}")
     except ValueError as e:
         from .ui import error
@@ -2868,7 +2848,7 @@ def slides_checkout(url: str, output: Path | None, fmt: str):
         from .ui import success
         from .gslides import Presentation
 
-        folder_path = Presentation().clone(url, output=output, fmt=fmt)
+        folder_path = Presentation.from_url(url).clone(output=output, fmt=fmt)
         success(f"Checked out: {folder_path}")
     except ValueError as e:
         from .ui import error
@@ -2899,9 +2879,9 @@ def slides_pull(path: Path):
         from .gslides import Slide, Presentation
 
         if path.is_dir():
-            Presentation().pull(path)
+            Presentation.from_file(path).pull()
         else:
-            Slide().pull(path)
+            Slide.from_file(path).pull()
         success(f"Updated: {path}")
     except ValueError as e:
         from .ui import error
@@ -2934,8 +2914,8 @@ def slides_push(path: Path, yes: bool):
         from .gslides import Slide, Presentation
 
         if path.is_dir():
-            p = Presentation()
-            diff_text = p.diff(path)
+            p = Presentation.from_file(path)
+            diff_text = p.diff()
             if diff_text is None:
                 click.echo("No changes to push.")
                 return
@@ -2944,10 +2924,10 @@ def slides_push(path: Path, yes: bool):
                 if not click.confirm("Push these changes?"):
                     click.echo("Cancelled.")
                     return
-            p.push(path)
+            p.push()
         else:
-            s = Slide()
-            diff_text = s.diff(path)
+            s = Slide.from_file(path)
+            diff_text = s.diff()
             if diff_text is None:
                 click.echo("No changes to push.")
                 return
@@ -2956,7 +2936,7 @@ def slides_push(path: Path, yes: bool):
                 if not click.confirm("Push these changes?"):
                     click.echo("Cancelled.")
                     return
-            s.push(path)
+            s.push()
 
         from .ui import success
 

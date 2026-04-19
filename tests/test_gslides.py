@@ -199,7 +199,7 @@ class TestPresentationClone:
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
 
-        result = Presentation().clone("pres_abc123", output=output)
+        result = Presentation(url="pres_abc123").clone(output=output)
 
         assert result == output
         assert output.exists()
@@ -210,7 +210,7 @@ class TestPresentationClone:
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
 
-        Presentation().clone("pres_abc123", output=output)
+        Presentation(url="pres_abc123").clone(output=output)
 
         meta = yaml.safe_load((output / ".gax.yaml").read_text())
         assert meta["type"] == "gax/slides-checkout"
@@ -223,7 +223,7 @@ class TestPresentationClone:
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
 
-        Presentation().clone("pres_abc123", output=output)
+        Presentation(url="pres_abc123").clone(output=output)
 
         slide_files = sorted(output.glob("*.slides.gax.md"))
         assert len(slide_files) == 2
@@ -235,7 +235,7 @@ class TestPresentationClone:
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
 
-        Presentation().clone("pres_abc123", output=output, fmt="json")
+        Presentation(url="pres_abc123").clone(output=output, fmt="json")
 
         meta = yaml.safe_load((output / ".gax.yaml").read_text())
         assert meta["format"] == "json"
@@ -250,7 +250,7 @@ class TestPresentationClone:
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
 
-        Presentation().clone("pres_abc123", output=output)
+        Presentation(url="pres_abc123").clone(output=output)
 
         slide_file = sorted(output.glob("*.slides.gax.md"))[0]
         content = slide_file.read_text()
@@ -270,14 +270,14 @@ class TestPresentationPull:
         output = tmp_path / "test.slides.gax.md.d"
 
         # First checkout
-        Presentation().clone("pres_abc123", output=output)
+        Presentation(url="pres_abc123").clone(output=output)
 
         # Modify presentation title
         modified = {**SAMPLE_PRESENTATION, "title": "Updated Title"}
         mock_get.return_value = modified
 
         # Pull
-        Presentation().pull(output)
+        Presentation(path=output).pull()
 
         meta = yaml.safe_load((output / ".gax.yaml").read_text())
         assert meta["title"] == "Updated Title"
@@ -289,14 +289,14 @@ class TestPresentationPull:
         output = tmp_path / "test.slides.gax.md.d"
 
         # Checkout with 2 slides
-        Presentation().clone("pres_abc123", output=output)
+        Presentation(url="pres_abc123").clone(output=output)
         assert len(list(output.glob("*.slides.gax.md"))) == 2
 
         # Remote now has only one slide
         one_slide_pres = {**SAMPLE_PRESENTATION, "slides": [SAMPLE_SLIDE]}
         mock_get.return_value = one_slide_pres
 
-        Presentation().pull(output)
+        Presentation(path=output).pull()
 
         slide_files = list(output.glob("*.slides.gax.md"))
         assert len(slide_files) == 1
@@ -308,7 +308,7 @@ class TestPresentationPull:
         output = tmp_path / "test.slides.gax.md.d"
 
         # Checkout: slide_001 at index 0, slide_002 at index 1
-        Presentation().clone("pres_abc123", output=output)
+        Presentation(url="pres_abc123").clone(output=output)
         files_before = sorted(f.name for f in output.glob("*.slides.gax.md"))
         assert files_before[0].startswith("00_")
         assert files_before[1].startswith("01_")
@@ -320,7 +320,7 @@ class TestPresentationPull:
         }
         mock_get.return_value = reversed_pres
 
-        Presentation().pull(output)
+        Presentation(path=output).pull()
 
         files_after = sorted(f.name for f in output.glob("*.slides.gax.md"))
         assert len(files_after) == 2
@@ -340,19 +340,19 @@ class TestSlidePush:
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
 
-        Presentation().clone("pres_abc123", output=output)
+        Presentation(url="pres_abc123").clone(output=output)
 
         slide_file = sorted(output.glob("*.slides.gax.md"))[0]
 
         with pytest.raises(ValueError, match="not supported for markdown"):
-            Slide().push(slide_file)
+            Slide(path=slide_file).push()
 
     @patch("gax.gslides._get_presentation")
     def test_push_json_calls_api(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
 
-        Presentation().clone("pres_abc123", output=output, fmt="json")
+        Presentation(url="pres_abc123").clone(output=output, fmt="json")
 
         slide_file = sorted(output.glob("*.slides.gax.md"))[0]
 
@@ -363,7 +363,7 @@ class TestSlidePush:
             mock_service = MagicMock()
             mock_build.return_value = mock_service
 
-            Slide().push(slide_file)
+            Slide(path=slide_file).push()
 
             mock_service.presentations().batchUpdate.assert_called_once()
 
@@ -379,7 +379,7 @@ class TestPresentationPush:
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
 
-        Presentation().clone("pres_abc123", output=output)
+        Presentation(url="pres_abc123").clone(output=output)
 
         with pytest.raises(ValueError, match="not supported for markdown"):
-            Presentation().push(output)
+            Presentation(path=output).push()

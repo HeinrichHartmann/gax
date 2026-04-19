@@ -349,7 +349,7 @@ class TestTaskDiff:
         path = tmp_path / "new.task.gax.yaml"
         path.write_text(task_to_yaml(task))
 
-        result = Task().diff(path)
+        result = Task(path=path).diff()
         assert "New task" in result
         assert "2026-04-21" in result
 
@@ -366,7 +366,7 @@ class TestTaskDiff:
             "A", "TL1", "", "", "Same", "needsAction", due="2026-04-21"
         )
 
-        result = Task().diff(path)
+        result = Task(path=path).diff()
         assert result is None
 
     @patch("gax.gtask.get_task")
@@ -384,7 +384,7 @@ class TestTaskDiff:
             "A", "TL1", "", "", "Original title", "needsAction", due="2026-04-21"
         )
 
-        result = Task().diff(path)
+        result = Task(path=path).diff()
         assert "title:" in result
         assert "status:" in result
         assert "due:" in result
@@ -405,7 +405,7 @@ class TestTaskDone:
         path = tmp_path / "task.task.gax.yaml"
         path.write_text(task_to_yaml(task))
 
-        title = Task().done(path)
+        title = Task(path=path).done()
 
         assert title == "My task"
 

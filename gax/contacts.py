@@ -573,9 +573,39 @@ def format_diff_summary(
 
 
 class Contacts(Resource):
-    """Google Contacts resource."""
+    """Google Contacts resource.
+
+    Constructed via from_file(path).
+    Operations use instance state (self.path).
+    """
 
     name = "contacts"
+
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
+
+    @classmethod
+    def from_file(cls, path: Path) -> "Contacts":
+        """Construct from a contacts file (.contacts.gax.md or YAML with type: gax/contacts)."""
+        name = path.name.lower()
+        if name.endswith(".contacts.gax.md") or ".contacts." in name:
+            return cls(path=path)
+        # Check YAML header for type field
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        if content.startswith("---"):
+            end = content.find("\n---\n", 4)
+            if end != -1:
+                header_text = content[4:end]
+                for line in header_text.split("\n"):
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        if key.strip() == "type" and value.strip() == "gax/contacts":
+                            return cls(path=path)
+        raise ValueError(f"Not a contacts file: {path}")
 
     def _fetch_and_normalize(self, *, service=None):
         """Fetch contacts from API and normalize. Returns (normalized, groups)."""
@@ -584,7 +614,7 @@ class Contacts(Resource):
         return normalized, groups
 
     def clone(
-        self, url: str = "", output: Path | None = None, *, fmt: str = "md", **kw
+        self, output: Path | None = None, *, fmt: str = "md", **kw
     ) -> Path:
         """Clone all contacts to a local file."""
         logger.info("Fetching contacts...")
@@ -612,9 +642,9 @@ class Contacts(Resource):
         logger.info(f"Contacts: {len(normalized)}")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest contacts from Google."""
-        header, _ = parse_contacts_file(path)
+        header, _ = parse_contacts_file(self.path)
 
         logger.info("Fetching contacts...")
         normalized, _ = self._fetch_and_normalize()
@@ -630,12 +660,12 @@ class Contacts(Resource):
             pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         content = format_contacts_file(new_header, body)
-        path.write_text(content, encoding="utf-8")
+        self.path.write_text(content, encoding="utf-8")
         logger.info(f"Contacts: {len(normalized)}")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local JSONL and remote contacts."""
-        header, body = parse_contacts_file(path)
+        header, body = parse_contacts_file(self.path)
         if header.format != "jsonl":
             raise ValueError("diff/push only works with JSONL format")
 
@@ -647,9 +677,9 @@ class Contacts(Resource):
         creates, updates, deletes = compare_contacts(local_contacts, remote_contacts)
         return format_diff_summary(creates, updates, deletes) or None
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push local JSONL contacts to Google. Unconditional."""
-        header, body = parse_contacts_file(path)
+        header, body = parse_contacts_file(self.path)
         if header.format != "jsonl":
             raise ValueError("push only works with JSONL format")
 

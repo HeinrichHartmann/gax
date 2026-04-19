@@ -272,14 +272,51 @@ def fetch_draft(draft_id: str, *, service=None) -> tuple[DraftHeader, str]:
 # =============================================================================
 # Resource class — the public interface for cli.py.
 # All core operations are methods here. The class is stateless (no __init__).
-# cli.py calls Draft().clone(), Draft().push(), etc.
+# cli.py calls Draft.from_url(url).clone(), Draft.from_file(path).push(), etc.
 # =============================================================================
 
 
 class Draft(Resource):
-    """Gmail draft resource."""
+    """Gmail draft resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "draft"
+
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
+
+    @classmethod
+    def from_url(cls, url: str) -> "Draft":
+        """Construct from a Gmail drafts URL or draft ID."""
+        if re.search(r"mail\.google\.com/mail/[^#]*#drafts/", url):
+            return cls(url=url)
+        # Also accept raw draft IDs
+        if re.fullmatch(r"r?[A-Za-z0-9-]+", url):
+            return cls(url=url)
+        raise ValueError(f"Not a Gmail draft URL: {url}")
+
+    @classmethod
+    def from_file(cls, path: Path) -> "Draft":
+        """Construct from a .draft.gax.md file."""
+        name = path.name.lower()
+        if name.endswith(".draft.gax.md"):
+            return cls(path=path)
+        # Check YAML header for type field
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        if content.startswith("---"):
+            sections = multipart.parse_multipart(content)
+            if sections and sections[0].headers.get("type") == "gax/draft":
+                return cls(path=path)
+            if sections and "draft_id" in sections[0].headers:
+                return cls(path=path)
+        raise ValueError(f"Not a draft file: {path}")
 
     def _output_path(self, subject: str, output: Path | None) -> Path:
         if output:
@@ -360,9 +397,9 @@ class Draft(Resource):
             except Exception as e:
                 logger.warning(f"Error fetching {did}: {e}")
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a draft from Gmail to a local file."""
-        draft_id = parse_draft_id(url)
+        draft_id = parse_draft_id(self.url)
         logger.info(f"Fetching draft: {draft_id}")
 
         header, body = fetch_draft(draft_id)
@@ -376,9 +413,9 @@ class Draft(Resource):
         logger.info(f"Subject: {header.subject}, To: {header.to}")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest draft content from Gmail."""
-        content = path.read_text(encoding="utf-8")
+        content = self.path.read_text(encoding="utf-8")
         header, _ = parse_draft(content)
 
         if not header.draft_id:
@@ -386,16 +423,16 @@ class Draft(Resource):
 
         remote_header, remote_body = fetch_draft(header.draft_id)
         new_content = format_draft(remote_header, remote_body)
-        path.write_text(new_content, encoding="utf-8")
+        self.path.write_text(new_content, encoding="utf-8")
         logger.info(f"Subject: {remote_header.subject}, To: {remote_header.to}")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local draft and remote.
 
         Returns a human-readable diff string, or None if no changes.
         For new drafts (no draft_id), returns a summary of what will be created.
         """
-        content = path.read_text(encoding="utf-8")
+        content = self.path.read_text(encoding="utf-8")
         header, body = parse_draft(content)
 
         if not header.to:
@@ -432,9 +469,9 @@ class Draft(Resource):
 
         return "\n".join(lines) if lines else None
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push local draft to Gmail. Unconditional — caller handles confirmation."""
-        content = path.read_text(encoding="utf-8")
+        content = self.path.read_text(encoding="utf-8")
         header, body = parse_draft(content)
 
         if not header.to:
@@ -467,5 +504,5 @@ class Draft(Resource):
 
         header.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         new_content = format_draft(header, body)
-        path.write_text(new_content, encoding="utf-8")
+        self.path.write_text(new_content, encoding="utf-8")
         logger.info("Pushed successfully")

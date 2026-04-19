@@ -356,13 +356,44 @@ def format_diff_summary(changes: dict, skipped_deletes: int = 0) -> str:
 
 
 class Label(Resource):
-    """Gmail label resource."""
+    """Gmail label resource.
+
+    Constructed via from_file(path) or directly with Label(path=...).
+    Account-level resource (no URL dispatch).
+    """
 
     name = "label"
 
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
+
+    @classmethod
+    def from_file(cls, path: Path) -> "Label":
+        """Construct from a labels file."""
+        name = path.name.lower()
+        if "labels" in name:
+            return cls(path=path)
+        # Check YAML header for type field
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        # Skip comment lines
+        lines = content.split("\n")
+        while lines and lines[0].startswith("#"):
+            lines = lines[1:]
+        content_stripped = "\n".join(lines)
+        if content_stripped.startswith("---\n"):
+            parts = content_stripped.split("---\n", 2)
+            if len(parts) >= 3:
+                header_data = yaml.safe_load(parts[1]) or {}
+                if header_data.get("type") == "gax/labels":
+                    return cls(path=path)
+        raise ValueError(f"Not a labels file: {path}")
+
     def clone(
         self,
-        url: str = "",
         output: Path | None = None,
         *,
         include_all: bool = False,
@@ -384,7 +415,7 @@ class Label(Resource):
         logger.info(f"Labels: {len(labels)}")
         return file_path
 
-    def pull(self, path: Path, *, include_all: bool = False, **kw) -> None:
+    def pull(self, *, include_all: bool = False, **kw) -> None:
         """Pull latest labels from Gmail."""
         labels = self._fetch_normalized(include_all=include_all)
 
@@ -392,7 +423,7 @@ class Label(Resource):
             pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         content = format_labels_file(header, labels)
-        path.write_text(content, encoding="utf-8")
+        self.path.write_text(content, encoding="utf-8")
         logger.info(f"Labels: {len(labels)}")
 
     def list(self, out, **kw) -> None:
@@ -410,9 +441,9 @@ class Label(Resource):
                 f"{lbl.get('id', '')}\t{lbl.get('name', '')}\t{lbl.get('type', '')}\n"
             )
 
-    def diff(self, path: Path, *, allow_delete: bool = False, **kw) -> str | None:
+    def diff(self, *, allow_delete: bool = False, **kw) -> str | None:
         """Preview changes between local labels file and Gmail."""
-        _, desired_labels = parse_labels_file(path)
+        _, desired_labels = parse_labels_file(self.path)
 
         api_labels = fetch_labels()
         current_map = {lbl["name"]: lbl for lbl in api_labels}
@@ -437,9 +468,9 @@ class Label(Resource):
         summary = format_diff_summary(changes, skipped_deletes=skipped)
         return summary or None
 
-    def push(self, path: Path, *, allow_delete: bool = False, **kw) -> None:
+    def push(self, *, allow_delete: bool = False, **kw) -> None:
         """Push local label changes to Gmail. Unconditional."""
-        _, desired_labels = parse_labels_file(path)
+        _, desired_labels = parse_labels_file(self.path)
 
         service = get_service()
         api_labels = fetch_labels(service=service)

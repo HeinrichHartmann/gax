@@ -688,9 +688,41 @@ def parse_cal_list_file(path: Path) -> tuple[datetime, datetime, str | None, boo
 
 
 class Cal(Resource):
-    """Google Calendar resource."""
+    """Google Calendar resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "cal"
+
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
+
+    @classmethod
+    def from_url(cls, url: str) -> "Cal":
+        """Construct from a Google Calendar URL."""
+        if re.search(r"calendar\.google\.com/calendar/", url):
+            return cls(url=url)
+        raise ValueError(f"Not a Calendar URL: {url}")
+
+    @classmethod
+    def from_file(cls, path: Path) -> "Cal":
+        """Construct from a cal-list file."""
+        # Check YAML header for type field
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        if content.startswith("---"):
+            try:
+                header = yaml.safe_load(content.split("---", 2)[1])
+                if header and header.get("type") == "gax/cal-list":
+                    return cls(path=path)
+            except (yaml.YAMLError, IndexError):
+                pass
+        raise ValueError(f"Not a cal-list file: {path}")
 
     def calendars(self, out, **kw) -> None:
         """List available calendars to file descriptor."""
@@ -702,7 +734,6 @@ class Cal(Resource):
 
     def clone(
         self,
-        url: str = "",
         output: Path | None = None,
         *,
         calendar: str | None = None,
@@ -732,8 +763,9 @@ class Cal(Resource):
         logger.info(f"Events: {count}")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest events to existing list file."""
+        path = self.path
         time_min, time_max, calendar, verbose = parse_cal_list_file(path)
 
         # Recover original header values for re-serialization
@@ -878,15 +910,66 @@ class Cal(Resource):
 
 
 class Event(Resource):
-    """Google Calendar event resource."""
+    """Google Calendar event resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "event"
 
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
+
+    @classmethod
+    def from_url(cls, url: str) -> "Event":
+        """Construct from a Google Calendar event URL or event ID."""
+        if re.search(r"calendar\.google\.com/calendar/", url):
+            return cls(url=url)
+        # Also accept raw event IDs
+        if re.fullmatch(r"[A-Za-z0-9_-]+", url):
+            return cls(url=url)
+        raise ValueError(f"Not a Calendar event URL: {url}")
+
+    @classmethod
+    def from_file(cls, path: Path) -> "Event":
+        """Construct from a .cal.gax.md event file."""
+        name = path.name.lower()
+        if name.endswith(".cal.gax.md"):
+            # Could be a cal-list file -- check header to distinguish
+            try:
+                content = path.read_text(encoding="utf-8")
+                if content.startswith("---"):
+                    header = yaml.safe_load(content.split("---", 2)[1])
+                    if header and header.get("type") == "gax/cal-list":
+                        raise ValueError(f"Not an event file (cal-list): {path}")
+                    if header and header.get("type") == "gax/cal":
+                        return cls(path=path)
+                    # Default: .cal.gax.md without explicit type is an event
+                    return cls(path=path)
+            except (OSError, yaml.YAMLError):
+                pass
+            return cls(path=path)
+        # Check YAML header for type field
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        if content.startswith("---"):
+            try:
+                header = yaml.safe_load(content.split("---", 2)[1])
+                if header and header.get("type") == "gax/cal":
+                    return cls(path=path)
+            except (yaml.YAMLError, IndexError):
+                pass
+        raise ValueError(f"Not an event file: {path}")
+
     def clone(
-        self, url: str, output: Path | None = None, *, calendar: str = "primary", **kw
+        self, output: Path | None = None, *, calendar: str = "primary", **kw
     ) -> Path:
         """Clone a single event to a .cal.gax.md file."""
-        event_id, cal_id = extract_event_id(url)
+        event_id, cal_id = extract_event_id(self.url)
         if calendar != "primary":
             cal_id = calendar
 
@@ -936,9 +1019,9 @@ class Event(Resource):
         file_path.write_text(content)
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest event data from API."""
-        content = path.read_text()
+        content = self.path.read_text()
         local_event = yaml_to_event(content)
 
         if not local_event.id:
@@ -957,15 +1040,15 @@ class Event(Resource):
             api_event, local_event.calendar, cal_name
         )
         new_content = event_to_yaml(updated_event)
-        path.write_text(new_content)
+        self.path.write_text(new_content)
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local event file and remote.
 
         Returns a human-readable diff string, or None if no changes.
         For new events (no id), returns a summary of what will be created.
         """
-        content = path.read_text()
+        content = self.path.read_text()
         local = yaml_to_event(content)
 
         if not local.id:
@@ -994,9 +1077,9 @@ class Event(Resource):
 
         return "\n".join(lines) if lines else None
 
-    def push(self, path: Path, **kw) -> str:
+    def push(self, **kw) -> str:
         """Push local event changes to API. Returns result URL."""
-        content = path.read_text()
+        content = self.path.read_text()
         local_event = yaml_to_event(content)
 
         if local_event.id:
@@ -1015,18 +1098,18 @@ class Event(Resource):
             )
 
             new_content = event_to_yaml(local_event)
-            path.write_text(new_content)
+            self.path.write_text(new_content)
 
             return result.get("htmlLink", "")
 
-    def delete(self, path: Path) -> str:
+    def delete(self) -> str:
         """Delete event from calendar and local file. Returns event title."""
-        content = path.read_text()
+        content = self.path.read_text()
         local_event = yaml_to_event(content)
 
         if not local_event.id:
             raise ValueError("Event has no ID (not on calendar)")
 
         delete_event(local_event.id, local_event.calendar)
-        path.unlink()
+        self.path.unlink()
         return local_event.title
