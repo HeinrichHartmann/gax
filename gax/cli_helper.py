@@ -15,6 +15,7 @@ from .gsheet.frontmatter import parse_content
 from .label import Label
 from .filter import Filter
 from .gcal import Cal, Event
+from .gtask import TaskList as TaskListResource, Task as TaskSingleResource
 from .form import Form
 from .draft import Draft
 from .contacts import Contacts
@@ -94,6 +95,10 @@ def _detect_file_type(file_path: Path) -> str | None:
         return "gax/draft"
     if name.endswith(".cal.gax.md"):
         return "gax/cal"
+    if name.endswith(".task.gax.yaml"):
+        return "gax/task"
+    if name.endswith(".tasks.gax.md") or name.endswith(".tasks.gax.yaml"):
+        return "gax/task-list"
     if name.endswith(".form.gax.md"):
         return "gax/form"
     if ".contacts." in name or name.endswith(".contacts.gax.md"):
@@ -176,6 +181,17 @@ def _pull_folder(
             from .gdrive import Folder
 
             Folder().pull(folder_path)
+            return True, "updated"
+
+        elif checkout_type == "gax/task-checkout":
+            # Task checkouts pull in-place
+            if scratch_path.exists():
+                shutil.rmtree(scratch_path)
+            for task_file in sorted(folder_path.glob("*.task.gax.yaml")):
+                try:
+                    TaskSingleResource().pull(task_file)
+                except ValueError:
+                    pass
             return True, "updated"
 
         else:
@@ -401,6 +417,21 @@ def _push_file(
             except ValueError as e:
                 return False, str(e)
 
+        elif file_type == "gax/task":
+            try:
+                t = TaskSingleResource()
+                diff_text = t.diff(file_path)
+                if diff_text is None:
+                    return True, "no changes"
+                if not yes:
+                    click.echo(diff_text)
+                    if not click.confirm("Push these changes?"):
+                        return False, "cancelled"
+                t.push(file_path)
+                return True, "pushed"
+            except ValueError as e:
+                return False, str(e)
+
         elif file_type == "gax/file":
             # This is a tracking file, find the actual file
             from .gdrive import read_tracking_file
@@ -578,6 +609,20 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
         elif file_type == "gax/cal-list":
             try:
                 Cal().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
+
+        elif file_type == "gax/task":
+            try:
+                TaskSingleResource().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
+
+        elif file_type == "gax/task-list":
+            try:
+                TaskListResource().pull(file_path)
                 return True, "updated"
             except ValueError as e:
                 return False, str(e)
