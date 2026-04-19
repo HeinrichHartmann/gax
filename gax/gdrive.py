@@ -322,22 +322,8 @@ class File(Resource):
     """
 
     name = "file"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "File":
-        """Construct from a Google Drive URL or file ID."""
-        if re.search(r"drive\.google\.com/file/d/", url):
-            return cls(url=url)
-        if re.search(r"drive\.google\.com/open\?id=", url):
-            return cls(url=url)
-        # Also accept raw file IDs
-        if re.fullmatch(r"[a-zA-Z0-9_-]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Google Drive file URL: {url}")
+    URL_PATTERN = r"drive\.google\.com/(file/d/|open\?id=)"
+    ID_PATTERN = r"[a-zA-Z0-9_-]+"
 
     @classmethod
     def from_file(cls, path: Path) -> "File":

@@ -13,30 +13,46 @@ Resources are constructed from a URL or file path:
   Resource.from_file(path) — dispatch: tries each subclass, returns first match
   Tab.from_url(url)        — construct a specific resource (or raise ValueError)
 
-Subclasses add custom operations as plain methods (e.g. list, show).
-No need to declare these in the base class — they are resource-specific.
-Whether the resource is a single file, a directory, or a collection
-serialized into one file is an implementation detail, not an interface
-concern.
+Subclasses declare dispatch metadata as class attributes:
 
-## Conventions
+  URL_PATTERN     — regex for URL matching (from_url)
+  ID_PATTERN      — regex for raw subclass-specific IDs (from_url)
+  FILE_TYPE       — YAML header type string (from_file)
+  FILE_EXTENSIONS — filename suffixes (from_file)
+  CHECKOUT_TYPE   — type in .gax.yaml for checkout directories (from_file)
 
-Status messages: use `logging.getLogger(__name__)`.
-    logger.info("Fetching tab: Revenue")   # shown in spinner during operation()
-    logger.debug("Skipping empty row")     # silent unless verbose
-
-Errors: standard Python exceptions.
-    ValueError          — bad input the user can fix (wrong URL, missing field)
-    NotImplementedError — operation not available on this resource
-    RuntimeError        — internal bug, should not happen
-
-The CLI layer catches and formats these — resource code should
-not call sys.exit() or print errors directly.
+Override from_url/from_file only for non-standard matching logic.
 
 See draft.py for a reference implementation with design rationale.
 """
 
+import re
 from pathlib import Path
+
+
+def _read_file_type(path: Path) -> str | None:
+    """Read the type field from a gax file's YAML header."""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    if not content.startswith("---"):
+        # Simple YAML without --- prefix
+        for line in content.split("\n")[:20]:
+            if line.startswith("type:"):
+                return line.split(":", 1)[1].strip()
+        return None
+
+    # Multipart format: find type in first section header
+    for line in content.split("\n"):
+        if line == "---":
+            continue
+        if line.startswith("type:"):
+            return line.split(":", 1)[1].strip()
+        if not line or line.startswith("---"):
+            break
+    return None
 
 
 class Resource:
@@ -48,11 +64,28 @@ class Resource:
 
     Subclasses are auto-registered via __init_subclass__ and
     discovered by Resource.from_url() / Resource.from_file().
+
+    Dispatch metadata (set on subclasses):
+        URL_PATTERN     — regex string for URL matching
+        ID_PATTERN      — regex string for raw IDs handled by subclass constructors
+        FILE_TYPE       — e.g. "gax/doc", matched against YAML type field
+        FILE_EXTENSIONS — e.g. (".doc.gax.md", ".tab.gax.md")
+        CHECKOUT_TYPE   — e.g. "gax/doc-checkout", matched in .gax.yaml
     """
 
     name: str
 
+    URL_PATTERN: str | None = None
+    ID_PATTERN: str | None = None
+    FILE_TYPE: str | None = None
+    FILE_EXTENSIONS: tuple[str, ...] = ()
+    CHECKOUT_TYPE: str | None = None
+
     _subclasses: list[type["Resource"]] = []
+
+    def __init__(self, *, url: str = "", path: Path | None = None):
+        self.url = url
+        self.path = path or Path()
 
     def __init_subclass__(cls, **kw):
         super().__init_subclass__(**kw)
@@ -65,8 +98,8 @@ class Resource:
         When called on Resource (base class): dispatches across all
         subclasses, returning the first that can handle the URL.
 
-        When called on a subclass: validates and constructs that
-        specific resource, or raises ValueError.
+        When called on a subclass: matches URL_PATTERN or ID_PATTERN and
+        constructs, or raises ValueError. Override for custom matching.
         """
         if cls is Resource:
             for sub in Resource._subclasses:
@@ -78,7 +111,11 @@ class Resource:
                 f"Unrecognized URL: {url}\n"
                 "Supported: Google Docs/Sheets/Forms/Slides, Gmail, Calendar"
             )
-        raise ValueError(f"{cls.__name__} does not support from_url")
+        if cls.URL_PATTERN and re.search(cls.URL_PATTERN, url):
+            return cls(url=url)
+        if cls.ID_PATTERN and re.fullmatch(cls.ID_PATTERN, url):
+            return cls(url=url)
+        raise ValueError(f"{cls.__name__} does not handle URL: {url}")
 
     @classmethod
     def from_file(cls, path: Path) -> "Resource":
@@ -87,8 +124,9 @@ class Resource:
         When called on Resource (base class): dispatches across all
         subclasses, returning the first that can handle the file.
 
-        When called on a subclass: validates and constructs that
-        specific resource, or raises ValueError.
+        When called on a subclass: checks checkout metadata, FILE_TYPE
+        against YAML header, and FILE_EXTENSIONS against filename.
+        Override for custom matching.
         """
         if cls is Resource:
             for sub in Resource._subclasses:
@@ -97,7 +135,31 @@ class Resource:
                 except (ValueError, OSError):
                     continue
             raise ValueError(f"Unknown file type: {path}")
-        raise ValueError(f"{cls.__name__} does not support from_file")
+
+        if path.is_dir():
+            if cls.CHECKOUT_TYPE:
+                checkout_type = _read_file_type(path / ".gax.yaml")
+                if checkout_type == cls.CHECKOUT_TYPE:
+                    return cls(path=path)
+            raise ValueError(f"{cls.__name__} does not handle file: {path}")
+
+        name = path.name.lower()
+        file_type = _read_file_type(path) if cls.FILE_TYPE else None
+
+        # Check file extension
+        if cls.FILE_EXTENSIONS:
+            for ext in cls.FILE_EXTENSIONS:
+                if name.endswith(ext):
+                    if cls.FILE_TYPE and file_type not in (None, cls.FILE_TYPE):
+                        break
+                    return cls(path=path)
+
+        # Check YAML type field
+        if cls.FILE_TYPE:
+            if file_type == cls.FILE_TYPE:
+                return cls(path=path)
+
+        raise ValueError(f"{cls.__name__} does not handle file: {path}")
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Fetch remote → local file/directory. Returns path created."""

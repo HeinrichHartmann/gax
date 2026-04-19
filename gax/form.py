@@ -40,7 +40,6 @@ import yaml
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
-from . import multipart
 from .resource import Resource
 
 logger = logging.getLogger(__name__)
@@ -796,37 +795,10 @@ class Form(Resource):
     """
 
     name = "form"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Form":
-        """Construct from a Google Forms URL or form ID."""
-        if re.search(r"docs\.google\.com/forms/d/", url):
-            return cls(url=url)
-        # Also accept raw form IDs
-        if re.fullmatch(r"[a-zA-Z0-9-_]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Google Forms URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Form":
-        """Construct from a .form.gax.md file."""
-        name = path.name.lower()
-        if name.endswith(".form.gax.md"):
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            sections = multipart.parse_multipart(content)
-            if sections and sections[0].headers.get("type") == "gax/form":
-                return cls(path=path)
-        raise ValueError(f"Not a form file: {path}")
+    URL_PATTERN = r"docs\.google\.com/forms/d/"
+    ID_PATTERN = r"[a-zA-Z0-9-_]+"
+    FILE_TYPE = "gax/form"
+    FILE_EXTENSIONS = (".form.gax.md",)
 
     def _output_path(self, title: str, output: Path | None) -> Path:
         if output:

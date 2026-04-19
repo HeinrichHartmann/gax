@@ -245,27 +245,8 @@ class Slide(Resource):
     """
 
     name = "slides"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Slide":
-        """Construct from a .slides.gax.md file."""
-        name = path.name.lower()
-        if name.endswith(".slides.gax.md"):
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            sections = parse_multipart(content)
-            if sections and sections[0].headers.get("type") == "gax/slides":
-                return cls(path=path)
-        raise ValueError(f"Not a slide file: {path}")
+    FILE_TYPE = "gax/slides"
+    FILE_EXTENSIONS = (".slides.gax.md",)
 
     def pull(self, **kw) -> None:
         """Refresh a single slide file from remote."""
@@ -416,34 +397,9 @@ class Presentation(Resource):
     """
 
     name = "presentation"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Presentation":
-        """Construct from a Google Slides URL or presentation ID."""
-        if re.search(r"docs\.google\.com/presentation/d/", url):
-            return cls(url=url)
-        # Also accept raw presentation IDs
-        if re.fullmatch(r"[a-zA-Z0-9_-]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Google Slides URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Presentation":
-        """Construct from a checkout directory with .gax.yaml."""
-        if path.is_dir():
-            metadata_path = path / ".gax.yaml"
-            if metadata_path.exists():
-                import yaml as _yaml
-
-                with open(metadata_path) as f:
-                    metadata = _yaml.safe_load(f)
-                if metadata and metadata.get("type") == "gax/slides-checkout":
-                    return cls(path=path)
-        raise ValueError(f"Not a slides checkout directory: {path}")
+    URL_PATTERN = r"docs\.google\.com/presentation/d/"
+    ID_PATTERN = r"[a-zA-Z0-9_-]+"
+    CHECKOUT_TYPE = "gax/slides-checkout"
 
     def clone(
         self,

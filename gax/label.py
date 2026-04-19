@@ -363,34 +363,7 @@ class Label(Resource):
     """
 
     name = "label"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Label":
-        """Construct from a labels file."""
-        name = path.name.lower()
-        if "labels" in name:
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        # Skip comment lines
-        lines = content.split("\n")
-        while lines and lines[0].startswith("#"):
-            lines = lines[1:]
-        content_stripped = "\n".join(lines)
-        if content_stripped.startswith("---\n"):
-            parts = content_stripped.split("---\n", 2)
-            if len(parts) >= 3:
-                header_data = yaml.safe_load(parts[1]) or {}
-                if header_data.get("type") == "gax/labels":
-                    return cls(path=path)
-        raise ValueError(f"Not a labels file: {path}")
+    FILE_TYPE = "gax/labels"
 
     def clone(
         self,

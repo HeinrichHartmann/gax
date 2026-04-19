@@ -91,10 +91,8 @@ class Thread(Resource):
     """
 
     name = "thread"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
+    FILE_TYPE = "gax/mail"
+    FILE_EXTENSIONS = (".mail.gax.md",)
 
     @classmethod
     def from_url(cls, url: str) -> "Thread":
@@ -106,26 +104,6 @@ class Thread(Resource):
         if _is_thread_id(url):
             return cls(url=url)
         raise ValueError(f"Not a Gmail thread URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Thread":
-        """Construct from a .mail.gax.md file."""
-        name = path.name.lower()
-        if name.endswith(".mail.gax.md"):
-            return cls(path=path)
-        # Check YAML header for type field or thread_id
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            from .. import multipart as mp
-            sections = mp.parse_multipart(content)
-            if sections and sections[0].headers.get("type") == "gax/mail":
-                return cls(path=path)
-            if sections and "thread_id" in sections[0].headers:
-                return cls(path=path)
-        raise ValueError(f"Not a thread file: {path}")
 
     def _output_path(self, subject: str, thread_id: str, output: Path | None) -> Path:
         if output:

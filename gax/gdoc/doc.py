@@ -977,42 +977,10 @@ class Tab(Resource):
     """
 
     name = "doc-tab"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Tab":
-        """Construct from a Google Docs URL or document ID."""
-        if re.search(r"docs\.google\.com/document/d/", url):
-            return cls(url=url)
-        # Also accept raw document IDs
-        if re.fullmatch(r"[a-zA-Z0-9-_]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Google Docs URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Tab":
-        """Construct from a .doc.gax.md or .tab.gax.md file."""
-        name = path.name.lower()
-        if name.endswith(".doc.gax.md") or name.endswith(".tab.gax.md"):
-            return cls(path=path)
-        # Check YAML header for type field or source URL
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            sections = multipart.parse_multipart(content)
-            if sections:
-                h = sections[0].headers
-                if h.get("type") == "gax/doc":
-                    return cls(path=path)
-                source = h.get("source", "")
-                if "docs.google.com/document" in source:
-                    return cls(path=path)
-        raise ValueError(f"Not a doc tab file: {path}")
+    URL_PATTERN = r"docs\.google\.com/document/d/"
+    ID_PATTERN = r"[a-zA-Z0-9-_]+"
+    FILE_TYPE = "gax/doc"
+    FILE_EXTENSIONS = (".doc.gax.md", ".tab.gax.md")
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a single tab to a .doc.gax.md file.
@@ -1192,37 +1160,9 @@ class Doc(Resource):
     """
 
     name = "doc"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Doc":
-        """Construct from a Google Docs URL or document ID."""
-        if re.search(r"docs\.google\.com/document/d/", url):
-            return cls(url=url)
-        # Also accept raw document IDs
-        if re.fullmatch(r"[a-zA-Z0-9-_]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Google Docs URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Doc":
-        """Construct from a .doc.gax.md.d checkout folder."""
-        if path.is_dir():
-            metadata_path = path / ".gax.yaml"
-            if metadata_path.exists():
-                try:
-                    import yaml as _yaml
-
-                    with open(metadata_path) as f:
-                        metadata = _yaml.safe_load(f)
-                    if metadata.get("type") == "gax/doc-checkout":
-                        return cls(path=path)
-                except Exception:
-                    pass
-        raise ValueError(f"Not a doc checkout folder: {path}")
+    URL_PATTERN = r"docs\.google\.com/document/d/"
+    ID_PATTERN = r"[a-zA-Z0-9-_]+"
+    CHECKOUT_TYPE = "gax/doc-checkout"
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone all tabs into a folder (supports nested tabs)."""

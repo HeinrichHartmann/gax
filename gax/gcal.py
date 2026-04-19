@@ -695,34 +695,8 @@ class Cal(Resource):
     """
 
     name = "cal"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Cal":
-        """Construct from a Google Calendar URL."""
-        if re.search(r"calendar\.google\.com/calendar/", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Calendar URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Cal":
-        """Construct from a cal-list file."""
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            try:
-                header = yaml.safe_load(content.split("---", 2)[1])
-                if header and header.get("type") == "gax/cal-list":
-                    return cls(path=path)
-            except (yaml.YAMLError, IndexError):
-                pass
-        raise ValueError(f"Not a cal-list file: {path}")
+    URL_PATTERN = r"calendar\.google\.com/calendar/"
+    FILE_TYPE = "gax/cal-list"
 
     def calendars(self, out, **kw) -> None:
         """List available calendars to file descriptor."""
@@ -917,53 +891,10 @@ class Event(Resource):
     """
 
     name = "event"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Event":
-        """Construct from a Google Calendar event URL or event ID."""
-        if re.search(r"calendar\.google\.com/calendar/", url):
-            return cls(url=url)
-        # Also accept raw event IDs
-        if re.fullmatch(r"[A-Za-z0-9_-]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Calendar event URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Event":
-        """Construct from a .cal.gax.md event file."""
-        name = path.name.lower()
-        if name.endswith(".cal.gax.md"):
-            # Could be a cal-list file -- check header to distinguish
-            try:
-                content = path.read_text(encoding="utf-8")
-                if content.startswith("---"):
-                    header = yaml.safe_load(content.split("---", 2)[1])
-                    if header and header.get("type") == "gax/cal-list":
-                        raise ValueError(f"Not an event file (cal-list): {path}")
-                    if header and header.get("type") == "gax/cal":
-                        return cls(path=path)
-                    # Default: .cal.gax.md without explicit type is an event
-                    return cls(path=path)
-            except (OSError, yaml.YAMLError):
-                pass
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            try:
-                header = yaml.safe_load(content.split("---", 2)[1])
-                if header and header.get("type") == "gax/cal":
-                    return cls(path=path)
-            except (yaml.YAMLError, IndexError):
-                pass
-        raise ValueError(f"Not an event file: {path}")
+    URL_PATTERN = r"calendar\.google\.com/calendar/"
+    ID_PATTERN = r"[A-Za-z0-9_-]+"
+    FILE_TYPE = "gax/cal"
+    FILE_EXTENSIONS = (".cal.gax.md",)
 
     def clone(
         self, output: Path | None = None, *, calendar: str = "primary", **kw

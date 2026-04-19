@@ -489,29 +489,8 @@ class TaskList(Resource):
     """
 
     name = "task-list"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_file(cls, path: Path) -> "TaskList":
-        """Construct from a .tasks.gax.md or .tasks.gax.yaml file."""
-        name = path.name.lower()
-        if name.endswith(".tasks.gax.md") or name.endswith(".tasks.gax.yaml"):
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                header = yaml.safe_load(parts[1])
-                if header and header.get("type") == "gax/task-list":
-                    return cls(path=path)
-        raise ValueError(f"Not a task list file: {path}")
+    FILE_TYPE = "gax/task-list"
+    FILE_EXTENSIONS = (".tasks.gax.md", ".tasks.gax.yaml")
 
     def lists(self, out) -> None:
         """List available task lists to file descriptor."""
@@ -702,29 +681,8 @@ class Task(Resource):
     """
 
     name = "task"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Task":
-        """Construct from a .task.gax.yaml file."""
-        name = path.name.lower()
-        if name.endswith(".task.gax.yaml"):
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                header = yaml.safe_load(parts[1])
-                if header and header.get("type") == "gax/task":
-                    return cls(path=path)
-        raise ValueError(f"Not a task file: {path}")
+    FILE_TYPE = "gax/task"
+    FILE_EXTENSIONS = (".task.gax.yaml",)
 
     def clone(
         self,

@@ -2,6 +2,18 @@
 
 import pytest
 
+from gax.contacts import Contacts
+from gax.draft import Draft
+from gax.filter import Filter
+from gax.form import Form
+from gax.gcal import Cal, Event
+from gax.gdoc import Doc, Tab
+from gax.gdrive import File
+from gax.gsheet import Sheet, SheetTab
+from gax.gslides import Presentation, Slide
+from gax.gtask import Task, TaskList
+from gax.label import Label
+from gax.mail import Mailbox, Thread
 from gax.resource import Resource
 
 # Import CLI to trigger all resource module registration via __init_subclass__
@@ -33,6 +45,10 @@ class TestFromUrl:
             "https://docs.google.com/presentation/d/abc123/edit"
         )
         assert r.__class__.__name__ == "Presentation"
+
+    def test_google_drive(self):
+        r = Resource.from_url("https://drive.google.com/file/d/abc123/view")
+        assert r.__class__.__name__ == "File"
 
     def test_gmail_draft(self):
         r = Resource.from_url(
@@ -142,6 +158,60 @@ class TestFromFile:
         r = Resource.from_file(f)
         assert r.__class__.__name__ == "Contacts"
 
+    def test_calendar_list_by_type(self, tmp_path):
+        f = tmp_path / "calendar.cal.gax.md"
+        f.write_text("---\ntype: gax/cal-list\n---\n")
+        r = Resource.from_file(f)
+        assert r.__class__.__name__ == "Cal"
+
+    def test_filter_by_type(self, tmp_path):
+        f = tmp_path / "filters.gax.md"
+        f.write_text("---\ntype: gax/filters\n---\n")
+        r = Resource.from_file(f)
+        assert r.__class__.__name__ == "Filter"
+
+    def test_label_by_type(self, tmp_path):
+        f = tmp_path / "labels.gax.md"
+        f.write_text("---\ntype: gax/labels\n---\n")
+        r = Resource.from_file(f)
+        assert r.__class__.__name__ == "Label"
+
+    def test_mailbox_by_query_header(self, tmp_path):
+        f = tmp_path / "inbox.mailbox.gax.md"
+        f.write_text("---\nquery: in:inbox\n---\n")
+        r = Resource.from_file(f)
+        assert r.__class__.__name__ == "Mailbox"
+
+    def test_file_by_sidecar(self, tmp_path):
+        f = tmp_path / "report.pdf"
+        f.write_text("data")
+        tracking = tmp_path / "report.pdf.gax.md"
+        tracking.write_text("type: gax/file\nfile_id: abc123\n")
+        r = Resource.from_file(f)
+        assert r.__class__.__name__ == "File"
+        assert r.path == f
+
+    def test_doc_checkout_folder(self, tmp_path):
+        folder = tmp_path / "doc.doc.gax.md.d"
+        folder.mkdir()
+        (folder / ".gax.yaml").write_text("type: gax/doc-checkout\n")
+        r = Resource.from_file(folder)
+        assert r.__class__.__name__ == "Doc"
+
+    def test_sheet_checkout_folder(self, tmp_path):
+        folder = tmp_path / "sheet.sheet.gax.md.d"
+        folder.mkdir()
+        (folder / ".gax.yaml").write_text("type: gax/sheet-checkout\n")
+        r = Resource.from_file(folder)
+        assert r.__class__.__name__ == "Sheet"
+
+    def test_presentation_checkout_folder(self, tmp_path):
+        folder = tmp_path / "deck.slides.gax.md.d"
+        folder.mkdir()
+        (folder / ".gax.yaml").write_text("type: gax/slides-checkout\n")
+        r = Resource.from_file(folder)
+        assert r.__class__.__name__ == "Presentation"
+
     def test_path_stored_on_instance(self, tmp_path):
         f = tmp_path / "test.draft.gax.md"
         f.write_text("---\ntype: gax/draft\n---\nBody\n")
@@ -157,3 +227,65 @@ class TestFromFile:
     def test_nonexistent_file_raises(self, tmp_path):
         with pytest.raises(ValueError):
             Resource.from_file(tmp_path / "does_not_exist.gax.md")
+
+
+@pytest.mark.parametrize(
+    ("cls", "raw_id"),
+    [
+        (Draft, "r-123456"),
+        (Event, "evt_123"),
+        (File, "drive_123"),
+        (Form, "form123"),
+        (Tab, "doc123"),
+        (Doc, "doc123"),
+        (SheetTab, "sheet123"),
+        (Sheet, "sheet123"),
+        (Presentation, "pres123"),
+    ],
+)
+def test_subclass_from_url_accepts_raw_ids(cls, raw_id):
+    r = cls.from_url(raw_id)
+    assert isinstance(r, cls)
+    assert r.url == raw_id
+
+
+@pytest.mark.parametrize(
+    ("cls", "folder_type"),
+    [
+        (Doc, "gax/doc-checkout"),
+        (Sheet, "gax/sheet-checkout"),
+        (Presentation, "gax/slides-checkout"),
+    ],
+)
+def test_subclass_from_file_accepts_checkout_dirs(cls, folder_type, tmp_path):
+    folder = tmp_path / "checkout.gax.md.d"
+    folder.mkdir()
+    (folder / ".gax.yaml").write_text(f"type: {folder_type}\n")
+
+    r = cls.from_file(folder)
+    assert isinstance(r, cls)
+    assert r.path == folder
+
+
+def test_registry_covers_all_resource_subclasses():
+    expected = {
+        Contacts,
+        Draft,
+        Cal,
+        Event,
+        Filter,
+        File,
+        Form,
+        Label,
+        Mailbox,
+        Thread,
+        Task,
+        TaskList,
+        Tab,
+        Doc,
+        SheetTab,
+        Sheet,
+        Slide,
+        Presentation,
+    }
+    assert expected.issubset(set(Resource._subclasses))

@@ -423,15 +423,7 @@ class Mailbox(Resource):
     """
 
     name = "mailbox"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Mailbox":
-        """Mailbox has no URL pattern (account-level)."""
-        raise ValueError(f"Mailbox does not support URL construction: {url}")
+    FILE_TYPE = "gax/list"
 
     @classmethod
     def from_file(cls, path: Path) -> "Mailbox":

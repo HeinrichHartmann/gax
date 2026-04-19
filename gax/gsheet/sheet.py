@@ -451,20 +451,9 @@ class SheetTab(Resource):
     """
 
     name = "sheet-tab"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "SheetTab":
-        """Construct from a Google Sheets URL or spreadsheet ID."""
-        if re.search(r"docs\.google\.com/spreadsheets/d/", url):
-            return cls(url=url)
-        # Also accept raw spreadsheet IDs
-        if re.fullmatch(r"[a-zA-Z0-9-_]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Google Sheets URL: {url}")
+    URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
+    ID_PATTERN = r"[a-zA-Z0-9-_]+"
+    FILE_EXTENSIONS = (".sheet.gax.md",)
 
     @classmethod
     def from_file(cls, path: Path) -> "SheetTab":
@@ -565,35 +554,9 @@ class Sheet(Resource):
     """
 
     name = "sheet"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Sheet":
-        """Construct from a Google Sheets URL or spreadsheet ID."""
-        if re.search(r"docs\.google\.com/spreadsheets/d/", url):
-            return cls(url=url)
-        # Also accept raw spreadsheet IDs
-        if re.fullmatch(r"[a-zA-Z0-9-_]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Google Sheets URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Sheet":
-        """Construct from a .sheet.gax.md.d checkout folder."""
-        if path.is_dir():
-            metadata_path = path / ".gax.yaml"
-            if metadata_path.exists():
-                try:
-                    with open(metadata_path) as f:
-                        metadata = yaml.safe_load(f)
-                    if metadata.get("type") == "gax/sheet-checkout":
-                        return cls(path=path)
-                except Exception:
-                    pass
-        raise ValueError(f"Not a sheet checkout folder: {path}")
+    URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
+    ID_PATTERN = r"[a-zA-Z0-9-_]+"
+    CHECKOUT_TYPE = "gax/sheet-checkout"
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Checkout all tabs into a folder.

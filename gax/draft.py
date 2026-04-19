@@ -284,39 +284,10 @@ class Draft(Resource):
     """
 
     name = "draft"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_url(cls, url: str) -> "Draft":
-        """Construct from a Gmail drafts URL or draft ID."""
-        if re.search(r"mail\.google\.com/mail/[^#]*#drafts/", url):
-            return cls(url=url)
-        # Also accept raw draft IDs
-        if re.fullmatch(r"r?[A-Za-z0-9-]+", url):
-            return cls(url=url)
-        raise ValueError(f"Not a Gmail draft URL: {url}")
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Draft":
-        """Construct from a .draft.gax.md file."""
-        name = path.name.lower()
-        if name.endswith(".draft.gax.md"):
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            sections = multipart.parse_multipart(content)
-            if sections and sections[0].headers.get("type") == "gax/draft":
-                return cls(path=path)
-            if sections and "draft_id" in sections[0].headers:
-                return cls(path=path)
-        raise ValueError(f"Not a draft file: {path}")
+    URL_PATTERN = r"mail\.google\.com/mail/[^#]*#drafts/"
+    ID_PATTERN = r"r?[A-Za-z0-9-]+"
+    FILE_TYPE = "gax/draft"
+    FILE_EXTENSIONS = (".draft.gax.md",)
 
     def _output_path(self, subject: str, output: Path | None) -> Path:
         if output:

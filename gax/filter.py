@@ -438,29 +438,7 @@ class Filter(Resource):
     """
 
     name = "filter"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Filter":
-        """Construct from a filters file."""
-        name = path.name.lower()
-        if "filters" in name:
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---\n"):
-            parts = content.split("---\n", 2)
-            if len(parts) >= 3:
-                header_data = yaml.safe_load(parts[1]) or {}
-                if header_data.get("type") == "gax/filters":
-                    return cls(path=path)
-        raise ValueError(f"Not a filters file: {path}")
+    FILE_TYPE = "gax/filters"
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone Gmail filters to a local file."""

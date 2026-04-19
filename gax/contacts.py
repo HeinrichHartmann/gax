@@ -580,32 +580,8 @@ class Contacts(Resource):
     """
 
     name = "contacts"
-
-    def __init__(self, *, url: str = "", path: Path | None = None):
-        self.url = url
-        self.path = path or Path()
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Contacts":
-        """Construct from a contacts file (.contacts.gax.md or YAML with type: gax/contacts)."""
-        name = path.name.lower()
-        if name.endswith(".contacts.gax.md") or ".contacts." in name:
-            return cls(path=path)
-        # Check YAML header for type field
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError(f"Cannot read: {path}")
-        if content.startswith("---"):
-            end = content.find("\n---\n", 4)
-            if end != -1:
-                header_text = content[4:end]
-                for line in header_text.split("\n"):
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        if key.strip() == "type" and value.strip() == "gax/contacts":
-                            return cls(path=path)
-        raise ValueError(f"Not a contacts file: {path}")
+    FILE_TYPE = "gax/contacts"
+    FILE_EXTENSIONS = (".contacts.gax.md",)
 
     def _fetch_and_normalize(self, *, service=None):
         """Fetch contacts from API and normalize. Returns (normalized, groups)."""
