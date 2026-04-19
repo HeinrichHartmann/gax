@@ -39,16 +39,11 @@ from .gcal import Cal, Event
 from .gtask import TaskList, Task as TaskResource
 from .form import Form
 from .draft import Draft
-from .contacts import Contact, Contacts  # noqa: F401
+from .contacts import Contact, Contacts  # noqa: F401 — registers with Resource._subclasses
+from .resource import Resource
 from .gdrive import File
 from .gdoc import Tab, Doc  # noqa: F401 — registers with Resource._subclasses
 from .gslides import Slide, Presentation  # noqa: F401
-from .cli_helper import (
-    _pull_folder,
-    _push_folder,
-    _push_file,
-    _pull_file,
-)
 
 
 @click.group()
@@ -119,28 +114,14 @@ def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
                     continue
 
                 logger.info(f"Pulling {path}/")
-                ok, message = _pull_folder(path, verbose, yes=yes)
-                results.append((path, ok, message))
             else:
-                # Check if this is a file with a .gax.md tracking file (Drive file)
-                if not path.name.endswith(".gax.md"):
-                    tracking_path = path.with_suffix(path.suffix + ".gax.md")
-                    if tracking_path.exists():
-                        try:
-                            logger.info(f"Pulling Drive file {path}")
-                            File(path=path).pull()
-                            results.append((path, True, "updated"))
-                            op.advance()
-                            continue
-                        except Exception as e:
-                            results.append((path, False, str(e)))
-                            op.advance()
-                            continue
-
                 logger.info(f"Pulling {path}")
 
-                ok, message = _pull_file(path, verbose)
-                results.append((path, ok, message))
+            try:
+                Resource.from_file(path).pull()
+                results.append((path, True, "updated"))
+            except (ValueError, Exception) as e:
+                results.append((path, False, str(e)))
 
             op.advance()
 
@@ -221,54 +202,39 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
                 )
                 continue
 
-            # Push folder
-            result, message = _push_folder(path, yes=yes, with_formulas=with_formulas)
-
-            if result:
-                if message != "cancelled":
-                    click.echo(f"Pushed {path}: {message}")
-                success_count += 1
-            else:
-                if message != "cancelled":
-                    click.echo(f"Error: {path}: {message}", err=True)
+            click.echo(f"Pushing {path}/...")
         else:
-            # Check if this is a non-.gax.md file with a .gax.md tracking file (Drive file)
-            if not path.name.endswith(".gax.md"):
-                tracking_path = path.with_suffix(path.suffix + ".gax.md")
-                if tracking_path.exists():
-                    try:
-                        if not yes:
-                            from .gdrive import read_tracking_file
-
-                            tracking_data = read_tracking_file(tracking_path)
-                            click.echo(
-                                f"Update Drive file: {tracking_data.get('name')}"
-                            )
-                            click.echo(f"From local file: {path}")
-                            if not click.confirm("Proceed?"):
-                                click.echo("Cancelled.")
-                                continue
-
-                        File(path=path).push()
-
-                        click.echo(f"Pushed {path} to Drive")
-                        success_count += 1
-                        continue
-                    except Exception as e:
-                        click.echo(f"Error pushing Drive file {path}: {e}", err=True)
-                        continue
-
             click.echo(f"Pushing {path}...")
 
-            result, message = _push_file(path, yes=yes, with_formulas=with_formulas)
+        try:
+            r = Resource.from_file(path)
+        except ValueError:
+            click.echo(f"Error: unsupported file: {path}", err=True)
+            continue
 
-            if result:
-                if message != "cancelled":
-                    click.echo(f"  {message}")
-                success_count += 1
-            else:
-                if message != "cancelled":
-                    click.echo(f"Error: {path}: {message}", err=True)
+        try:
+            diff_text = r.diff()
+        except NotImplementedError:
+            click.echo(f"Error: push not supported for: {path}", err=True)
+            continue
+
+        if diff_text is None:
+            click.echo("  no changes")
+            success_count += 1
+            continue
+
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Push these changes?"):
+                click.echo("Cancelled.")
+                continue
+
+        try:
+            r.push(with_formulas=with_formulas)
+            click.echo("  pushed")
+            success_count += 1
+        except Exception as e:
+            click.echo(f"Error: {path}: {e}", err=True)
 
     if len(all_paths) > 1:
         click.echo(f"Done: {success_count}/{len(all_paths)} pushed")
