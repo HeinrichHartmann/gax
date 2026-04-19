@@ -454,6 +454,10 @@ class Presentation(Resource):
         logger.info(f"Checked out {len(slides)} slides to {folder}")
         return folder
 
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Checkout a presentation to a folder."""
+        return self.clone(output=output, **kw)
+
     def pull(self, **kw) -> None:
         """Pull all slides in a checkout folder."""
         metadata_path = self.path / ".gax.yaml"

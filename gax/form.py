@@ -808,7 +808,7 @@ class Form(Resource):
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a Google Form to a local .form.gax.md file."""
-        fmt = kw.get("format", "md")
+        fmt = kw.get("fmt", kw.get("format", "md"))
 
         form_id = extract_form_id(self.url)
         source_url = f"https://docs.google.com/forms/d/{form_id}/edit"

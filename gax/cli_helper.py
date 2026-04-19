@@ -1,117 +1,10 @@
-"""Dispatch helpers for gax CLI.
-
-Route file/folder operations to the correct resource class based on
-file type detection. These functions are called by the unified CLI
-commands (pull, push, diff) and will shrink as each resource takes
-ownership of its own dispatch.
-"""
+"""Dispatch helpers for gax CLI."""
 
 import click
 from pathlib import Path
 
-from .multipart import parse_multipart
-from .gsheet import pull_all
-from .gsheet.frontmatter import parse_content
 from .gtask import Task as TaskSingleResource
 from .gdrive import File
-
-
-def _detect_file_type(file_path: Path) -> str | None:
-    """Detect .gax.md file type from YAML header or extension.
-
-    Supports:
-    - Multipart format (---/---/---) with type in first section header
-    - Simple YAML with type field (e.g., .gax.yaml files)
-
-    Returns type string (e.g., 'gax/doc') or None if unknown.
-    """
-    try:
-        content = file_path.read_text(encoding="utf-8")
-    except Exception:
-        return None
-
-    # Try to parse as multipart to get type from header
-    if content.startswith("---"):
-        sections = parse_multipart(content)
-        if sections:
-            file_type = sections[0].headers.get("type")
-            if file_type:
-                return file_type
-
-            # Infer from header fields
-            headers = sections[0].headers
-            if "thread_id" in headers:
-                return "gax/mail"
-            if "draft_id" in headers:
-                return "gax/draft"
-            if "spreadsheet_id" in headers or "tab" in headers:
-                return "gax/sheet"
-            if "document_id" in headers or "source" in headers:
-                # Check source URL pattern
-                source = headers.get("source", "")
-                if "docs.google.com/document" in source:
-                    return "gax/doc"
-                if "docs.google.com/spreadsheets" in source:
-                    return "gax/sheet"
-                if "docs.google.com/presentation" in source:
-                    return "gax/slides"
-
-        # Try frontmatter-style for single-tab sheets
-        try:
-            config, _ = parse_content(content)
-            if config.spreadsheet_id:
-                return "gax/sheet-tab"
-        except Exception:
-            pass
-
-        # Check for relabel/label/filter files (YAML-only format)
-        for line in content.split("\n"):
-            if line.startswith("type:"):
-                file_type = line.split(":", 1)[1].strip()
-                return file_type
-            if line.startswith("query:"):
-                return "gax/list"
-    else:
-        # For simple YAML without leading ---, still check for type field
-        for line in content.split("\n")[:20]:  # Check first 20 lines
-            if line.startswith("type:"):
-                file_type = line.split(":", 1)[1].strip()
-                return file_type
-
-    # Fallback to extension
-    name = file_path.name.lower()
-    if name.endswith(".doc.gax.md") or name.endswith(".tab.gax.md"):
-        return "gax/doc"
-    if name.endswith(".sheet.gax.md"):
-        return "gax/sheet"
-    if name.endswith(".mail.gax.md"):
-        return "gax/mail"
-    if name.endswith(".draft.gax.md"):
-        return "gax/draft"
-    if name.endswith(".cal.gax.md"):
-        return "gax/cal"
-    if name.endswith(".task.gax.yaml"):
-        return "gax/task"
-    if name.endswith(".tasks.gax.md") or name.endswith(".tasks.gax.yaml"):
-        return "gax/task-list"
-    if name.endswith(".form.gax.md"):
-        return "gax/form"
-    if name.endswith(".slides.gax.md"):
-        return "gax/slides"
-    if name.endswith(".contact.gax.yaml"):
-        return "gax/contact"
-    if ".contacts." in name or name.endswith(".contacts.gax.md"):
-        return "gax/contacts"
-    # Mailbox/list files often don't have specific extension, just .gax.md
-    if name.endswith(".gax.md") or name.endswith(".mailbox.gax.md"):
-        # Could be a mailbox file - check for query: field as last resort
-        try:
-            if "query:" in content:
-                return "gax/list"
-        except Exception:
-            pass
-
-    return None
 
 
 def _pull_folder(
@@ -162,7 +55,7 @@ def _pull_folder(
 
             from .gsheet import Sheet
 
-            Sheet.from_url(url).clone(output=scratch_path, fmt=fmt)
+            Sheet.from_url(url).checkout(output=scratch_path, fmt=fmt)
 
         elif checkout_type == "gax/doc-checkout":
             url = metadata.get("url")
@@ -171,7 +64,7 @@ def _pull_folder(
 
             from .gdoc import Doc
 
-            Doc.from_url(url).clone(output=scratch_path)
+            Doc.from_url(url).checkout(output=scratch_path)
 
         elif checkout_type == "gax/slides-checkout":
             url = metadata.get("url")
@@ -181,7 +74,7 @@ def _pull_folder(
 
             from .gslides import Presentation
 
-            Presentation.from_url(url).clone(output=scratch_path, fmt=fmt)
+            Presentation.from_url(url).checkout(output=scratch_path, fmt=fmt)
 
         elif checkout_type == "gax/drive-checkout":
             # Drive folders pull in-place (no scratch dir diffing for binary files)
@@ -361,14 +254,9 @@ def _push_file(
     """
     from .resource import Resource
 
-    file_type = _detect_file_type(file_path)
-
-    if not file_type:
-        return False, f"Unknown file type for {file_path}"
-
     try:
         # Special case: sheet-tab has custom confirmation with row count
-        if file_type == "gax/sheet-tab":
+        if file_path.name.endswith(".tab.sheet.gax.md"):
             try:
                 from .gsheet import SheetTab
                 from .gsheet.frontmatter import parse_file
@@ -391,49 +279,39 @@ def _push_file(
             except ValueError as e:
                 return False, str(e)
 
-        # Special case: multipart sheet push not supported
-        if file_type == "gax/sheet":
-            return (
-                False,
-                "Multipart sheet push not supported. Use 'gax push <folder>.sheet.gax.md.d' or 'gax sheet tab push' for individual tabs.",
-            )
-
         # Special case: Drive file tracking indirection
-        if file_type == "gax/file":
+        if file_path.name.endswith(".gax.md"):
             from .gdrive import read_tracking_file
 
-            tracking_data = read_tracking_file(file_path)
-            file_id = tracking_data.get("file_id")
+            try:
+                tracking_data = read_tracking_file(file_path)
+                if tracking_data.get("type") == "gax/file" or "file_id" in tracking_data:
+                    name = file_path.name
+                    actual_file = file_path.parent / name[:-7]
+                    if not actual_file.exists():
+                        return False, f"Cannot find actual file for {file_path}"
 
-            if not file_id:
-                return False, "No file_id in tracking file"
+                    if not yes:
+                        click.echo(f"Update Drive file: {tracking_data.get('name')}")
+                        click.echo(f"From local file: {actual_file}")
+                        if not click.confirm("Proceed?"):
+                            return False, "cancelled"
 
-            name = file_path.name
-            if not name.endswith(".gax.md"):
-                return False, f"Cannot find actual file for {file_path}"
-            actual_file = file_path.parent / name[:-7]
-            if not actual_file.exists():
-                return False, f"Cannot find actual file for {file_path}"
-
-            if not yes:
-                click.echo(f"Update Drive file: {tracking_data.get('name')}")
-                click.echo(f"From local file: {actual_file}")
-                if not click.confirm("Proceed?"):
-                    return False, "cancelled"
-
-            File(path=actual_file).push()
-            return True, "pushed to Drive"
+                    File(path=actual_file).push()
+                    return True, "pushed to Drive"
+            except Exception:
+                pass
 
         # Generic dispatch: diff → confirm → push
         try:
             r = Resource.from_file(file_path)
         except ValueError:
-            return False, f"Push not supported for type: {file_type}"
+            return False, f"Unsupported file: {file_path}"
 
         try:
             diff_text = r.diff()
         except NotImplementedError:
-            return False, f"Push not supported for type: {file_type}"
+            return False, f"Push not supported for: {file_path}"
 
         if diff_text is None:
             return True, "no changes"
@@ -548,17 +426,8 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
     """Pull a single .gax.md file. Returns (success, message)."""
     from .resource import Resource
 
-    # Special case: multipart sheet uses pull_all (not a Resource)
-    file_type = _detect_file_type(file_path)
-    if file_type == "gax/sheet":
-        try:
-            rows = pull_all(file_path)
-            return True, f"{rows} rows"
-        except ValueError as e:
-            return False, str(e)
-
     # Special case: single contact (not a Resource)
-    if file_type == "gax/contact":
+    if file_path.name.endswith(".contact.gax.yaml"):
         try:
             from .contacts import yaml_to_contact, contact_to_yaml
 

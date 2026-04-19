@@ -758,15 +758,15 @@ class Cal(Resource):
 
     def checkout(
         self,
-        *,
         output: Path | None = None,
+        *,
         calendar: str | None = None,
         days: int | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
         **kw,
-    ) -> tuple[int, int]:
-        """Checkout events as individual files. Returns (cloned, skipped)."""
+    ) -> Path:
+        """Checkout events as individual files into a folder."""
         time_min, time_max = resolve_time_range(days, date_from, date_to)
         folder = output or Path("calendar.cal.gax.md.d")
         folder.mkdir(parents=True, exist_ok=True)
@@ -777,7 +777,8 @@ class Cal(Resource):
         )
 
         if not events:
-            return 0, 0
+            logger.info("Checked out: 0, Skipped: 0")
+            return folder
 
         # Get existing event IDs in output folder
         existing_ids = set()
@@ -823,7 +824,8 @@ class Cal(Resource):
             cloned += 1
             logger.info(f"Writing {filename}")
 
-        return cloned, skipped
+        logger.info(f"Checked out: {cloned}, Skipped: {skipped}")
+        return folder
 
     def _clone_events_to_file(
         self,

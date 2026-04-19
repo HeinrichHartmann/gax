@@ -3,6 +3,7 @@
 One base class defines the standard operations every resource supports:
 
   clone()    — fetch remote → local file (or directory)
+  checkout() — fetch remote → local folder/collection representation
   pull()     — refresh local from remote
   diff()     — preview changes (returns string or None)
   push()     — push local to remote (unconditional)
@@ -58,7 +59,7 @@ class Resource:
     """Base class for all gax resources.
 
     Construction: from_url(url) or from_file(path).
-    Operations: clone, pull, diff, push — all use instance state.
+    Operations: clone, checkout, pull, diff, push — all use instance state.
     Unimplemented operations raise NotImplementedError.
 
     Subclasses are auto-registered via __init_subclass__ and
@@ -176,6 +177,10 @@ class Resource:
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Fetch remote → local file/directory. Returns path created."""
         raise NotImplementedError(f"{self.name} does not support clone")
+
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Fetch remote → local checkout/folder representation."""
+        raise NotImplementedError(f"{self.name} does not support checkout")
 
     def pull(self, **kw) -> None:
         """Refresh local from remote."""

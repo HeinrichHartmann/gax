@@ -457,10 +457,6 @@ class SheetTab(Resource):
     @classmethod
     def from_file(cls, path: Path) -> "SheetTab":
         """Construct from a .sheet.gax.md file."""
-        name = path.name.lower()
-        if name.endswith(".sheet.gax.md"):
-            return cls(path=path)
-        # Check YAML frontmatter for sheet fields
         try:
             content = path.read_text(encoding="utf-8")
         except OSError:
@@ -468,15 +464,10 @@ class SheetTab(Resource):
         if content.startswith("---"):
             try:
                 config, _ = parse_content(content)
-                if config.spreadsheet_id:
+                if config.spreadsheet_id and config.tab:
                     return cls(path=path)
             except Exception:
                 pass
-            sections = parse_multipart(content)
-            if sections:
-                headers = sections[0].headers
-                if "spreadsheet_id" in headers or "tab" in headers:
-                    return cls(path=path)
         raise ValueError(f"Not a sheet-tab file: {path}")
 
     def clone(self, output: Path | None = None, **kw) -> Path:
@@ -631,6 +622,10 @@ class Sheet(Resource):
 
         logger.info(f"Checked out: {created}, Skipped: {skipped}")
         return folder
+
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Checkout all tabs into a folder."""
+        return self.clone(output=output, **kw)
 
     def pull(self, **kw) -> None:
         """Pull all tabs in a checkout folder."""

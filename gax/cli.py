@@ -44,7 +44,6 @@ from .gdrive import File
 from .gdoc import Tab, Doc  # noqa: F401 — registers with Resource._subclasses
 from .gslides import Slide, Presentation  # noqa: F401
 from .cli_helper import (
-    _detect_file_type,
     _pull_folder,
     _push_folder,
     _push_file,
@@ -138,10 +137,7 @@ def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
                             op.advance()
                             continue
 
-                # Pull regular .gax.md file
-                file_type = _detect_file_type(path)
-                type_str = f"({file_type})" if file_type else "(unknown)"
-                logger.info(f"Pulling {path} {type_str}")
+                logger.info(f"Pulling {path}")
 
                 ok, message = _pull_file(path, verbose)
                 results.append((path, ok, message))
@@ -262,11 +258,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
                         click.echo(f"Error pushing Drive file {path}: {e}", err=True)
                         continue
 
-            # Push regular .gax.md file
-            file_type = _detect_file_type(path)
-            type_str = f"({file_type})" if file_type else "(unknown)"
-
-            click.echo(f"Pushing {path} {type_str}...")
+            click.echo(f"Pushing {path}...")
 
             result, message = _push_file(path, yes=yes, with_formulas=with_formulas)
 
@@ -314,7 +306,8 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
     try:
         from .ui import success
 
-        path = r.clone(output=output, fmt=fmt)
+        kwargs = {"output": output, "fmt": fmt}
+        path = r.clone(**kwargs)
         success(f"Created: {path}")
     except ValueError as e:
         from .ui import error
@@ -357,7 +350,8 @@ def checkout(ctx, url: str, output: Path | None, fmt: str):
         try:
             from .ui import success
 
-            path = r.clone(output=output, fmt=fmt)
+            kwargs = {"output": output, "fmt": fmt}
+            path = r.checkout(**kwargs)
             success(f"Checked out: {path}")
         except ValueError as e:
             from .ui import error
@@ -607,7 +601,7 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
     try:
         from .ui import success as ui_success
 
-        folder = Sheet.from_url(url).clone(output=output, fmt=fmt)
+        folder = Sheet.from_url(url).checkout(output=output, fmt=fmt)
         ui_success(f"Checked out to: {folder}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -1978,14 +1972,14 @@ def cal_checkout_cmd(
     try:
         from .ui import success
 
-        cloned, skipped = Cal().checkout(
+        folder = Cal().checkout(
             output=output,
             calendar=calendar,
             days=days,
             date_from=date_from,
             date_to=date_to,
         )
-        success(f"Checked out: {cloned}, Skipped: {skipped} (already present)")
+        success(f"Checked out to: {folder}")
     except ValueError as e:
         from .ui import error
 
@@ -2801,7 +2795,7 @@ def doc_checkout(url: str, output: Path | None):
     try:
         from .ui import success
 
-        folder = Doc.from_url(url).clone(output=output)
+        folder = Doc.from_url(url).checkout(output=output)
         success(f"Checked out to: {folder}")
     except ValueError as e:
         from .ui import error
@@ -2864,7 +2858,7 @@ def slides_checkout(url: str, output: Path | None, fmt: str):
         from .ui import success
         from .gslides import Presentation
 
-        folder_path = Presentation.from_url(url).clone(output=output, fmt=fmt)
+        folder_path = Presentation.from_url(url).checkout(output=output, fmt=fmt)
         success(f"Checked out: {folder_path}")
     except ValueError as e:
         from .ui import error

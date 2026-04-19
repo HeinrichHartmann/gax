@@ -1238,6 +1238,10 @@ class Doc(Resource):
         logger.info(f"Checked out: {created}, Skipped: {skipped}")
         return folder
 
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Checkout all tabs into a folder."""
+        return self.clone(output=output, **kw)
+
     def pull(self, **kw) -> None:
         """Pull all tabs in a checkout folder (supports nested tabs)."""
         metadata = _read_checkout_metadata(self.path)
