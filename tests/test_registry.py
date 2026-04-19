@@ -66,7 +66,7 @@ class TestFromUrl:
         r = Resource.from_url(
             "https://calendar.google.com/calendar/event?eid=abc123"
         )
-        assert r.__class__.__name__ in ("Event", "Cal")
+        assert r.__class__.__name__ == "Cal"
 
     def test_draft_before_thread(self):
         """Draft URL must NOT match Thread (both match mail.google.com)."""
@@ -78,6 +78,10 @@ class TestFromUrl:
     def test_unrecognized_url(self):
         with pytest.raises(ValueError, match="Unrecognized URL"):
             Resource.from_url("https://example.com/foo")
+
+    def test_raw_id_is_not_generic_url_dispatch(self):
+        with pytest.raises(ValueError, match="requires a URL"):
+            Resource.from_url("abc123")
 
     def test_url_stored_on_instance(self):
         r = Resource.from_url("https://docs.google.com/document/d/abc123/edit")
@@ -247,6 +251,11 @@ def test_subclass_from_url_accepts_raw_ids(cls, raw_id):
     r = cls.from_url(raw_id)
     assert isinstance(r, cls)
     assert r.url == raw_id
+
+
+@pytest.mark.parametrize("cls", [Doc, Sheet, Event])
+def test_ambiguous_resources_do_not_participate_in_generic_url_dispatch(cls):
+    assert cls.HAS_GENERIC_DISPATCH is False
 
 
 @pytest.mark.parametrize(

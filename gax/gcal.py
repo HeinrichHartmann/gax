@@ -895,6 +895,7 @@ class Event(Resource):
     ID_PATTERN = r"[A-Za-z0-9_-]+"
     FILE_TYPE = "gax/cal"
     FILE_EXTENSIONS = (".cal.gax.md",)
+    HAS_GENERIC_DISPATCH = False
 
     def clone(
         self, output: Path | None = None, *, calendar: str = "primary", **kw

@@ -1163,6 +1163,7 @@ class Doc(Resource):
     URL_PATTERN = r"docs\.google\.com/document/d/"
     ID_PATTERN = r"[a-zA-Z0-9-_]+"
     CHECKOUT_TYPE = "gax/doc-checkout"
+    HAS_GENERIC_DISPATCH = False
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone all tabs into a folder (supports nested tabs)."""

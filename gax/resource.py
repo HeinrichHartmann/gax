@@ -16,7 +16,7 @@ Resources are constructed from a URL or file path:
 Subclasses declare dispatch metadata as class attributes:
 
   URL_PATTERN     — regex for URL matching (from_url)
-  ID_PATTERN      — regex for raw subclass-specific IDs (from_url)
+  ID_PATTERN      — regex for raw subclass-specific IDs (explicit subclass use)
   FILE_TYPE       — YAML header type string (from_file)
   FILE_EXTENSIONS — filename suffixes (from_file)
   CHECKOUT_TYPE   — type in .gax.yaml for checkout directories (from_file)
@@ -67,7 +67,7 @@ class Resource:
 
     Dispatch metadata (set on subclasses):
         URL_PATTERN     — regex string for URL matching
-        ID_PATTERN      — regex string for raw IDs handled by subclass constructors
+        ID_PATTERN      — regex string for raw IDs handled by explicit subclass constructors
         FILE_TYPE       — e.g. "gax/doc", matched against YAML type field
         FILE_EXTENSIONS — e.g. (".doc.gax.md", ".tab.gax.md")
         CHECKOUT_TYPE   — e.g. "gax/doc-checkout", matched in .gax.yaml
@@ -80,6 +80,7 @@ class Resource:
     FILE_TYPE: str | None = None
     FILE_EXTENSIONS: tuple[str, ...] = ()
     CHECKOUT_TYPE: str | None = None
+    HAS_GENERIC_DISPATCH: bool = True
 
     _subclasses: list[type["Resource"]] = []
 
@@ -98,11 +99,22 @@ class Resource:
         When called on Resource (base class): dispatches across all
         subclasses, returning the first that can handle the URL.
 
+        When called on Resource (base class), only real URLs participate in
+        generic dispatch. Raw IDs must go through explicit subclass
+        constructors such as Draft.from_url(id).
+
         When called on a subclass: matches URL_PATTERN or ID_PATTERN and
         constructs, or raises ValueError. Override for custom matching.
         """
         if cls is Resource:
+            if "://" not in url:
+                raise ValueError(
+                    f"Resource.from_url requires a URL, got: {url!r}. "
+                    "Use an explicit resource class for raw IDs."
+                )
             for sub in Resource._subclasses:
+                if not sub.HAS_GENERIC_DISPATCH:
+                    continue
                 try:
                     return sub.from_url(url)
                 except ValueError:

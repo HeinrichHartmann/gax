@@ -298,7 +298,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
 def clone(ctx, url: str, output: Path | None, fmt: str):
     """Clone a Google resource from URL.
 
-    Supports Google Docs, Sheets, Forms, Gmail, and Calendar events.
+    Supports Google Docs, Sheets, Forms, Gmail, and Calendar.
     """
     from .resource import Resource
 

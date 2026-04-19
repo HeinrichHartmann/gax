@@ -557,6 +557,7 @@ class Sheet(Resource):
     URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
     ID_PATTERN = r"[a-zA-Z0-9-_]+"
     CHECKOUT_TYPE = "gax/sheet-checkout"
+    HAS_GENERIC_DISPATCH = False
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Checkout all tabs into a folder.
