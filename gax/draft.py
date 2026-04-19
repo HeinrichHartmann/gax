@@ -285,9 +285,15 @@ class Draft(Resource):
 
     name = "draft"
     URL_PATTERN = r"mail\.google\.com/mail/[^#]*#drafts/"
-    ID_PATTERN = r"r?[A-Za-z0-9-]+"
     FILE_TYPE = "gax/draft"
     FILE_EXTENSIONS = (".draft.gax.md",)
+
+    @classmethod
+    def from_id(cls, id_value: str) -> "Draft":
+        """Construct from a Gmail draft ID."""
+        if re.fullmatch(r"r?[A-Za-z0-9-]+", id_value):
+            return cls(url=id_value)
+        raise ValueError(f"Not a Gmail draft ID: {id_value}")
 
     def _output_path(self, subject: str, output: Path | None) -> Path:
         if output:

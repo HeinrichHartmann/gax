@@ -452,7 +452,6 @@ class SheetTab(Resource):
 
     name = "sheet-tab"
     URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
-    ID_PATTERN = r"[a-zA-Z0-9-_]+"
     FILE_EXTENSIONS = (".sheet.gax.md",)
 
     @classmethod
@@ -555,7 +554,6 @@ class Sheet(Resource):
 
     name = "sheet"
     URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
-    ID_PATTERN = r"[a-zA-Z0-9-_]+"
     CHECKOUT_TYPE = "gax/sheet-checkout"
     HAS_GENERIC_DISPATCH = False
 

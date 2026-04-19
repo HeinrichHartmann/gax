@@ -796,7 +796,6 @@ class Form(Resource):
 
     name = "form"
     URL_PATTERN = r"docs\.google\.com/forms/d/"
-    ID_PATTERN = r"[a-zA-Z0-9-_]+"
     FILE_TYPE = "gax/form"
     FILE_EXTENSIONS = (".form.gax.md",)
 

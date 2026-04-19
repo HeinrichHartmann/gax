@@ -323,7 +323,13 @@ class File(Resource):
 
     name = "file"
     URL_PATTERN = r"drive\.google\.com/(file/d/|open\?id=)"
-    ID_PATTERN = r"[a-zA-Z0-9_-]+"
+
+    @classmethod
+    def from_id(cls, id_value: str) -> "File":
+        """Construct from a Google Drive file ID."""
+        if re.fullmatch(r"[a-zA-Z0-9_-]+", id_value):
+            return cls(url=id_value)
+        raise ValueError(f"Not a Google Drive file ID: {id_value}")
 
     @classmethod
     def from_file(cls, path: Path) -> "File":

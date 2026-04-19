@@ -96,14 +96,18 @@ class Thread(Resource):
 
     @classmethod
     def from_url(cls, url: str) -> "Thread":
-        """Construct from a Gmail thread URL or thread ID."""
+        """Construct from a Gmail thread URL."""
         # Must NOT match draft URLs
         if re.search(r"mail\.google\.com/mail/", url) and "#drafts/" not in url:
             return cls(url=url)
-        # Also accept raw thread IDs
-        if _is_thread_id(url):
-            return cls(url=url)
         raise ValueError(f"Not a Gmail thread URL: {url}")
+
+    @classmethod
+    def from_id(cls, id_value: str) -> "Thread":
+        """Construct from a Gmail thread ID."""
+        if _is_thread_id(id_value):
+            return cls(url=id_value)
+        raise ValueError(f"Not a Gmail thread ID: {id_value}")
 
     def _output_path(self, subject: str, thread_id: str, output: Path | None) -> Path:
         if output:

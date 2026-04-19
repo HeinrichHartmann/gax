@@ -398,7 +398,6 @@ class Presentation(Resource):
 
     name = "presentation"
     URL_PATTERN = r"docs\.google\.com/presentation/d/"
-    ID_PATTERN = r"[a-zA-Z0-9_-]+"
     CHECKOUT_TYPE = "gax/slides-checkout"
 
     def clone(

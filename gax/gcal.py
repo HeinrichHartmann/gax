@@ -892,10 +892,16 @@ class Event(Resource):
 
     name = "event"
     URL_PATTERN = r"calendar\.google\.com/calendar/"
-    ID_PATTERN = r"[A-Za-z0-9_-]+"
     FILE_TYPE = "gax/cal"
     FILE_EXTENSIONS = (".cal.gax.md",)
     HAS_GENERIC_DISPATCH = False
+
+    @classmethod
+    def from_id(cls, id_value: str) -> "Event":
+        """Construct from a Calendar event ID."""
+        if re.fullmatch(r"[A-Za-z0-9_-]+", id_value):
+            return cls(url=id_value)
+        raise ValueError(f"Not a Calendar event ID: {id_value}")
 
     def clone(
         self, output: Path | None = None, *, calendar: str = "primary", **kw

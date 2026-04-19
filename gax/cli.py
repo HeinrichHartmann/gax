@@ -892,7 +892,11 @@ def draft_clone(draft_id_or_url, output):
     try:
         from .ui import success
 
-        file_path = Draft.from_url(draft_id_or_url).clone(output=output)
+        try:
+            draft = Draft.from_url(draft_id_or_url)
+        except ValueError:
+            draft = Draft.from_id(draft_id_or_url)
+        file_path = draft.clone(output=output)
         success(f"Created: {file_path}")
     except (ValueError, Exception) as e:
         from .ui import error
@@ -1130,7 +1134,11 @@ def file_clone(url_or_id, output):
     try:
         from .ui import success
 
-        file_path = File(url=url_or_id).clone(output=output)
+        try:
+            file_resource = File.from_url(url_or_id)
+        except ValueError:
+            file_resource = File.from_id(url_or_id)
+        file_path = file_resource.clone(output=output)
         success(f"Created: {file_path}")
     except ValueError as e:
         from .ui import error
@@ -1276,7 +1284,11 @@ def mail_clone(thread_id_or_url, output):
     try:
         from .ui import success
 
-        file_path = Thread.from_url(thread_id_or_url).clone(output=output)
+        try:
+            thread = Thread.from_url(thread_id_or_url)
+        except ValueError:
+            thread = Thread.from_id(thread_id_or_url)
+        file_path = thread.clone(output=output)
         success(f"Created: {file_path}")
     except (ValueError, Exception) as e:
         from .ui import error
@@ -2004,7 +2016,11 @@ def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None)
     try:
         from .ui import success
 
-        file_path = Event.from_url(id_or_url).clone(calendar=calendar, output=output_path)
+        try:
+            event = Event.from_url(id_or_url)
+        except ValueError:
+            event = Event.from_id(id_or_url)
+        file_path = event.clone(calendar=calendar, output=output_path)
         success(f"Cloned event to {file_path}")
     except ValueError as e:
         from .ui import error

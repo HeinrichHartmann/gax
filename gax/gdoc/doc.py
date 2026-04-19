@@ -978,7 +978,6 @@ class Tab(Resource):
 
     name = "doc-tab"
     URL_PATTERN = r"docs\.google\.com/document/d/"
-    ID_PATTERN = r"[a-zA-Z0-9-_]+"
     FILE_TYPE = "gax/doc"
     FILE_EXTENSIONS = (".doc.gax.md", ".tab.gax.md")
 
@@ -1161,7 +1160,6 @@ class Doc(Resource):
 
     name = "doc"
     URL_PATTERN = r"docs\.google\.com/document/d/"
-    ID_PATTERN = r"[a-zA-Z0-9-_]+"
     CHECKOUT_TYPE = "gax/doc-checkout"
     HAS_GENERIC_DISPATCH = False
 

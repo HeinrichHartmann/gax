@@ -239,18 +239,33 @@ class TestFromFile:
         (Draft, "r-123456"),
         (Event, "evt_123"),
         (File, "drive_123"),
+        (Thread, "FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV"),
+    ],
+)
+def test_subclass_from_id_accepts_raw_ids(cls, raw_id):
+    r = cls.from_id(raw_id)
+    assert isinstance(r, cls)
+    assert r.url == raw_id
+
+
+@pytest.mark.parametrize(
+    ("cls", "raw_id"),
+    [
+        (Draft, "r-123456"),
+        (Event, "evt_123"),
+        (File, "drive_123"),
         (Form, "form123"),
         (Tab, "doc123"),
         (Doc, "doc123"),
         (SheetTab, "sheet123"),
         (Sheet, "sheet123"),
         (Presentation, "pres123"),
+        (Thread, "FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV"),
     ],
 )
-def test_subclass_from_url_accepts_raw_ids(cls, raw_id):
-    r = cls.from_url(raw_id)
-    assert isinstance(r, cls)
-    assert r.url == raw_id
+def test_subclass_from_url_rejects_raw_ids(cls, raw_id):
+    with pytest.raises(ValueError, match="does not handle URL|Not a Gmail thread URL"):
+        cls.from_url(raw_id)
 
 
 @pytest.mark.parametrize("cls", [Doc, Sheet, Event])

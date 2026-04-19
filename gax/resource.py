@@ -16,7 +16,6 @@ Resources are constructed from a URL or file path:
 Subclasses declare dispatch metadata as class attributes:
 
   URL_PATTERN     — regex for URL matching (from_url)
-  ID_PATTERN      — regex for raw subclass-specific IDs (explicit subclass use)
   FILE_TYPE       — YAML header type string (from_file)
   FILE_EXTENSIONS — filename suffixes (from_file)
   CHECKOUT_TYPE   — type in .gax.yaml for checkout directories (from_file)
@@ -67,7 +66,6 @@ class Resource:
 
     Dispatch metadata (set on subclasses):
         URL_PATTERN     — regex string for URL matching
-        ID_PATTERN      — regex string for raw IDs handled by explicit subclass constructors
         FILE_TYPE       — e.g. "gax/doc", matched against YAML type field
         FILE_EXTENSIONS — e.g. (".doc.gax.md", ".tab.gax.md")
         CHECKOUT_TYPE   — e.g. "gax/doc-checkout", matched in .gax.yaml
@@ -76,7 +74,6 @@ class Resource:
     name: str
 
     URL_PATTERN: str | None = None
-    ID_PATTERN: str | None = None
     FILE_TYPE: str | None = None
     FILE_EXTENSIONS: tuple[str, ...] = ()
     CHECKOUT_TYPE: str | None = None
@@ -101,10 +98,10 @@ class Resource:
 
         When called on Resource (base class), only real URLs participate in
         generic dispatch. Raw IDs must go through explicit subclass
-        constructors such as Draft.from_url(id).
+        constructors such as Draft.from_id(id).
 
-        When called on a subclass: matches URL_PATTERN or ID_PATTERN and
-        constructs, or raises ValueError. Override for custom matching.
+        When called on a subclass: matches URL_PATTERN and constructs, or
+        raises ValueError. Override for custom URL matching.
         """
         if cls is Resource:
             if "://" not in url:
@@ -125,9 +122,12 @@ class Resource:
             )
         if cls.URL_PATTERN and re.search(cls.URL_PATTERN, url):
             return cls(url=url)
-        if cls.ID_PATTERN and re.fullmatch(cls.ID_PATTERN, url):
-            return cls(url=url)
         raise ValueError(f"{cls.__name__} does not handle URL: {url}")
+
+    @classmethod
+    def from_id(cls, id_value: str) -> "Resource":
+        """Construct a resource from an explicit resource-specific ID."""
+        raise ValueError(f"{cls.__name__} does not support ID-based construction")
 
     @classmethod
     def from_file(cls, path: Path) -> "Resource":
