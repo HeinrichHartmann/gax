@@ -406,6 +406,14 @@ class File(Resource):
         create_tracking_file(self.path, metadata)
         logger.info(f"Size: {metadata.get('size', 'unknown')} bytes")
 
+    def diff(self, **kw) -> str | None:
+        """Preview push — shows what will be updated."""
+        tracking_path = self._tracking_path()
+        if tracking_path.exists():
+            tracking_data = read_tracking_file(tracking_path)
+            return f"Update Drive file: {tracking_data.get('name')}\nFrom local file: {self.path}"
+        return f"Upload new file: {self.path.name}"
+
     def push(self, *, public: bool = False, **kw) -> None:
         """Push local file to Google Drive. Unconditional."""
         tracking_path = self._tracking_path()

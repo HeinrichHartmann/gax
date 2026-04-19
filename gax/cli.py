@@ -39,7 +39,7 @@ from .gcal import Cal, Event
 from .gtask import TaskList, Task as TaskResource
 from .form import Form
 from .draft import Draft
-from .contacts import Contacts
+from .contacts import Contact, Contacts  # noqa: F401
 from .gdrive import File
 from .gdoc import Tab, Doc  # noqa: F401 — registers with Resource._subclasses
 from .gslides import Slide, Presentation  # noqa: F401

@@ -568,8 +568,32 @@ def format_diff_summary(
 
 
 # =============================================================================
-# Resource class — the public interface for cli.py.
+# Resource classes — the public interface for cli.py.
 # =============================================================================
+
+
+class Contact(Resource):
+    """A single Google Contact (.contact.gax.yaml file)."""
+
+    name = "contact"
+    FILE_TYPE = "gax/contact"
+    FILE_EXTENSIONS = (".contact.gax.yaml",)
+
+    def pull(self, **kw) -> None:
+        """Pull latest contact data from Google."""
+        content = self.path.read_text(encoding="utf-8")
+        local = yaml_to_contact(content)
+        rn = local.get("resourceName", "")
+        if not rn:
+            raise ValueError("Contact has no resourceName")
+
+        raw_contacts, groups = fetch_contacts()
+        for raw_c in raw_contacts:
+            if raw_c.get("resourceName") == rn:
+                updated = api_to_contact(raw_c, groups)
+                self.path.write_text(contact_to_yaml(updated), encoding="utf-8")
+                return
+        raise ValueError(f"Contact {rn} not found remotely")
 
 
 class Contacts(Resource):

@@ -520,6 +520,16 @@ class SheetTab(Resource):
         logger.info(f"Pulling: {self.path.name}")
         pull_single_tab(self.path)
 
+    def diff(self, **kw) -> str | None:
+        """Preview push — shows row count summary."""
+        from .frontmatter import parse_file
+        from ..formats import get_format as get_fmt
+
+        config, data = parse_file(self.path)
+        fmt = get_fmt(config.format)
+        df = fmt.read(data)
+        return f"Push {len(df)} rows from {self.path} to {config.tab}"
+
     def push(self, **kw) -> None:
         """Push a single-tab file to remote.
 
