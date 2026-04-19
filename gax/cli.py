@@ -36,6 +36,7 @@ from .mail import Thread, Mailbox
 from .label import Label
 from .filter import Filter
 from .gcal import Cal, Event
+from .gtask import TaskList, Task as TaskResource
 from .form import Form
 from .draft import Draft
 from .contacts import Contacts
@@ -2084,6 +2085,240 @@ def cal_event_delete_cmd(file_path: Path, yes: bool):
 
 
 # =============================================================================
+# Task commands
+# =============================================================================
+
+
+@docs.section("resource")
+@click.group(name="task")
+def task_group():
+    """Google Tasks sync commands."""
+    pass
+
+
+@task_group.command(name="lists")
+def task_lists_cmd():
+    """List available task lists."""
+    try:
+        TaskList().lists(sys.stdout)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@task_group.command(name="list")
+@click.argument("tasklist", required=False)
+@click.option("--all", "show_all", is_flag=True, help="Include completed tasks")
+@click.option(
+    "-f",
+    "--format",
+    "fmt",
+    type=click.Choice(["md", "yaml"]),
+    default="md",
+    help="Output format (default: md)",
+)
+def task_list_cmd(tasklist: str | None, show_all: bool, fmt: str):
+    """View tasks from a task list."""
+    try:
+        TaskList().list(sys.stdout, tasklist=tasklist, show_all=show_all, fmt=fmt)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@task_group.command(name="clone")
+@click.argument("tasklist", required=False)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help="Output file path",
+)
+@click.option("--all", "show_all", is_flag=True, help="Include completed tasks")
+@click.option(
+    "-f",
+    "--format",
+    "fmt",
+    type=click.Choice(["md", "yaml"]),
+    default="md",
+    help="Output format (default: md)",
+)
+def task_clone_cmd(
+    tasklist: str | None, output: Path | None, show_all: bool, fmt: str
+):
+    """Clone a task list to a single file."""
+    try:
+        path = TaskList().clone(
+            tasklist=tasklist, output=output, fmt=fmt, show_all=show_all
+        )
+        from .ui import success
+
+        success(f"Created: {path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@task_group.command(name="checkout")
+@click.argument("tasklist", required=False)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help="Output folder path",
+)
+@click.option("--all", "show_all", is_flag=True, help="Include completed tasks")
+def task_checkout_cmd(tasklist: str | None, output: Path | None, show_all: bool):
+    """Checkout a task list as a folder of individual task files."""
+    try:
+        cloned, skipped = TaskList().checkout(
+            tasklist=tasklist, output=output, show_all=show_all
+        )
+        from .ui import success
+
+        success(f"Checked out: {cloned}, Skipped: {skipped}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@task_group.command(name="pull")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+def task_pull_cmd(file_path: Path):
+    """Pull latest task data from API."""
+    try:
+        name = file_path.name
+        if name.endswith(".tasks.gax.md") or name.endswith(".tasks.gax.yaml"):
+            TaskList().pull(file_path)
+        else:
+            TaskResource().pull(file_path)
+        from .ui import success
+
+        success(f"Updated: {file_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@task_group.command(name="new")
+@click.argument("title")
+@click.option(
+    "--tasklist",
+    help="Task list name, ID, or index (default: first list)",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help="Output file path",
+)
+def task_new_cmd(title: str, tasklist: str | None, output: Path | None):
+    """Create a new task on Google."""
+    try:
+        path = TaskResource().new(title, tasklist=tasklist, output=output)
+        from .ui import success
+
+        success(f"Created: {path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@task_group.command(name="diff")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+def task_diff_cmd(file_path: Path):
+    """Show differences between local task and remote."""
+    try:
+        diff_text = TaskResource().diff(file_path)
+        if diff_text is None:
+            click.echo("No changes.")
+        else:
+            click.echo(diff_text)
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@task_group.command(name="push")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def task_push_cmd(file_path: Path, yes: bool):
+    """Push local task changes to API."""
+    try:
+        t = TaskResource()
+        diff_text = t.diff(file_path)
+        if diff_text is None:
+            click.echo("No changes to push.")
+            return
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Push these changes?"):
+                click.echo("Cancelled.")
+                return
+        title = t.push(file_path)
+        from .ui import success
+
+        success(f"Pushed: {title}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@task_group.command(name="done")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def task_done_cmd(file_path: Path, yes: bool):
+    """Mark a task as completed and push."""
+    try:
+        if not yes:
+            if not click.confirm(f"Mark {file_path.name} as done?"):
+                click.echo("Cancelled.")
+                return
+        title = TaskResource().done(file_path)
+        from .ui import success
+
+        success(f"Done: {title}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+@task_group.command(name="delete")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+def task_delete_cmd(file_path: Path, yes: bool):
+    """Delete a task from Google and local file."""
+    try:
+        if not yes:
+            if not click.confirm(f"Delete {file_path.name}?"):
+                click.echo("Cancelled.")
+                return
+        title = TaskResource().delete(file_path)
+        from .ui import success
+
+        success(f"Deleted: {title}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
+# =============================================================================
 # Form commands
 # =============================================================================
 
@@ -2467,7 +2702,7 @@ def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
             document_id = extract_doc_id(url)
             tabs = get_tabs_list(document_id)
             if len(tabs["tabs"]) > 1:
-                first_tab = tabs["tabs"][0]["title"]
+                first_tab = tabs["tabs"][0].title
                 click.echo(
                     f'  Tab "{first_tab}" cloned (1 of {len(tabs["tabs"])} tabs).\n'
                     f"  For all tabs: gax doc checkout {url}"
@@ -2552,6 +2787,7 @@ main.add_command(mailbox_group, name="mailbox")
 main.add_command(mail_label)  # Flattened from mail.label (ADR 020)
 main.add_command(mail_filter)  # Flattened from mail.filter (ADR 020)
 main.add_command(cal_group)
+main.add_command(task_group)
 main.add_command(form)
 main.add_command(draft)  # Flattened from mail.draft (ADR 020)
 main.add_command(contacts)

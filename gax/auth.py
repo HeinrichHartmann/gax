@@ -20,6 +20,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.settings.basic",  # filters
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/tasks",  # read/write tasks
     "https://www.googleapis.com/auth/forms.body",  # read/write form structure
     "https://www.googleapis.com/auth/contacts",  # read/write contacts
 ]
