@@ -35,10 +35,12 @@ Additional notes specific to contacts:
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
 from googleapiclient.discovery import build
 
 from .auth import get_authenticated_credentials
@@ -363,6 +365,84 @@ def format_markdown(contacts: list[dict]) -> str:
 
 
 # =============================================================================
+# Individual contact file format — split header/body YAML (.contact.gax.yaml)
+#
+# contact_to_yaml and yaml_to_contact are an inverse pair.
+# =============================================================================
+
+
+def contact_to_yaml(contact: dict) -> str:
+    """Serialize a normalized contact dict to split YAML (header + body)."""
+    header: dict = {
+        "type": "gax/contact",
+        "resourceName": contact.get("resourceName", ""),
+        "synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    body: dict = {}
+    for field in CONTACT_BODY_FIELDS:
+        val = contact.get(field)
+        if val:  # omit empty strings and empty lists
+            body[field] = val
+
+    header_str = yaml.dump(
+        header, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
+    body_str = yaml.dump(
+        body, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
+
+    return f"---\n{header_str}---\n{body_str}"
+
+
+CONTACT_BODY_FIELDS = [
+    "name",
+    "givenName",
+    "familyName",
+    "email",
+    "phone",
+    "organization",
+    "title",
+    "department",
+    "address",
+    "birthday",
+    "notes",
+    "nickname",
+    "website",
+    "labels",
+]
+
+
+def yaml_to_contact(content: str) -> dict:
+    """Parse split YAML content to a normalized contact dict."""
+    if not content.startswith("---"):
+        raise ValueError("Expected YAML frontmatter (---)")
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        raise ValueError("Invalid split YAML format")
+
+    header = yaml.safe_load(parts[1])
+    body = yaml.safe_load(parts[2])
+    data = {**header, **(body or {})}
+
+    # Build normalized contact dict with defaults
+    contact = {"resourceName": data.get("resourceName", "")}
+    for field in CONTACT_BODY_FIELDS:
+        if field in LIST_FIELDS:
+            contact[field] = data.get(field, [])
+        else:
+            contact[field] = data.get(field, "")
+    return contact
+
+
+def _safe_filename(name: str) -> str:
+    """Create a filesystem-safe filename from a contact name."""
+    safe = re.sub(r"[^\w\s-]", "", name)[:40].strip()
+    return re.sub(r"\s+", "_", safe) or "unnamed"
+
+
+# =============================================================================
 # Comparison helpers — diff logic for local vs remote contacts.
 # =============================================================================
 
@@ -574,7 +654,157 @@ class Contacts(Resource):
             raise ValueError("push only works with JSONL format")
 
         local_contacts = parse_jsonl_body(body)
+        self._push_contacts(local_contacts)
 
+    # ── Checkout operations ──────────────────────────────────────────────
+
+    def checkout(self, *, output: Path | None = None, **kw) -> tuple[int, int]:
+        """Checkout contacts as individual .contact.gax.yaml files.
+
+        Returns (cloned, skipped).
+        """
+        logger.info("Fetching contacts...")
+        normalized, _ = self._fetch_and_normalize()
+
+        folder = output or Path("contacts.contacts.gax.md.d")
+        folder.mkdir(parents=True, exist_ok=True)
+
+        # Write .gax.yaml metadata
+        meta = {
+            "type": "gax/contacts-checkout",
+            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        (folder / ".gax.yaml").write_text(
+            yaml.dump(meta, default_flow_style=False, sort_keys=False)
+        )
+
+        # Get existing resourceNames in folder
+        existing_ids: set[str] = set()
+        for f in folder.glob("*.contact.gax.yaml"):
+            try:
+                c = yaml_to_contact(f.read_text(encoding="utf-8"))
+                if c.get("resourceName"):
+                    existing_ids.add(c["resourceName"])
+            except Exception:
+                pass
+
+        cloned = 0
+        skipped = 0
+
+        for contact in normalized:
+            resource_name = contact.get("resourceName", "")
+            if resource_name in existing_ids:
+                skipped += 1
+                continue
+
+            name = contact.get("name", "unnamed")
+            filename = f"{_safe_filename(name)}.contact.gax.yaml"
+            file_path = folder / filename
+
+            # Handle filename collisions
+            if file_path.exists():
+                suffix = (
+                    resource_name.rsplit("/", 1)[-1][:8]
+                    if resource_name
+                    else str(cloned)
+                )
+                filename = f"{_safe_filename(name)}_{suffix}.contact.gax.yaml"
+                file_path = folder / filename
+
+            file_path.write_text(contact_to_yaml(contact), encoding="utf-8")
+            cloned += 1
+            logger.info(f"Writing {filename}")
+
+        logger.info(f"Contacts: {cloned} cloned, {skipped} skipped")
+        return cloned, skipped
+
+    def pull_checkout(self, folder: Path, **kw) -> None:
+        """Pull latest contacts into checkout folder, updating/adding/removing files."""
+        logger.info("Fetching contacts...")
+        normalized, _ = self._fetch_and_normalize()
+        remote_by_id = {
+            c["resourceName"]: c for c in normalized if c.get("resourceName")
+        }
+
+        # Scan existing files
+        local_files: dict[str, Path] = {}  # resourceName -> file path
+        for f in folder.glob("*.contact.gax.yaml"):
+            try:
+                c = yaml_to_contact(f.read_text(encoding="utf-8"))
+                rn = c.get("resourceName", "")
+                if rn:
+                    local_files[rn] = f
+            except Exception:
+                pass
+
+        # Update existing and remove stale
+        for rn, file_path in local_files.items():
+            if rn in remote_by_id:
+                file_path.write_text(
+                    contact_to_yaml(remote_by_id[rn]), encoding="utf-8"
+                )
+            else:
+                file_path.unlink()
+                logger.info(f"Removed: {file_path.name}")
+
+        # Add new contacts
+        added = 0
+        for rn, contact in remote_by_id.items():
+            if rn not in local_files:
+                name = contact.get("name", "unnamed")
+                filename = f"{_safe_filename(name)}.contact.gax.yaml"
+                file_path = folder / filename
+                if file_path.exists():
+                    suffix = rn.rsplit("/", 1)[-1][:8]
+                    filename = f"{_safe_filename(name)}_{suffix}.contact.gax.yaml"
+                    file_path = folder / filename
+                file_path.write_text(contact_to_yaml(contact), encoding="utf-8")
+                added += 1
+                logger.info(f"Added: {filename}")
+
+        # Update metadata
+        meta = {
+            "type": "gax/contacts-checkout",
+            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        (folder / ".gax.yaml").write_text(
+            yaml.dump(meta, default_flow_style=False, sort_keys=False)
+        )
+
+        logger.info(
+            f"Updated: {len(local_files)} existing, {added} added, "
+            f"{len(local_files) - sum(1 for rn in local_files if rn in remote_by_id)} removed"
+        )
+
+    def diff_checkout(self, folder: Path, **kw) -> str | None:
+        """Preview changes between checkout folder and remote contacts."""
+        local_contacts = self._read_checkout_contacts(folder)
+
+        logger.info("Fetching remote contacts...")
+        remote_contacts, _ = self._fetch_and_normalize()
+
+        creates, updates, deletes = compare_contacts(local_contacts, remote_contacts)
+        return format_diff_summary(creates, updates, deletes) or None
+
+    def push_checkout(self, folder: Path, **kw) -> None:
+        """Push checkout folder contacts to Google."""
+        local_contacts = self._read_checkout_contacts(folder)
+        self._push_contacts(local_contacts)
+
+    # ── Private helpers ──────────────────────────────────────────────────
+
+    def _read_checkout_contacts(self, folder: Path) -> list[dict]:
+        """Read all .contact.gax.yaml files from a checkout folder."""
+        contacts = []
+        for f in sorted(folder.glob("*.contact.gax.yaml")):
+            try:
+                contacts.append(yaml_to_contact(f.read_text(encoding="utf-8")))
+            except Exception as e:
+                logger.warning(f"Skipping {f.name}: {e}")
+        return contacts
+
+    def _push_contacts(self, local_contacts: list[dict]) -> None:
+        """Push a list of normalized contacts to Google. Shared by push() and push_checkout()."""
         logger.info("Fetching remote contacts...")
         service = get_service()
         raw_remote, groups = fetch_contacts(service=service)

@@ -174,6 +174,64 @@ class TestEventYamlRoundTrip:
         assert parsed.conference is None
         assert parsed.attendees == []
 
+    def test_split_format_has_two_sections(self):
+        """New format should have header (metadata) and body (event data)."""
+        event = CalendarEvent(
+            id="evt123",
+            calendar="primary",
+            source="https://calendar.google.com/calendar/event?eid=evt123",
+            synced="2026-03-15T00:00:00Z",
+            title="Meeting",
+            start="2026-03-15T09:00:00+01:00",
+            end="2026-03-15T10:00:00+01:00",
+            timezone="Europe/Berlin",
+        )
+        yaml_content = event_to_yaml(event)
+
+        # Should have exactly two --- delimiters (header open + body separator)
+        parts = yaml_content.split("---")
+        assert len(parts) == 3  # ['', header, body]
+
+        # Header should contain metadata, not event data
+        import yaml
+
+        header = yaml.safe_load(parts[1])
+        assert header["type"] == "gax/cal"
+        assert header["id"] == "evt123"
+        assert "title" not in header
+        assert "start" not in header
+
+        # Body should contain event data, not metadata
+        body = yaml.safe_load(parts[2])
+        assert body["title"] == "Meeting"
+        assert body["start"] == "2026-03-15T09:00:00+01:00"
+        assert "type" not in body
+        assert "id" not in body
+
+    def test_legacy_single_section_format(self):
+        """Old format (all fields in one section) should still parse correctly."""
+        legacy = (
+            "---\n"
+            "type: gax/cal\n"
+            "id: evt_old\n"
+            "calendar: primary\n"
+            "source: https://calendar.google.com/calendar/event?eid=evt_old\n"
+            "synced: '2026-01-01T00:00:00Z'\n"
+            "title: Legacy Event\n"
+            "start: '2026-01-15T10:00:00+01:00'\n"
+            "end: '2026-01-15T11:00:00+01:00'\n"
+            "timezone: Europe/Berlin\n"
+            "location: Room 1\n"
+            "status: confirmed\n"
+            "---\n"
+        )
+        parsed = yaml_to_event(legacy)
+        assert parsed.id == "evt_old"
+        assert parsed.title == "Legacy Event"
+        assert parsed.start == "2026-01-15T10:00:00+01:00"
+        assert parsed.location == "Room 1"
+        assert parsed.timezone == "Europe/Berlin"
+
     def test_invalid_frontmatter(self):
         import pytest
 

@@ -1084,6 +1084,34 @@ def contacts_push(file, yes):
         sys.exit(1)
 
 
+@contacts.command("checkout")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help="Output folder (default: contacts.contacts.gax.md.d)",
+)
+def contacts_checkout(output):
+    """Checkout contacts as individual files into a folder.
+
+    Creates one .contact.gax.yaml file per contact for easy per-contact
+    editing and diffing.
+    """
+    try:
+        from .ui import success
+
+        cloned, skipped = Contacts().checkout(output=output)
+        parts = [f"{cloned} contacts"]
+        if skipped:
+            parts.append(f"({skipped} skipped)")
+        success(f"Checked out {' '.join(parts)}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+
+
 # =============================================================================
 # File commands (Google Drive)
 # =============================================================================

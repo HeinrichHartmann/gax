@@ -105,6 +105,8 @@ def _detect_file_type(file_path: Path) -> str | None:
         return "gax/form"
     if name.endswith(".slides.gax.md"):
         return "gax/slides"
+    if name.endswith(".contact.gax.yaml"):
+        return "gax/contact"
     if ".contacts." in name or name.endswith(".contacts.gax.md"):
         return "gax/contacts"
     # Mailbox/list files often don't have specific extension, just .gax.md
@@ -206,6 +208,13 @@ def _pull_folder(
                     TaskSingleResource().pull(task_file)
                 except ValueError:
                     pass
+            return True, "updated"
+
+        elif checkout_type == "gax/contacts-checkout":
+            # Contacts checkouts pull in-place
+            if scratch_path.exists():
+                shutil.rmtree(scratch_path)
+            Contacts().pull_checkout(folder_path)
             return True, "updated"
 
         else:
@@ -577,6 +586,18 @@ def _push_folder(
             p.push(folder_path)
             return True, "pushed"
 
+        elif checkout_type == "gax/contacts-checkout":
+            c = Contacts()
+            diff_text = c.diff_checkout(folder_path)
+            if diff_text is None:
+                return True, "no changes"
+            if not yes:
+                click.echo("\n" + diff_text)
+                if not click.confirm("\nPush these changes?"):
+                    return False, "cancelled"
+            c.push_checkout(folder_path)
+            return True, "pushed"
+
         else:
             return False, f"Push not supported for checkout type: {checkout_type}"
 
@@ -684,6 +705,27 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
             try:
                 Form().pull(file_path)
                 return True, "updated"
+            except ValueError as e:
+                return False, str(e)
+
+        elif file_type == "gax/contact":
+            try:
+                from .contacts import yaml_to_contact, contact_to_yaml
+
+                c = yaml_to_contact(file_path.read_text(encoding="utf-8"))
+                rn = c.get("resourceName", "")
+                if not rn:
+                    return False, "Contact has no resourceName"
+                # Re-fetch and overwrite
+                from .contacts import fetch_contacts, api_to_contact
+
+                raw, groups = fetch_contacts()
+                for raw_c in raw:
+                    if raw_c.get("resourceName") == rn:
+                        updated = api_to_contact(raw_c, groups)
+                        file_path.write_text(contact_to_yaml(updated), encoding="utf-8")
+                        return True, "updated"
+                return False, f"Contact {rn} not found remotely"
             except ValueError as e:
                 return False, str(e)
 
