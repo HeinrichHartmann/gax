@@ -10,7 +10,7 @@ CONFIG_DIR = Path.home() / ".config" / "gax"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
 TOKEN_FILE = CONFIG_DIR / "token.json"
 
-# Scopes needed for Google Sheets, Docs, Gmail, Calendar, Forms, Contacts, and Drive files
+# Scopes needed for Google Sheets, Docs, Slides, Gmail, Calendar, Forms, Contacts, and Drive files
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",  # read/write/create Drive files
@@ -23,6 +23,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/tasks",  # read/write tasks
     "https://www.googleapis.com/auth/forms.body",  # read/write form structure
     "https://www.googleapis.com/auth/contacts",  # read/write contacts
+    "https://www.googleapis.com/auth/presentations",  # read/write Slides
 ]
 
 # Default OAuth client credentials (public client for CLI apps)

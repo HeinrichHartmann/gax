@@ -154,15 +154,11 @@ def create_task(
     return service.tasks().insert(**kwargs).execute()
 
 
-def update_task(
-    tasklist_id: str, task_id: str, body: dict, *, service=None
-) -> dict:
+def update_task(tasklist_id: str, task_id: str, body: dict, *, service=None) -> dict:
     """Update a task. Returns updated task dict."""
     service = get_tasks_service(service=service)
     return (
-        service.tasks()
-        .update(tasklist=tasklist_id, task=task_id, body=body)
-        .execute()
+        service.tasks().update(tasklist=tasklist_id, task=task_id, body=body).execute()
     )
 
 
@@ -584,9 +580,7 @@ class TaskList:
             "type": "gax/task-checkout",
             "tasklist_id": tl_id,
             "title": tl_title,
-            "checked_out": datetime.now(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
+            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         metadata_path = folder / ".gax.yaml"
         with open(metadata_path, "w") as f:
@@ -788,9 +782,7 @@ class Task(Resource):
             local.id = result["id"]
             local.tasklist = tl_id
             local.source = result.get("selfLink", "")
-            local.synced = datetime.now(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
+            local.synced = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             new_content = task_to_yaml(local)
             path.write_text(new_content)
@@ -803,9 +795,7 @@ class Task(Resource):
         local = yaml_to_task(content)
 
         local.status = "completed"
-        local.completed = datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        local.completed = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Write updated status locally
         path.write_text(task_to_yaml(local))

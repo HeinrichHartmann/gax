@@ -519,13 +519,25 @@ class TestPullDocNested:
         doc = _make_nested_doc_response(
             "Nested Doc",
             [
-                ("Overview", [_make_empty_para(1), _make_paragraph(2, "Top level")], []),
+                (
+                    "Overview",
+                    [_make_empty_para(1), _make_paragraph(2, "Top level")],
+                    [],
+                ),
                 (
                     "Design",
                     [_make_empty_para(1), _make_paragraph(2, "Design content")],
                     [
-                        ("Frontend", [_make_empty_para(1), _make_paragraph(2, "FE stuff")], []),
-                        ("Backend", [_make_empty_para(1), _make_paragraph(2, "BE stuff")], []),
+                        (
+                            "Frontend",
+                            [_make_empty_para(1), _make_paragraph(2, "FE stuff")],
+                            [],
+                        ),
+                        (
+                            "Backend",
+                            [_make_empty_para(1), _make_paragraph(2, "BE stuff")],
+                            [],
+                        ),
                     ],
                 ),
             ],
@@ -561,7 +573,11 @@ class TestPullDocNested:
                             "Mid",
                             [_make_empty_para(1), _make_paragraph(2, "Mid")],
                             [
-                                ("Leaf", [_make_empty_para(1), _make_paragraph(2, "Leaf")], []),
+                                (
+                                    "Leaf",
+                                    [_make_empty_para(1), _make_paragraph(2, "Leaf")],
+                                    [],
+                                ),
                             ],
                         ),
                     ],
@@ -571,7 +587,9 @@ class TestPullDocNested:
         service = _make_mock_service(doc)
 
         sections = pull_doc(
-            "test-doc-123", "https://...", docs_service=service,
+            "test-doc-123",
+            "https://...",
+            docs_service=service,
         )
 
         assert len(sections) == 3
@@ -591,7 +609,11 @@ class TestPullSingleTabNested:
                     "Parent",
                     [_make_empty_para(1), _make_paragraph(2, "parent content")],
                     [
-                        ("Child", [_make_empty_para(1), _make_paragraph(2, "child content")], []),
+                        (
+                            "Child",
+                            [_make_empty_para(1), _make_paragraph(2, "child content")],
+                            [],
+                        ),
                     ],
                 ),
             ],
@@ -599,7 +621,8 @@ class TestPullSingleTabNested:
         service = _make_mock_service(doc)
 
         section = pull_single_tab(
-            "test-doc-123", "Child",
+            "test-doc-123",
+            "Child",
             "https://docs.google.com/document/d/test-doc-123/edit",
             docs_service=service,
         )
@@ -617,7 +640,11 @@ class TestPullSingleTabNested:
                     "Design",
                     [_make_empty_para(1)],
                     [
-                        ("Frontend", [_make_empty_para(1), _make_paragraph(2, "FE")], []),
+                        (
+                            "Frontend",
+                            [_make_empty_para(1), _make_paragraph(2, "FE")],
+                            [],
+                        ),
                     ],
                 ),
             ],
@@ -625,7 +652,8 @@ class TestPullSingleTabNested:
         service = _make_mock_service(doc)
 
         section = pull_single_tab(
-            "test-doc-123", "Design/Frontend",
+            "test-doc-123",
+            "Design/Frontend",
             "https://docs.google.com/document/d/test-doc-123/edit",
             docs_service=service,
         )
@@ -640,12 +668,24 @@ class TestPullSingleTabNested:
                 (
                     "A",
                     [_make_empty_para(1)],
-                    [("Notes", [_make_empty_para(1), _make_paragraph(2, "A notes")], [])],
+                    [
+                        (
+                            "Notes",
+                            [_make_empty_para(1), _make_paragraph(2, "A notes")],
+                            [],
+                        )
+                    ],
                 ),
                 (
                     "B",
                     [_make_empty_para(1)],
-                    [("Notes", [_make_empty_para(1), _make_paragraph(2, "B notes")], [])],
+                    [
+                        (
+                            "Notes",
+                            [_make_empty_para(1), _make_paragraph(2, "B notes")],
+                            [],
+                        )
+                    ],
                 ),
             ],
         )
@@ -653,7 +693,8 @@ class TestPullSingleTabNested:
 
         with pytest.raises(ValueError, match="Ambiguous"):
             pull_single_tab(
-                "test-doc-123", "Notes",
+                "test-doc-123",
+                "Notes",
                 "https://docs.google.com/document/d/test-doc-123/edit",
                 docs_service=service,
             )
@@ -666,19 +707,32 @@ class TestPullSingleTabNested:
                 (
                     "A",
                     [_make_empty_para(1)],
-                    [("Notes", [_make_empty_para(1), _make_paragraph(2, "A notes")], [])],
+                    [
+                        (
+                            "Notes",
+                            [_make_empty_para(1), _make_paragraph(2, "A notes")],
+                            [],
+                        )
+                    ],
                 ),
                 (
                     "B",
                     [_make_empty_para(1)],
-                    [("Notes", [_make_empty_para(1), _make_paragraph(2, "B notes")], [])],
+                    [
+                        (
+                            "Notes",
+                            [_make_empty_para(1), _make_paragraph(2, "B notes")],
+                            [],
+                        )
+                    ],
                 ),
             ],
         )
         service = _make_mock_service(doc)
 
         section = pull_single_tab(
-            "test-doc-123", "B/Notes",
+            "test-doc-123",
+            "B/Notes",
             "https://docs.google.com/document/d/test-doc-123/edit",
             docs_service=service,
         )
@@ -702,12 +756,39 @@ class TestComputeTabPaths:
     def test_nested_tabs(self, tmp_path):
         """Parent tabs create subdirectories."""
         sections = [
-            DocSection("Doc", "url", "time", 1, "Design", "c",
-                       tab_depth=0, tab_has_children=True, tab_id="t.1"),
-            DocSection("Doc", "url", "time", 2, "Frontend", "c",
-                       tab_depth=1, tab_has_children=False, tab_id="t.2"),
-            DocSection("Doc", "url", "time", 3, "Backend", "c",
-                       tab_depth=1, tab_has_children=False, tab_id="t.3"),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                1,
+                "Design",
+                "c",
+                tab_depth=0,
+                tab_has_children=True,
+                tab_id="t.1",
+            ),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                2,
+                "Frontend",
+                "c",
+                tab_depth=1,
+                tab_has_children=False,
+                tab_id="t.2",
+            ),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                3,
+                "Backend",
+                "c",
+                tab_depth=1,
+                tab_has_children=False,
+                tab_id="t.3",
+            ),
         ]
         paths = _compute_tab_paths(sections, tmp_path)
         assert paths[0] == tmp_path / "Design" / "Design.doc.gax.md"
@@ -717,12 +798,39 @@ class TestComputeTabPaths:
     def test_deeply_nested(self, tmp_path):
         """Three-level nesting creates nested subdirectories."""
         sections = [
-            DocSection("Doc", "url", "time", 1, "Root", "c",
-                       tab_depth=0, tab_has_children=True, tab_id="t.1"),
-            DocSection("Doc", "url", "time", 2, "Mid", "c",
-                       tab_depth=1, tab_has_children=True, tab_id="t.2"),
-            DocSection("Doc", "url", "time", 3, "Leaf", "c",
-                       tab_depth=2, tab_has_children=False, tab_id="t.3"),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                1,
+                "Root",
+                "c",
+                tab_depth=0,
+                tab_has_children=True,
+                tab_id="t.1",
+            ),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                2,
+                "Mid",
+                "c",
+                tab_depth=1,
+                tab_has_children=True,
+                tab_id="t.2",
+            ),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                3,
+                "Leaf",
+                "c",
+                tab_depth=2,
+                tab_has_children=False,
+                tab_id="t.3",
+            ),
         ]
         paths = _compute_tab_paths(sections, tmp_path)
         assert paths[0] == tmp_path / "Root" / "Root.doc.gax.md"
@@ -732,14 +840,48 @@ class TestComputeTabPaths:
     def test_mixed_flat_and_nested(self, tmp_path):
         """Mix of flat leaf and parent-with-children tabs."""
         sections = [
-            DocSection("Doc", "url", "time", 1, "Intro", "c",
-                       tab_depth=0, tab_has_children=False),
-            DocSection("Doc", "url", "time", 2, "Design", "c",
-                       tab_depth=0, tab_has_children=True, tab_id="t.2"),
-            DocSection("Doc", "url", "time", 3, "Frontend", "c",
-                       tab_depth=1, tab_has_children=False, tab_id="t.3"),
-            DocSection("Doc", "url", "time", 4, "Appendix", "c",
-                       tab_depth=0, tab_has_children=False),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                1,
+                "Intro",
+                "c",
+                tab_depth=0,
+                tab_has_children=False,
+            ),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                2,
+                "Design",
+                "c",
+                tab_depth=0,
+                tab_has_children=True,
+                tab_id="t.2",
+            ),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                3,
+                "Frontend",
+                "c",
+                tab_depth=1,
+                tab_has_children=False,
+                tab_id="t.3",
+            ),
+            DocSection(
+                "Doc",
+                "url",
+                "time",
+                4,
+                "Appendix",
+                "c",
+                tab_depth=0,
+                tab_has_children=False,
+            ),
         ]
         paths = _compute_tab_paths(sections, tmp_path)
         assert paths[0] == tmp_path / "Intro.doc.gax.md"
@@ -751,8 +893,9 @@ class TestComputeTabPaths:
         """Comment sections get empty Path placeholders."""
         sections = [
             DocSection("Doc", "url", "time", 1, "Tab", "c"),
-            DocSection("Doc", "url", "time", 2, "Comments", "c",
-                       section_type="comments"),
+            DocSection(
+                "Doc", "url", "time", 2, "Comments", "c", section_type="comments"
+            ),
         ]
         paths = _compute_tab_paths(sections, tmp_path)
         assert paths[0] == tmp_path / "Tab.doc.gax.md"
@@ -772,7 +915,11 @@ class TestDocCloneNested:
                     "Design",
                     [_make_empty_para(1), _make_paragraph(2, "design")],
                     [
-                        ("Frontend", [_make_empty_para(1), _make_paragraph(2, "frontend")], []),
+                        (
+                            "Frontend",
+                            [_make_empty_para(1), _make_paragraph(2, "frontend")],
+                            [],
+                        ),
                     ],
                 ),
             ],
@@ -781,6 +928,7 @@ class TestDocCloneNested:
 
         # Monkey-patch _fetch_doc to use our mock
         import gax.gdoc.doc as doc_module
+
         original_fetch = doc_module._fetch_doc
         doc_module._fetch_doc = lambda *a, **kw: doc["documentId"] and doc
 

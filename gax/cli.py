@@ -326,9 +326,15 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
             output_path=output,
         )
 
+    # Google Slides (always checkout — no single-file clone)
+    elif re.search(r"docs\.google\.com/presentation/d/", url):
+        ctx.invoke(slides_checkout, url=url, output=output, fmt="md")
+
     else:
         click.echo(f"Unrecognized URL: {url}", err=True)
-        click.echo("Supported: Google Docs/Sheets/Forms, Gmail, Calendar", err=True)
+        click.echo(
+            "Supported: Google Docs/Sheets/Forms/Slides, Gmail, Calendar", err=True
+        )
         sys.exit(1)
 
 
@@ -370,9 +376,16 @@ def checkout(ctx, url: str, output: Path | None, fmt: str):
             kwargs["output"] = output
         ctx.invoke(cal_checkout_cmd, **kwargs)
 
+    # Google Slides
+    elif re.search(r"docs\.google\.com/presentation/d/", url):
+        kwargs = {"url": url, "fmt": fmt if fmt in ("md", "json") else "md"}
+        if output:
+            kwargs["output"] = output
+        ctx.invoke(slides_checkout, **kwargs)
+
     else:
         click.echo(f"Unrecognized URL: {url}", err=True)
-        click.echo("Supported: Google Docs, Sheets, Calendar", err=True)
+        click.echo("Supported: Google Docs, Sheets, Slides, Calendar", err=True)
         sys.exit(1)
 
 
@@ -2143,9 +2156,7 @@ def task_list_cmd(tasklist: str | None, show_all: bool, fmt: str):
     default="md",
     help="Output format (default: md)",
 )
-def task_clone_cmd(
-    tasklist: str | None, output: Path | None, show_all: bool, fmt: str
-):
+def task_clone_cmd(tasklist: str | None, output: Path | None, show_all: bool, fmt: str):
     """Clone a task list to a single file."""
     try:
         path = TaskList().clone(
@@ -2768,6 +2779,160 @@ def doc_checkout(url: str, output: Path | None):
 
         folder = Doc().clone(url, output=output)
         success(f"Checked out to: {folder}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+    except Exception as e:
+        from .ui import error
+
+        error(f"Error: {e}")
+        sys.exit(1)
+
+
+# =============================================================================
+# Slides commands
+# =============================================================================
+
+
+@docs.section("resource")
+@main.group()
+def slides():
+    """Google Slides operations"""
+    pass
+
+
+@slides.command("checkout")
+@click.argument("url")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    help="Output directory path",
+)
+@click.option(
+    "-f",
+    "--format",
+    "fmt",
+    default="md",
+    type=click.Choice(["md", "json"]),
+    show_default=True,
+    help="Output format: md (read-only) or json (read-write)",
+)
+def slides_checkout(url: str, output: Path | None, fmt: str):
+    """Checkout a Google Slides presentation to a local directory.
+
+    Creates a .slides.gax.md.d/ folder with one file per slide.
+
+    \b
+    Formats:
+        md   — human-readable markdown (pull only, no push)
+        json — full-fidelity JSON (supports push)
+
+    \b
+    Examples:
+        gax slides checkout https://docs.google.com/presentation/d/abc123/edit
+        gax slides checkout abc123 -o my_slides
+        gax slides checkout abc123 --format json
+    """
+    try:
+        from .ui import success
+        from .gslides import Presentation
+
+        folder_path = Presentation().clone(url, output=output, fmt=fmt)
+        success(f"Checked out: {folder_path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+    except Exception as e:
+        from .ui import error
+
+        error(f"Error: {e}")
+        sys.exit(1)
+
+
+@slides.command("pull")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+def slides_pull(path: Path):
+    """Pull latest slides from Google.
+
+    Works with both single .slides.gax.md files and .slides.gax.md.d/ folders.
+
+    \b
+    Examples:
+        gax slides pull my_deck.slides.gax.md.d/
+        gax slides pull 00_Welcome.slides.gax.md
+    """
+    try:
+        from .ui import success
+        from .gslides import Slide, Presentation
+
+        if path.is_dir():
+            Presentation().pull(path)
+        else:
+            Slide().pull(path)
+        success(f"Updated: {path}")
+    except ValueError as e:
+        from .ui import error
+
+        error(str(e))
+        sys.exit(1)
+    except Exception as e:
+        from .ui import error
+
+        error(f"Error: {e}")
+        sys.exit(1)
+
+
+@slides.command("push")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+def slides_push(path: Path, yes: bool):
+    """Push local slides to Google. JSON format only.
+
+    Markdown checkouts cannot be pushed — re-checkout with --format json.
+    Works with both single .slides.gax.md files and .slides.gax.md.d/ folders.
+
+    \b
+    Examples:
+        gax slides push my_deck.slides.gax.md.d/
+        gax slides push my_deck.slides.gax.md.d/ -y
+        gax slides push 00_Welcome.slides.gax.md
+    """
+    try:
+        from .gslides import Slide, Presentation
+
+        if path.is_dir():
+            p = Presentation()
+            diff_text = p.diff(path)
+            if diff_text is None:
+                click.echo("No changes to push.")
+                return
+            if not yes:
+                click.echo(diff_text)
+                if not click.confirm("Push these changes?"):
+                    click.echo("Cancelled.")
+                    return
+            p.push(path)
+        else:
+            s = Slide()
+            diff_text = s.diff(path)
+            if diff_text is None:
+                click.echo("No changes to push.")
+                return
+            if not yes:
+                click.echo(diff_text)
+                if not click.confirm("Push these changes?"):
+                    click.echo("Cancelled.")
+                    return
+            s.push(path)
+
+        from .ui import success
+
+        success(f"Pushed: {path}")
     except ValueError as e:
         from .ui import error
 
