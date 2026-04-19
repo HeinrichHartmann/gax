@@ -457,13 +457,19 @@ def format_events_tsv(events: list[dict], include_desc: bool = False) -> str:
 
 
 def event_to_yaml(event: CalendarEvent) -> str:
-    """Convert CalendarEvent to YAML file content."""
-    data = {
+    """Convert CalendarEvent to split YAML (header + body).
+
+    Header contains gax sync metadata; body contains user-editable event data.
+    """
+    header: dict[str, Any] = {
         "type": "gax/cal",
         "id": event.id,
         "calendar": event.calendar,
         "source": event.source,
         "synced": event.synced,
+    }
+
+    body: dict[str, Any] = {
         "title": event.title,
         "start": event.start,
         "end": event.end,
@@ -471,34 +477,40 @@ def event_to_yaml(event: CalendarEvent) -> str:
     }
 
     if event.location:
-        data["location"] = event.location
+        body["location"] = event.location
 
     if event.recurrence:
-        data["recurrence"] = event.recurrence
+        body["recurrence"] = event.recurrence
 
     if event.attendees:
-        data["attendees"] = event.attendees
+        body["attendees"] = event.attendees
 
-    data["status"] = event.status
+    body["status"] = event.status
 
     if event.conference:
-        data["conference"] = {
+        body["conference"] = {
             "type": event.conference.type,
             "uri": event.conference.uri,
         }
 
     if event.description:
-        data["description"] = event.description
+        body["description"] = event.description
 
-    return (
-        "---\n"
-        + yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        + "---\n"
+    header_str = yaml.dump(
+        header, default_flow_style=False, allow_unicode=True, sort_keys=False
     )
+    body_str = yaml.dump(
+        body, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
+
+    return f"---\n{header_str}---\n{body_str}"
 
 
 def yaml_to_event(content: str) -> CalendarEvent:
-    """Parse YAML file content to CalendarEvent."""
+    """Parse split YAML (header + body) to CalendarEvent.
+
+    Also handles legacy single-section format for backward compatibility.
+    """
     if not content.startswith("---"):
         raise ValueError("Expected YAML frontmatter")
 
@@ -506,8 +518,10 @@ def yaml_to_event(content: str) -> CalendarEvent:
     if len(parts) < 3:
         raise ValueError("Invalid YAML frontmatter format")
 
-    yaml_content = parts[1]
-    data = yaml.safe_load(yaml_content)
+    header = yaml.safe_load(parts[1])
+    body = yaml.safe_load(parts[2])
+    # Merge header and body — handles both split and legacy single-section format
+    data = {**header, **(body or {})}
 
     conference = None
     if "conference" in data:

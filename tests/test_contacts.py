@@ -1,8 +1,15 @@
 """Unit tests for contacts module — no API calls needed."""
 
+from unittest.mock import patch
+
+import yaml
+
 from gax.contacts import (
+    Contacts,
     api_to_contact,
     contact_to_api,
+    contact_to_yaml,
+    yaml_to_contact,
     contact_diff,
     compare_contacts,
     format_jsonl,
@@ -189,3 +196,252 @@ class TestFileFormat:
         assert parsed_header.count == 42
         assert parsed_header.pulled == "2026-01-01T00:00:00Z"
         assert parsed_body.strip() == body
+
+
+# =============================================================================
+# Individual contact YAML round-trip: contact_to_yaml <-> yaml_to_contact
+# =============================================================================
+
+
+class TestContactYamlRoundTrip:
+    def test_round_trip(self):
+        normalized = api_to_contact(SAMPLE_API_CONTACT, SAMPLE_GROUPS)
+        yaml_content = contact_to_yaml(normalized)
+        parsed = yaml_to_contact(yaml_content)
+
+        assert parsed["resourceName"] == "people/c123"
+        assert parsed["name"] == "Alice Smith"
+        assert parsed["givenName"] == "Alice"
+        assert parsed["familyName"] == "Smith"
+        assert parsed["email"] == ["alice@example.com", "alice@work.com"]
+        assert parsed["phone"] == ["+1-555-0100"]
+        assert parsed["organization"] == "Acme Corp"
+        assert parsed["title"] == "Engineer"
+        assert parsed["birthday"] == "1990-03-15"
+        assert parsed["labels"] == ["Friends"]
+
+    def test_split_format(self):
+        """Header should contain metadata, body should contain contact data."""
+        contact = {"resourceName": "people/c1", "name": "Bob", "email": ["b@x.com"]}
+        content = contact_to_yaml(contact)
+
+        parts = content.split("---")
+        assert len(parts) == 3
+
+        header = yaml.safe_load(parts[1])
+        assert header["type"] == "gax/contact"
+        assert header["resourceName"] == "people/c1"
+        assert "name" not in header
+
+        body = yaml.safe_load(parts[2])
+        assert body["name"] == "Bob"
+        assert "type" not in body
+
+    def test_empty_fields_omitted(self):
+        """Empty strings and empty lists should not appear in body."""
+        contact = {
+            "resourceName": "people/c1",
+            "name": "Bob",
+            "email": [],
+            "phone": [],
+            "organization": "",
+            "labels": [],
+        }
+        content = contact_to_yaml(contact)
+        body = yaml.safe_load(content.split("---")[2])
+        assert "email" not in body
+        assert "phone" not in body
+        assert "organization" not in body
+
+    def test_invalid_format(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Expected YAML frontmatter"):
+            yaml_to_contact("not yaml")
+
+
+# =============================================================================
+# Contacts.checkout
+# =============================================================================
+
+
+SAMPLE_NORMALIZED = [
+    {
+        "resourceName": "people/c1",
+        "name": "Alice Smith",
+        "givenName": "Alice",
+        "familyName": "Smith",
+        "email": ["alice@x.com"],
+        "phone": [],
+        "organization": "",
+        "title": "",
+        "department": "",
+        "address": "",
+        "birthday": "",
+        "notes": "",
+        "nickname": "",
+        "website": "",
+        "labels": [],
+    },
+    {
+        "resourceName": "people/c2",
+        "name": "Bob Jones",
+        "givenName": "Bob",
+        "familyName": "Jones",
+        "email": ["bob@x.com"],
+        "phone": ["+1-555-0200"],
+        "organization": "Acme",
+        "title": "",
+        "department": "",
+        "address": "",
+        "birthday": "",
+        "notes": "",
+        "nickname": "",
+        "website": "",
+        "labels": [],
+    },
+]
+
+
+class TestContactsCheckout:
+    @patch("gax.contacts.fetch_contacts")
+    @patch("gax.contacts.fetch_contact_groups")
+    def test_checkout_creates_folder(self, mock_groups, mock_fetch, tmp_path):
+        mock_groups.return_value = {}
+        mock_fetch.return_value = (
+            [
+                {
+                    "resourceName": c["resourceName"],
+                    "names": [
+                        {
+                            "displayName": c["name"],
+                            "givenName": c["givenName"],
+                            "familyName": c["familyName"],
+                        }
+                    ],
+                    "emailAddresses": [{"value": e} for e in c["email"]],
+                }
+                for c in SAMPLE_NORMALIZED
+            ],
+            {},
+        )
+        # Use pre-normalized contacts via direct mock
+        with patch.object(
+            Contacts, "_fetch_and_normalize", return_value=(SAMPLE_NORMALIZED, {})
+        ):
+            output = tmp_path / "contacts.contacts.gax.md.d"
+            cloned, skipped = Contacts().checkout(output=output)
+
+            assert output.exists()
+            assert (output / ".gax.yaml").exists()
+            assert cloned == 2
+            assert skipped == 0
+
+    @patch.object(
+        Contacts, "_fetch_and_normalize", return_value=(SAMPLE_NORMALIZED, {})
+    )
+    def test_checkout_creates_contact_files(self, mock_fetch, tmp_path):
+        output = tmp_path / "contacts.contacts.gax.md.d"
+        Contacts().checkout(output=output)
+
+        files = sorted(output.glob("*.contact.gax.yaml"))
+        assert len(files) == 2
+
+        # Files should round-trip cleanly
+        for f in files:
+            c = yaml_to_contact(f.read_text())
+            assert c["resourceName"] in ("people/c1", "people/c2")
+
+    @patch.object(
+        Contacts, "_fetch_and_normalize", return_value=(SAMPLE_NORMALIZED, {})
+    )
+    def test_checkout_writes_metadata(self, mock_fetch, tmp_path):
+        output = tmp_path / "contacts.contacts.gax.md.d"
+        Contacts().checkout(output=output)
+
+        meta = yaml.safe_load((output / ".gax.yaml").read_text())
+        assert meta["type"] == "gax/contacts-checkout"
+        assert "checked_out" in meta
+
+    @patch.object(
+        Contacts, "_fetch_and_normalize", return_value=(SAMPLE_NORMALIZED, {})
+    )
+    def test_checkout_skips_existing(self, mock_fetch, tmp_path):
+        output = tmp_path / "contacts.contacts.gax.md.d"
+
+        # First checkout
+        Contacts().checkout(output=output)
+
+        # Second checkout should skip all
+        cloned, skipped = Contacts().checkout(output=output)
+        assert cloned == 0
+        assert skipped == 2
+
+
+# =============================================================================
+# Contacts.pull_checkout
+# =============================================================================
+
+
+class TestCheckoutPull:
+    @patch.object(
+        Contacts, "_fetch_and_normalize", return_value=(SAMPLE_NORMALIZED, {})
+    )
+    def test_pull_removes_stale_contacts(self, mock_fetch, tmp_path):
+        output = tmp_path / "contacts.contacts.gax.md.d"
+
+        # Checkout with 2 contacts
+        Contacts().checkout(output=output)
+        assert len(list(output.glob("*.contact.gax.yaml"))) == 2
+
+        # Remote now has only one contact
+        mock_fetch.return_value = (SAMPLE_NORMALIZED[:1], {})
+        Contacts().pull_checkout(output)
+
+        files = list(output.glob("*.contact.gax.yaml"))
+        assert len(files) == 1
+
+    @patch.object(
+        Contacts, "_fetch_and_normalize", return_value=(SAMPLE_NORMALIZED, {})
+    )
+    def test_pull_adds_new_contacts(self, mock_fetch, tmp_path):
+        output = tmp_path / "contacts.contacts.gax.md.d"
+
+        # Checkout with 2 contacts
+        Contacts().checkout(output=output)
+
+        # Remote now has 3 contacts
+        new_contact = {
+            **SAMPLE_NORMALIZED[0],
+            "resourceName": "people/c3",
+            "name": "Charlie Brown",
+        }
+        mock_fetch.return_value = (SAMPLE_NORMALIZED + [new_contact], {})
+        Contacts().pull_checkout(output)
+
+        files = list(output.glob("*.contact.gax.yaml"))
+        assert len(files) == 3
+
+    @patch.object(
+        Contacts, "_fetch_and_normalize", return_value=(SAMPLE_NORMALIZED, {})
+    )
+    def test_pull_updates_existing(self, mock_fetch, tmp_path):
+        output = tmp_path / "contacts.contacts.gax.md.d"
+
+        # Checkout
+        Contacts().checkout(output=output)
+
+        # Remote has updated name for c1
+        updated = [
+            {**SAMPLE_NORMALIZED[0], "name": "Alice Updated"},
+            SAMPLE_NORMALIZED[1],
+        ]
+        mock_fetch.return_value = (updated, {})
+        Contacts().pull_checkout(output)
+
+        # Find the file for people/c1 and verify
+        for f in output.glob("*.contact.gax.yaml"):
+            c = yaml_to_contact(f.read_text())
+            if c["resourceName"] == "people/c1":
+                assert c["name"] == "Alice Updated"
+                break
