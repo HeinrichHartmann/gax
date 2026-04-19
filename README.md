@@ -80,6 +80,7 @@ COMMANDS
       gax pull [FILES]
           Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
           -v, --verbose: Verbose output
+          -y, --yes: Skip confirmation prompts
 
     push:
       gax push [FILES]
@@ -131,19 +132,16 @@ COMMANDS
       gax cal pull [FILE]
           Pull latest events to existing file.
 
-    contacts [unstable]:
-      gax contacts apply [PLAN_FILE]
-          Apply a contacts plan to Google.
-          -y, --yes: Skip confirmation
+    contacts:
       gax contacts clone
           Clone all contacts to a local file.
           -f, --format: Output format: md (view-only) or jsonl (editable)
           -o, --output: Output file (default: contacts.<format>)
-      gax contacts plan [FILE]
-          Generate a plan for syncing local contacts to Google.
-          -o, --output: Output plan file (default: <file>.plan.yaml)
       gax contacts pull [FILE]
           Pull latest contacts from Google.
+      gax contacts push [FILE]
+          Push local JSONL contacts to Google.
+          -y, --yes: Skip confirmation
 
     doc:
       gax doc checkout [URL]
@@ -193,6 +191,10 @@ COMMANDS
           -y, --yes: Skip confirmation prompt
 
     file [unstable]:
+      gax file checkout [URL_OR_ID]
+          Checkout a Google Drive folder to a local directory.
+          -o, --output: Output folder path
+          -R, --recursive: Recurse into subfolders
       gax file clone [URL_OR_ID]
           Clone a file from Google Drive.
           -o, --output: Output file path
@@ -204,15 +206,15 @@ COMMANDS
           -y, --yes: Skip confirmation
 
     form [unstable]:
-      gax form apply [PLAN_FILE]
-          Apply form changes from a plan file.
+      gax form apply [FILE]
+          Apply form changes to Google Forms.
           -y, --yes: Skip confirmation
       gax form clone [URL]
           Clone a Google Form to a local .form.gax.md file.
-          --output, -o: Output file (default: <title>.form.gax.md)
-          --format, -f: Content format: md (readable, default) or yaml (round-trip safe)
+          -o, --output: Output file (default: <title>.form.gax.md)
+          -f, --format: Content format: md (readable, default) or yaml (round-trip safe)
       gax form plan [FILE]
-          Generate a plan from edited form file.
+          Preview form changes (diff).
           -o, --output: Output plan file
       gax form pull [FILE]
           Pull latest form definition from Google Forms.
@@ -227,9 +229,9 @@ COMMANDS
           Create a reply draft from a thread.
           --output, -o: Output file (default: Re_<subject>.draft.gax.md)
 
-    mail-filter [unstable]:
-      gax mail-filter apply [PLAN_FILE]
-          Apply filter changes from plan file.
+    mail-filter:
+      gax mail-filter apply [FILE]
+          Apply filter changes to Gmail.
           -y, --yes: Skip confirmation
       gax mail-filter clone
           Clone Gmail filters to a .gax.md file.
@@ -237,28 +239,28 @@ COMMANDS
       gax mail-filter list
           List Gmail filters (TSV output).
       gax mail-filter plan [FILE]
-          Generate plan from edited filters file.
-          -o, --output: Output plan file
+          Preview filter changes (diff).
       gax mail-filter pull [FILE]
           Pull latest filters to existing file.
 
-    mail-label [unstable]:
-      gax mail-label apply [PLAN_FILE]
-          Apply label changes from plan file.
+    mail-label:
+      gax mail-label apply [FILE]
+          Apply label changes to Gmail.
           -y, --yes: Skip confirmation
+          --delete: Include deletions
       gax mail-label clone
           Clone Gmail labels to a .gax.md file.
           -o, --output: Output file (default: labels.mail.gax.md)
-          --all: Include system labels (read-only)
+          --all: Include system labels
       gax mail-label list
           List Gmail labels (TSV output).
       gax mail-label plan [FILE]
-          Generate plan from edited labels file.
+          Preview label changes (diff).
           -o, --output: Output plan file
-          --delete: Include deletions in plan
+          --delete: Include deletions
       gax mail-label pull [FILE]
           Pull latest labels to existing file.
-          --all: Include system labels (read-only)
+          --all: Include system labels
 
     mailbox:
       gax mailbox apply [PLAN_FILE]
@@ -315,6 +317,51 @@ COMMANDS
           --with-formulas: Interpret formulas (e.g. =SUM(A1:A10))
           -y, --yes: Skip confirmation prompt
 
+    slides:
+      gax slides checkout [URL]
+          Checkout a Google Slides presentation to a local directory.
+          --output, -o: Output directory path
+          -f, --format: Output format: md (read-only) or json (read-write)
+      gax slides pull [PATH]
+          Pull latest slides from Google.
+      gax slides push [PATH]
+          Push local slides to Google. JSON format only.
+          -y, --yes: Skip confirmation prompt
+
+    task:
+      gax task checkout [TASKLIST]
+          Checkout a task list as a folder of individual task files.
+          -o, --output: Output folder path
+          --all: Include completed tasks
+      gax task clone [TASKLIST]
+          Clone a task list to a single file.
+          -o, --output: Output file path
+          --all: Include completed tasks
+          -f, --format: Output format (default: md)
+      gax task delete [FILE_PATH]
+          Delete a task from Google and local file.
+          -y, --yes: Skip confirmation
+      gax task diff [FILE_PATH]
+          Show differences between local task and remote.
+      gax task done [FILE_PATH]
+          Mark a task as completed and push.
+          -y, --yes: Skip confirmation
+      gax task list [TASKLIST]
+          View tasks from a task list.
+          --all: Include completed tasks
+          -f, --format: Output format (default: md)
+      gax task lists
+          List available task lists.
+      gax task new [TITLE]
+          Create a new task on Google.
+          --tasklist: Task list name, ID, or index (default: first list)
+          -o, --output: Output file path
+      gax task pull [FILE_PATH]
+          Pull latest task data from API.
+      gax task push [FILE_PATH]
+          Push local task changes to API.
+          -y, --yes: Skip confirmation
+
   Utility:
 
     auth:
@@ -334,6 +381,8 @@ COMMANDS
     upgrade:
       gax upgrade
           Upgrade gax to the latest version from GitHub (uv tool install path).
+          -v, --verbose: Show full commit messages
+          -q, --quiet: Skip changelog after upgrade
 
 FILES
     .sheet.gax.md         Spreadsheet data
