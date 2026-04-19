@@ -204,9 +204,7 @@ def _tab_content_to_markdown(doc: dict, tab: dict) -> str:
     return md
 
 
-def _flatten_tabs(
-    tabs: list[dict], depth: int = 0
-) -> list[tuple[dict, TabInfo]]:
+def _flatten_tabs(tabs: list[dict], depth: int = 0) -> list[tuple[dict, TabInfo]]:
     """Recursively flatten a nested tabs structure from the Docs API.
 
     Returns list of (raw_tab_dict, TabInfo) pairs in document order.
@@ -319,8 +317,7 @@ def pull_single_tab(
     if len(matches) > 1:
         paths = [m[2] for m in matches]
         raise ValueError(
-            f"Ambiguous tab name '{tab_name}'. "
-            f"Use full path: {', '.join(paths)}"
+            f"Ambiguous tab name '{tab_name}'. Use full path: {', '.join(paths)}"
         )
 
     tab, info, _path = matches[0]
@@ -891,9 +888,7 @@ def _parse_tab_file(path: Path) -> DocSection:
     return sections[0]
 
 
-def _compute_tab_paths(
-    sections: list[DocSection], folder: Path
-) -> list[Path]:
+def _compute_tab_paths(sections: list[DocSection], folder: Path) -> list[Path]:
     """Compute filesystem paths for sections based on tab nesting.
 
     A tab with children gets a subdirectory; its content goes inside.

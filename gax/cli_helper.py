@@ -60,6 +60,8 @@ def _detect_file_type(file_path: Path) -> str | None:
                     return "gax/doc"
                 if "docs.google.com/spreadsheets" in source:
                     return "gax/sheet"
+                if "docs.google.com/presentation" in source:
+                    return "gax/slides"
 
         # Try frontmatter-style for single-tab sheets
         try:
@@ -101,6 +103,8 @@ def _detect_file_type(file_path: Path) -> str | None:
         return "gax/task-list"
     if name.endswith(".form.gax.md"):
         return "gax/form"
+    if name.endswith(".slides.gax.md"):
+        return "gax/slides"
     if ".contacts." in name or name.endswith(".contacts.gax.md"):
         return "gax/contacts"
     # Mailbox/list files often don't have specific extension, just .gax.md
@@ -173,6 +177,16 @@ def _pull_folder(
             from .gdoc import Doc
 
             Doc().clone(url, output=scratch_path)
+
+        elif checkout_type == "gax/slides-checkout":
+            url = metadata.get("url")
+            if not url:
+                return False, "No URL in .gax.yaml"
+            fmt = metadata.get("format", "md")
+
+            from .gslides import Presentation
+
+            Presentation().clone(url, output=scratch_path, fmt=fmt)
 
         elif checkout_type == "gax/drive-checkout":
             # Drive folders pull in-place (no scratch dir diffing for binary files)
@@ -466,6 +480,23 @@ def _push_file(
                 "Multipart sheet push not supported. Use 'gax push <folder>.sheet.gax.md.d' or 'gax sheet tab push' for individual tabs.",
             )
 
+        elif file_type == "gax/slides":
+            try:
+                from .gslides import Slide
+
+                s = Slide()
+                diff_text = s.diff(file_path)
+                if diff_text is None:
+                    return True, "no changes"
+                if not yes:
+                    click.echo(diff_text)
+                    if not click.confirm("Push these changes?"):
+                        return False, "cancelled"
+                s.push(file_path)
+                return True, "pushed"
+            except ValueError as e:
+                return False, str(e)
+
         else:
             return False, f"Push not supported for type: {file_type}"
 
@@ -523,6 +554,28 @@ def _push_folder(
                 False,
                 "Doc folder push not yet supported. Use 'gax doc tab push' for individual tabs.",
             )
+
+        elif checkout_type == "gax/slides-checkout":
+            fmt = metadata.get("format", "md")
+            if fmt != "json":
+                return (
+                    False,
+                    "Push is not supported for markdown format.\n"
+                    "Re-checkout with --format json to enable push:\n"
+                    "  gax slides checkout <url> --format json",
+                )
+            from .gslides import Presentation
+
+            p = Presentation()
+            diff_text = p.diff(folder_path)
+            if diff_text is None:
+                return True, "no changes"
+            if not yes:
+                click.echo("\n" + diff_text)
+                if not click.confirm("\nPush these changes?"):
+                    return False, "cancelled"
+            p.push(folder_path)
+            return True, "pushed"
 
         else:
             return False, f"Push not supported for checkout type: {checkout_type}"
@@ -637,6 +690,15 @@ def _pull_file(file_path: Path, verbose: bool = False) -> tuple[bool, str]:
         elif file_type == "gax/contacts":
             try:
                 Contacts().pull(file_path)
+                return True, "updated"
+            except ValueError as e:
+                return False, str(e)
+
+        elif file_type == "gax/slides":
+            try:
+                from .gslides import Slide
+
+                Slide().pull(file_path)
                 return True, "updated"
             except ValueError as e:
                 return False, str(e)

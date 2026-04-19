@@ -913,7 +913,9 @@ def _generate_requests(
                         "updateParagraphStyle": {
                             "range": range_spec,
                             "paragraphStyle": {
-                                "namedStyleType": HEADING_STYLE_MAP.get(params, "HEADING_1")
+                                "namedStyleType": HEADING_STYLE_MAP.get(
+                                    params, "HEADING_1"
+                                )
                             },
                             "fields": "namedStyleType",
                         }

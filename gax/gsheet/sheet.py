@@ -552,8 +552,11 @@ class Sheet(Resource):
         metadata_path = folder / ".gax.yaml"
         with open(metadata_path, "w") as f:
             yaml.dump(
-                metadata, f,
-                default_flow_style=False, allow_unicode=True, sort_keys=False,
+                metadata,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
             )
 
         created = 0
@@ -576,7 +579,10 @@ class Sheet(Resource):
                 data = formatter.write(df)
 
                 config = SheetConfig(
-                    spreadsheet_id=spreadsheet_id, tab=tab_name, format=fmt, url=url,
+                    spreadsheet_id=spreadsheet_id,
+                    tab=tab_name,
+                    format=fmt,
+                    url=url,
                 )
 
                 content = format_content(config, data)
@@ -612,8 +618,11 @@ class Sheet(Resource):
         metadata["title"] = info["title"]
         with open(metadata_path, "w") as f:
             yaml.dump(
-                metadata, f,
-                default_flow_style=False, allow_unicode=True, sort_keys=False,
+                metadata,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
             )
 
         with operation("Pulling tabs", total=len(info["tabs"])) as op:
@@ -628,7 +637,10 @@ class Sheet(Resource):
                 data = formatter.write(df)
 
                 config = SheetConfig(
-                    spreadsheet_id=spreadsheet_id, tab=tab_name, format=fmt, url=url,
+                    spreadsheet_id=spreadsheet_id,
+                    tab=tab_name,
+                    format=fmt,
+                    url=url,
                 )
 
                 content = format_content(config, data)

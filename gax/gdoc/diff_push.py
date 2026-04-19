@@ -582,7 +582,9 @@ def _insert_block_requests(
                         "tabId": tab_id,
                     },
                     "paragraphStyle": {
-                        "namedStyleType": HEADING_STYLE_MAP.get(block.level, "HEADING_1")
+                        "namedStyleType": HEADING_STYLE_MAP.get(
+                            block.level, "HEADING_1"
+                        )
                     },
                     "fields": "namedStyleType",
                 }

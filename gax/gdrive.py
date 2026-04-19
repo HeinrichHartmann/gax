@@ -233,6 +233,7 @@ WORKSPACE_MIME_TYPES = {
     "application/vnd.google-apps.document": "doc",
     "application/vnd.google-apps.spreadsheet": "sheet",
     "application/vnd.google-apps.form": "form",
+    "application/vnd.google-apps.presentation": "slides",
 }
 
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
@@ -621,6 +622,12 @@ class Folder:
             output = target_dir / f"{safe_name}.form.gax.md"
             if not output.exists():
                 Form().clone(url, output=output)
+        elif resource_type == "slides":
+            from .gslides import Presentation
+
+            output = target_dir / f"{safe_name}.slides.gax.md.d"
+            if not output.exists():
+                Presentation().clone(url, output=output)
 
 
 def _workspace_url_path(resource_type: str) -> str:
@@ -629,6 +636,7 @@ def _workspace_url_path(resource_type: str) -> str:
         "doc": "document",
         "sheet": "spreadsheets",
         "form": "forms",
+        "slides": "presentation",
     }[resource_type]
 
 
@@ -640,6 +648,11 @@ def _workspace_file_exists(folder: Path, item: dict) -> bool:
     parent = item["path"].rsplit("/", 1)[0] if "/" in item["path"] else ""
     target_dir = folder / parent if parent else folder
 
-    ext_map = {"doc": ".doc.gax.md", "sheet": ".sheet.gax.md", "form": ".form.gax.md"}
+    ext_map = {
+        "doc": ".doc.gax.md",
+        "sheet": ".sheet.gax.md",
+        "form": ".form.gax.md",
+        "slides": ".slides.gax.md.d",
+    }
     ext = ext_map.get(resource_type, "")
     return (target_dir / f"{safe_name}{ext}").exists() if ext else False

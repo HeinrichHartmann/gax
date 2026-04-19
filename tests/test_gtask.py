@@ -174,9 +174,7 @@ class TestTaskYamlRoundTrip:
 
     def test_minimal_task(self):
         """Task with only required fields round-trips."""
-        task = TaskItem(
-            id="X", tasklist="TL1", source="", synced="", title="Simple"
-        )
+        task = TaskItem(id="X", tasklist="TL1", source="", synced="", title="Simple")
         yaml_str = task_to_yaml(task)
         parsed = yaml_to_task(yaml_str)
 
@@ -233,9 +231,7 @@ class TestTaskListFormatMd:
     def test_format_with_due(self):
         """Due date appended to checkbox line."""
         tasks = [
-            TaskItem(
-                "A", "TL1", "", "", "Task A", "needsAction", due="2026-04-21"
-            ),
+            TaskItem("A", "TL1", "", "", "Task A", "needsAction", due="2026-04-21"),
         ]
         result = format_tasks_md(tasks)
         assert "due:2026-04-21" in result
@@ -311,9 +307,7 @@ class TestTaskListFormatYaml:
     def test_format_basic(self):
         """Root tasks formatted as YAML list."""
         tasks = [
-            TaskItem(
-                "A", "TL1", "", "", "Task A", "needsAction", due="2026-04-21"
-            ),
+            TaskItem("A", "TL1", "", "", "Task A", "needsAction", due="2026-04-21"),
         ]
         result = format_tasks_yaml(tasks)
 
@@ -363,9 +357,7 @@ class TestTaskDiff:
     @patch("gax.gtask.api_to_task")
     def test_no_changes_returns_none(self, mock_api_to, mock_get, tmp_path):
         """Identical local/remote returns None."""
-        task = TaskItem(
-            "A", "TL1", "", "", "Same", "needsAction", due="2026-04-21"
-        )
+        task = TaskItem("A", "TL1", "", "", "Same", "needsAction", due="2026-04-21")
         path = tmp_path / "same.task.gax.yaml"
         path.write_text(task_to_yaml(task))
 
