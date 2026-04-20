@@ -430,8 +430,8 @@ class TestEventDiff:
         assert "New event: Launch party" in result
         assert "2026-04-01T18:00:00Z" in result
 
-    @patch("gax.gcal.get_event")
-    @patch("gax.gcal.api_event_to_dataclass")
+    @patch("gax.gcal.gcal.get_event")
+    @patch("gax.gcal.gcal.api_event_to_dataclass")
     def test_no_changes_returns_none(self, mock_to_dc, mock_get, tmp_path):
         local = self._make_local_event()
         mock_get.return_value = {}
@@ -444,8 +444,8 @@ class TestEventDiff:
         assert result is None
         mock_get.assert_called_once_with("evt123", "primary")
 
-    @patch("gax.gcal.get_event")
-    @patch("gax.gcal.api_event_to_dataclass")
+    @patch("gax.gcal.gcal.get_event")
+    @patch("gax.gcal.gcal.api_event_to_dataclass")
     def test_field_changes(self, mock_to_dc, mock_get, tmp_path):
         local = self._make_local_event(
             title="Renamed standup",

@@ -42,8 +42,8 @@ import yaml
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
-from .auth import get_authenticated_credentials
-from .resource import Resource
+from ..auth import get_authenticated_credentials
+from ..resource import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -656,25 +656,25 @@ class Folder(Resource):
         safe_name = _safe_name(item["name"])
 
         if resource_type == "doc":
-            from .gdoc.doc import Tab
+            from ..gdoc.doc import Tab
 
             output = target_dir / f"{safe_name}.doc.gax.md"
             if not output.exists():
                 Tab.from_url(url).clone(output=output)
         elif resource_type == "sheet":
-            from .gsheet.sheet import SheetTab
+            from ..gsheet.sheet import SheetTab
 
             output = target_dir / f"{safe_name}.sheet.gax.md"
             if not output.exists():
                 SheetTab.from_url(url).clone(output=output)
         elif resource_type == "form":
-            from .form import Form
+            from ..form import Form
 
             output = target_dir / f"{safe_name}.form.gax.md"
             if not output.exists():
                 Form.from_url(url).clone(output=output)
         elif resource_type == "slides":
-            from .gslides import Presentation
+            from ..gslides import Presentation
 
             output = target_dir / f"{safe_name}.slides.gax.md.d"
             if not output.exists():

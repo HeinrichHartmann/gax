@@ -194,7 +194,7 @@ class TestSlideToContent:
 
 
 class TestPresentationClone:
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_checkout_creates_directory(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
@@ -205,7 +205,7 @@ class TestPresentationClone:
         assert output.exists()
         assert (output / ".gax.yaml").exists()
 
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_checkout_writes_gax_yaml(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
@@ -218,7 +218,7 @@ class TestPresentationClone:
         assert meta["title"] == "Test Presentation"
         assert meta["format"] == "md"
 
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_checkout_creates_slide_files(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
@@ -230,7 +230,7 @@ class TestPresentationClone:
         assert slide_files[0].name.startswith("00_")
         assert slide_files[1].name.startswith("01_")
 
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_checkout_json_format(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
@@ -245,7 +245,7 @@ class TestPresentationClone:
         content = slide_file.read_text()
         assert '"objectId"' in content
 
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_checkout_markdown_has_content(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
@@ -264,7 +264,7 @@ class TestPresentationClone:
 
 
 class TestPresentationPull:
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_pull_updates_files(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
@@ -282,7 +282,7 @@ class TestPresentationPull:
         meta = yaml.safe_load((output / ".gax.yaml").read_text())
         assert meta["title"] == "Updated Title"
 
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_pull_removes_stale_files(self, mock_get, tmp_path):
         """Pull should remove slide files for slides that no longer exist remotely."""
         mock_get.return_value = SAMPLE_PRESENTATION
@@ -301,7 +301,7 @@ class TestPresentationPull:
         slide_files = list(output.glob("*.slides.gax.md"))
         assert len(slide_files) == 1
 
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_pull_handles_reordered_slides(self, mock_get, tmp_path):
         """Pull should update filenames when slides are reordered."""
         mock_get.return_value = SAMPLE_PRESENTATION
@@ -335,7 +335,7 @@ class TestPresentationPull:
 
 
 class TestSlidePush:
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_push_markdown_raises(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
@@ -347,7 +347,7 @@ class TestSlidePush:
         with pytest.raises(ValueError, match="not supported for markdown"):
             Slide(path=slide_file).push()
 
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_push_json_calls_api(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"
@@ -357,8 +357,8 @@ class TestSlidePush:
         slide_file = sorted(output.glob("*.slides.gax.md"))[0]
 
         with (
-            patch("gax.gslides.get_authenticated_credentials"),
-            patch("gax.gslides.build") as mock_build,
+            patch("gax.gslides.gslides.get_authenticated_credentials"),
+            patch("gax.gslides.gslides.build") as mock_build,
         ):
             mock_service = MagicMock()
             mock_build.return_value = mock_service
@@ -374,7 +374,7 @@ class TestSlidePush:
 
 
 class TestPresentationPush:
-    @patch("gax.gslides._get_presentation")
+    @patch("gax.gslides.gslides._get_presentation")
     def test_push_markdown_checkout_raises(self, mock_get, tmp_path):
         mock_get.return_value = SAMPLE_PRESENTATION
         output = tmp_path / "test.slides.gax.md.d"

@@ -304,8 +304,8 @@ SAMPLE_NORMALIZED = [
 
 
 class TestContactsCheckout:
-    @patch("gax.contacts.fetch_contacts")
-    @patch("gax.contacts.fetch_contact_groups")
+    @patch("gax.contacts.contacts.fetch_contacts")
+    @patch("gax.contacts.contacts.fetch_contact_groups")
     def test_checkout_creates_folder(self, mock_groups, mock_fetch, tmp_path):
         mock_groups.return_value = {}
         mock_fetch.return_value = (
