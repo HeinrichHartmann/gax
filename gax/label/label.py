@@ -41,7 +41,7 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
-from ..gaxfile import parse as gaxfile_parse, format as gaxfile_format
+from ..gaxfile import parse as gaxfile_parse, format_single
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -133,7 +133,7 @@ def format_labels_file(header: LabelHeader, labels: list[dict]) -> str:
         "# Rename: add 'rename_from: OldName'\n"
         "# Delete: remove from list, use --delete flag\n"
     )
-    return comments + gaxfile_format(file_header, body)
+    return comments + format_single(file_header, body)
 
 
 # =============================================================================

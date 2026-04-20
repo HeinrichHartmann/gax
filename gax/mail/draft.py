@@ -66,7 +66,7 @@ from typing import Any
 from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
-from .. import gaxfile as multipart
+from .. import gaxfile
 from ..resource import Resource
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ def parse_draft(content: str) -> tuple[DraftHeader, str]:
     Returns:
         Tuple of (DraftHeader, body_content)
     """
-    sections = multipart.parse_multipart(content)
+    sections = gaxfile.parse_multipart(content)
     if not sections:
         raise ValueError("No content found in draft file")
 
@@ -155,7 +155,7 @@ def format_draft(header: DraftHeader, body: str) -> str:
     if header.time:
         h["time"] = header.time
 
-    return multipart.format_section(h, body)
+    return gaxfile.format_section(h, body)
 
 
 def parse_draft_id(url_or_id: str) -> str:

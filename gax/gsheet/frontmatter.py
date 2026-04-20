@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..gaxfile import GaxFile, parse as gaxfile_parse, format as gaxfile_format
+from ..gaxfile import GaxFile, parse as gaxfile_parse, format_single
 
 
 @dataclass
@@ -59,4 +59,4 @@ def format_content(config: SheetConfig, data: str) -> str:
     if config.separator:
         headers["separator"] = config.separator
 
-    return gaxfile_format(headers, data)
+    return format_single(headers, data)

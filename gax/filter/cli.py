@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, _confirm_and_push, success
+from ..ui import handle_errors, confirm_and_push, success
 from .. import docs
 from . import Filter
 
@@ -68,4 +68,4 @@ def filter_plan(file):
 @handle_errors
 def filter_apply(file, yes):
     """Apply filter changes to Gmail."""
-    _confirm_and_push(Filter.from_file(file), yes=yes)
+    confirm_and_push(Filter.from_file(file), yes=yes)

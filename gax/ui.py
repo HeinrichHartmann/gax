@@ -183,7 +183,7 @@ def handle_errors(fn):
     return wrapper
 
 
-def _confirm_and_push(resource, *, yes=False, **kw):
+def confirm_and_push(resource, *, yes=False, **kw):
     """Standard diff -> confirm -> push flow."""
     diff_text = resource.diff(**kw)
     if diff_text is None:

@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
 from ..store import store_blob
-from .. import gaxfile as multipart
+from .. import gaxfile
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class MailSection:
 # =============================================================================
 
 
-def _mail_section_to_multipart(section: MailSection) -> multipart.Section:
+def _mail_section_to_multipart(section: MailSection) -> gaxfile.Section:
     """Convert MailSection to generic multipart Section."""
     headers = {
         "type": "gax/mail",
@@ -88,19 +88,19 @@ def _mail_section_to_multipart(section: MailSection) -> multipart.Section:
             {"name": att.name, "size": att.size, "url": att.url}
             for att in section.attachments
         ]
-    return multipart.Section(headers=headers, content=section.content)
+    return gaxfile.Section(headers=headers, content=section.content)
 
 
 def format_section(section: MailSection) -> str:
     """Format a single section as YAML header + markdown body."""
     mp_section = _mail_section_to_multipart(section)
-    return multipart.format_section(mp_section.headers, mp_section.content)
+    return gaxfile.format_section(mp_section.headers, mp_section.content)
 
 
 def format_multipart(sections: list[MailSection]) -> str:
     """Assemble sections into multipart markdown string."""
     mp_sections = [_mail_section_to_multipart(s) for s in sections]
-    return multipart.format_multipart(mp_sections)
+    return gaxfile.format_multipart(mp_sections)
 
 
 # =============================================================================

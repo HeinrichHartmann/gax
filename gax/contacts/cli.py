@@ -3,9 +3,9 @@
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, _confirm_and_push, success
+from ..ui import handle_errors, confirm_and_push, success
 from .. import docs
-from . import Contact, Contacts  # noqa: F401 — Contact registers with Resource._subclasses
+from . import Contact, Contacts  # noqa: F401 — both imported to register with Resource
 
 
 @docs.section("resource")
@@ -65,7 +65,7 @@ def contacts_push(file, yes):
     Compares local contacts with remote, shows diff, and applies changes.
     Only works with JSONL format files.
     """
-    _confirm_and_push(Contacts(path=file), yes=yes)
+    confirm_and_push(Contacts(path=file), yes=yes)
 
 
 @contacts.command("checkout")

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import auth
 from . import docs
-from .ui import handle_errors, _confirm_and_push  # noqa: F401
+from .ui import handle_errors, confirm_and_push  # noqa: F401
 from .resource import Resource
 
 # Import resource CLI groups — triggers Resource.__init_subclass__ registration

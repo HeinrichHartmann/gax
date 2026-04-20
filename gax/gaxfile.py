@@ -143,7 +143,7 @@ def parse(content: str) -> tuple[dict[str, str], str]:
     return headers, body
 
 
-def format(headers: dict, body: str) -> str:
+def format_single(headers: dict, body: str) -> str:
     """Format headers and body as a single-section .gax.md file.
 
     Uses simple key: value formatting (not yaml.dump) to preserve

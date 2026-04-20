@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, _confirm_and_push, success
+from ..ui import handle_errors, confirm_and_push, success
 from .. import docs
 from . import Sheet, SheetTab
 from .sheet import pull_all, _extract_spreadsheet_id
@@ -133,7 +133,7 @@ def sheet_push(folder: Path, with_formulas: bool, yes: bool):
         gax sheet push Budget.sheet.gax.md.d -y
         gax sheet push Budget.sheet.gax.md.d --with-formulas
     """
-    _confirm_and_push(Sheet(path=folder), yes=yes, with_formulas=with_formulas)
+    confirm_and_push(Sheet(path=folder), yes=yes, with_formulas=with_formulas)
 
 
 @sheet.command("plan")
@@ -185,7 +185,7 @@ def sheet_apply(folder, with_formulas: bool, yes: bool):
     if folder is None:
         folder = _find_sheet_folder()
 
-    _confirm_and_push(Sheet(path=folder), yes=yes, with_formulas=with_formulas)
+    confirm_and_push(Sheet(path=folder), yes=yes, with_formulas=with_formulas)
 
 
 @sheet.group()

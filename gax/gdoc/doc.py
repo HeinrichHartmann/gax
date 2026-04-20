@@ -47,7 +47,7 @@ import yaml
 from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
-from .. import gaxfile as multipart
+from .. import gaxfile
 from .native_md import extract_images_to_store, inline_images_from_store
 from ..ui import operation
 from ..resource import Resource
@@ -115,7 +115,7 @@ class CommentReply:
 # =============================================================================
 
 
-def _doc_section_to_multipart(section: DocSection) -> multipart.Section:
+def _doc_section_to_multipart(section: DocSection) -> gaxfile.Section:
     """Convert DocSection to generic multipart Section."""
     headers = {
         "type": "gax/doc",
@@ -126,10 +126,10 @@ def _doc_section_to_multipart(section: DocSection) -> multipart.Section:
     }
     if section.section_type:
         headers["tab_type"] = section.section_type
-    return multipart.Section(headers=headers, content=section.content)
+    return gaxfile.Section(headers=headers, content=section.content)
 
 
-def _multipart_to_doc_section(section: multipart.Section) -> DocSection:
+def _multipart_to_doc_section(section: gaxfile.Section) -> DocSection:
     """Convert generic multipart Section to DocSection."""
     # Support both new (tab) and old (section/section_title) header names
     h = section.headers
@@ -148,18 +148,18 @@ def _multipart_to_doc_section(section: multipart.Section) -> DocSection:
 def format_section(section: DocSection) -> str:
     """Format a single section as YAML header + markdown body."""
     mp_section = _doc_section_to_multipart(section)
-    return multipart.format_section(mp_section.headers, mp_section.content)
+    return gaxfile.format_section(mp_section.headers, mp_section.content)
 
 
 def format_multipart(sections: list[DocSection]) -> str:
     """Assemble sections into multipart markdown string."""
     mp_sections = [_doc_section_to_multipart(s) for s in sections]
-    return multipart.format_multipart(mp_sections)
+    return gaxfile.format_multipart(mp_sections)
 
 
 def parse_multipart(text: str) -> list[DocSection]:
     """Parse multipart markdown into sections."""
-    mp_sections = multipart.parse_multipart(text)
+    mp_sections = gaxfile.parse_multipart(text)
     return [_multipart_to_doc_section(s) for s in mp_sections]
 
 

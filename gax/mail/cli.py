@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, _confirm_and_push, success, error
+from ..ui import handle_errors, confirm_and_push, success, error
 from .. import docs
 from . import Thread, Mailbox, Draft
 
@@ -352,7 +352,7 @@ def draft_push(file, yes):
         gax draft push my_draft.draft.gax.md
         gax draft push my_draft.draft.gax.md -y
     """
-    _confirm_and_push(Draft.from_file(file), yes=yes)
+    confirm_and_push(Draft.from_file(file), yes=yes)
 
 
 @draft.command("pull")

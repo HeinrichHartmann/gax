@@ -28,7 +28,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import gaxfile as multipart
+from .. import gaxfile
 from . import draft as draft_module
 from ..resource import Resource
 
@@ -192,7 +192,7 @@ class Thread(Resource):
             raise ValueError(f"No thread_id found in {path}")
         thread_id = match.group(1)
 
-        local_sections = multipart.parse_multipart(content)
+        local_sections = gaxfile.parse_multipart(content)
         remote_sections = pull_thread(thread_id)
 
         local_count = len(local_sections)
@@ -228,7 +228,7 @@ class Thread(Resource):
         """Create a reply draft from a thread file or URL. Returns path created."""
         if self.path and self.path.exists() and self.path.name.endswith(".gax.md"):
             content = self.path.read_text(encoding="utf-8")
-            sections = multipart.parse_multipart(content)
+            sections = gaxfile.parse_multipart(content)
             if not sections:
                 raise ValueError("No sections found in file")
 

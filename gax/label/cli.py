@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, _confirm_and_push, success
+from ..ui import handle_errors, confirm_and_push, success
 from .. import docs
 from . import Label
 
@@ -75,4 +75,4 @@ def label_plan(file, output, allow_delete):
 @handle_errors
 def label_apply(file, yes, allow_delete):
     """Apply label changes to Gmail."""
-    _confirm_and_push(Label.from_file(file), yes=yes, allow_delete=allow_delete)
+    confirm_and_push(Label.from_file(file), yes=yes, allow_delete=allow_delete)

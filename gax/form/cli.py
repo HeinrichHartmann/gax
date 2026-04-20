@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, _confirm_and_push, success
+from ..ui import handle_errors, confirm_and_push, success
 from .. import docs
 from . import Form
 
@@ -79,4 +79,4 @@ def form_plan(file, output):
 @handle_errors
 def form_apply(file, yes):
     """Apply form changes to Google Forms."""
-    _confirm_and_push(Form.from_file(file), yes=yes)
+    confirm_and_push(Form.from_file(file), yes=yes)

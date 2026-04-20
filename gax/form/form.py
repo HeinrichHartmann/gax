@@ -39,7 +39,7 @@ from typing import Any
 import yaml
 from googleapiclient.discovery import build
 
-from ..gaxfile import GaxFile, format as gaxfile_format
+from ..gaxfile import GaxFile, format_single
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -111,7 +111,7 @@ def format_form_file(header: FormHeader, body_str: str) -> str:
 
     h["content-type"] = header.content_type
 
-    return gaxfile_format(h, body_str)
+    return format_single(h, body_str)
 
 
 # =============================================================================
