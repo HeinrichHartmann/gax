@@ -351,6 +351,7 @@ class Label(Resource):
 
     name = "label"
     FILE_TYPE = "gax/labels"
+    SCOPES = ("gmail.labels",)
 
     def clone(
         self,

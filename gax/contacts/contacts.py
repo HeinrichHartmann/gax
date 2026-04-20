@@ -562,6 +562,7 @@ class Contact(Resource):
     name = "contact"
     FILE_TYPE = "gax/contact"
     FILE_EXTENSIONS = (".contact.gax.yaml",)
+    SCOPES = ("contacts.readonly",)
 
     def pull(self, **kw) -> None:
         """Pull latest contact data from Google."""
@@ -591,6 +592,7 @@ class Contacts(Resource):
     FILE_TYPE = "gax/contacts"
     FILE_EXTENSIONS = (".contacts.gax.md",)
     CHECKOUT_TYPE = "gax/contacts-checkout"
+    SCOPES = ("contacts",)
 
     def _fetch_and_normalize(self, *, service=None):
         """Fetch contacts from API and normalize. Returns (normalized, groups)."""

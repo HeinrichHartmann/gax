@@ -423,6 +423,7 @@ class Filter(Resource):
 
     name = "filter"
     FILE_TYPE = "gax/filters"
+    SCOPES = ("gmail.settings.basic",)
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone Gmail filters to a local file."""

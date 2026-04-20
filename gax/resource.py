@@ -81,6 +81,11 @@ class Resource:
         FILE_TYPE       — e.g. "gax/doc", matched against YAML type field
         FILE_EXTENSIONS — e.g. (".doc.gax.md", ".tab.gax.md")
         CHECKOUT_TYPE   — e.g. "gax/doc-checkout", matched in .gax.yaml
+
+    Scope metadata (set on subclasses):
+        SCOPES — OAuth scopes needed by this resource (short form,
+                 e.g. "gmail.readonly"). The auth module prepends the
+                 https://www.googleapis.com/auth/ prefix.
     """
 
     name: str
@@ -90,6 +95,8 @@ class Resource:
     FILE_EXTENSIONS: tuple[str, ...] = ()
     CHECKOUT_TYPE: str | None = None
     HAS_GENERIC_DISPATCH: bool = True
+
+    SCOPES: tuple[str, ...] = ()
 
     _subclasses: list[type["Resource"]] = []
 

@@ -323,6 +323,7 @@ class File(Resource):
 
     name = "file"
     URL_PATTERN = r"drive\.google\.com/(file/d/|open\?id=)"
+    SCOPES = ("drive",)
 
     @classmethod
     def from_id(cls, id_value: str) -> "File":
@@ -451,6 +452,7 @@ class Folder(Resource):
     name = "folder"
     URL_PATTERN = r"drive\.google\.com/(drive/folders/|folders/)"
     CHECKOUT_TYPE = "gax/drive-checkout"
+    SCOPES = ("drive.readonly",)
 
     @classmethod
     def from_id(cls, id_value: str) -> "Folder":

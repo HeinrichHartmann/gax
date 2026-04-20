@@ -10,21 +10,25 @@ CONFIG_DIR = Path.home() / ".config" / "gax"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
 TOKEN_FILE = CONFIG_DIR / "token.json"
 
-# Scopes needed for Google Sheets, Docs, Slides, Gmail, Calendar, Forms, Contacts, and Drive files
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",  # read/write/create Drive files
-    "https://www.googleapis.com/auth/documents",  # read/write for import
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.compose",
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.settings.basic",  # filters
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/tasks",  # read/write tasks
-    "https://www.googleapis.com/auth/forms.body",  # read/write form structure
-    "https://www.googleapis.com/auth/contacts",  # read/write contacts
-    "https://www.googleapis.com/auth/presentations",  # read/write Slides
-]
+SCOPE_PREFIX = "https://www.googleapis.com/auth/"
+
+
+def expand_scopes(short_scopes: list[str]) -> list[str]:
+    """Expand short scope names to full OAuth URLs.
+
+    E.g. "gmail.readonly" -> "https://www.googleapis.com/auth/gmail.readonly"
+    """
+    return [SCOPE_PREFIX + s for s in short_scopes]
+
+
+def get_all_scopes() -> list[str]:
+    """Collect all scopes declared by registered Resource subclasses."""
+    from .resource import Resource
+
+    scopes: set[str] = set()
+    for sub in Resource._subclasses:
+        scopes.update(sub.SCOPES)
+    return sorted(scopes)
 
 # Default OAuth client credentials (public client for CLI apps)
 # Users can replace with their own in ~/.config/gax/credentials.json
@@ -122,8 +126,13 @@ def save_credentials(creds: Credentials) -> None:
         json.dump(token_data, f, indent=2)
 
 
-def login() -> Credentials:
-    """Run OAuth flow and store credentials."""
+def login(scopes: list[str] | None = None) -> Credentials:
+    """Run OAuth flow and store credentials.
+
+    Args:
+        scopes: Short-form scope names to request (e.g. ["gmail.readonly", "calendar"]).
+                If None, requests all scopes from registered resources.
+    """
     if not credentials_exist():
         raise FileNotFoundError(
             f"OAuth credentials not found at {CREDENTIALS_FILE}\n"
@@ -133,9 +142,11 @@ def login() -> Credentials:
             f"  3. Download JSON and save to: {CREDENTIALS_FILE}"
         )
 
+    requested = expand_scopes(scopes or get_all_scopes())
+
     flow = InstalledAppFlow.from_client_secrets_file(
         str(CREDENTIALS_FILE),
-        scopes=SCOPES,
+        scopes=requested,
     )
 
     # Run local server for OAuth callback

@@ -247,6 +247,7 @@ class Slide(Resource):
     name = "slides"
     FILE_TYPE = "gax/slides"
     FILE_EXTENSIONS = (".slides.gax.md",)
+    SCOPES = ("presentations",)
 
     def pull(self, **kw) -> None:
         """Refresh a single slide file from remote."""
@@ -399,6 +400,7 @@ class Presentation(Resource):
     name = "presentation"
     URL_PATTERN = r"docs\.google\.com/presentation/d/"
     CHECKOUT_TYPE = "gax/slides-checkout"
+    SCOPES = ("presentations",)
 
     def clone(
         self,

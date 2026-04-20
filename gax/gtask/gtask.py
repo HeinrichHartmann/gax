@@ -492,6 +492,7 @@ class TaskList(Resource):
     FILE_TYPE = "gax/task-list"
     FILE_EXTENSIONS = (".tasks.gax.md", ".tasks.gax.yaml")
     CHECKOUT_TYPE = "gax/task-checkout"
+    SCOPES = ("tasks",)
 
     def lists(self, out) -> None:
         """List available task lists to file descriptor."""
@@ -692,6 +693,7 @@ class Task(Resource):
     name = "task"
     FILE_TYPE = "gax/task"
     FILE_EXTENSIONS = (".task.gax.yaml",)
+    SCOPES = ("tasks",)
 
     def clone(
         self,

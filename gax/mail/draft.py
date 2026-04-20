@@ -320,6 +320,7 @@ class Draft(Resource):
     URL_PATTERN = r"mail\.google\.com/mail/[^#]*#drafts/"
     FILE_TYPE = "gax/draft"
     FILE_EXTENSIONS = (".draft.gax.md",)
+    SCOPES = ("gmail.readonly", "gmail.compose")
 
     @classmethod
     def from_id(cls, id_value: str) -> "Draft":

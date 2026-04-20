@@ -980,6 +980,7 @@ class Tab(Resource):
     URL_PATTERN = r"docs\.google\.com/document/d/"
     FILE_TYPE = "gax/doc"
     FILE_EXTENSIONS = (".doc.gax.md", ".tab.gax.md")
+    SCOPES = ("documents", "drive.readonly")
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a single tab to a .doc.gax.md file.
@@ -1162,6 +1163,7 @@ class Doc(Resource):
     URL_PATTERN = r"docs\.google\.com/document/d/"
     CHECKOUT_TYPE = "gax/doc-checkout"
     HAS_GENERIC_DISPATCH = False
+    SCOPES = ("documents", "drive.readonly")
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone all tabs into a folder (supports nested tabs)."""
