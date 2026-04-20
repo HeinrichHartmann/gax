@@ -55,9 +55,13 @@ What we chose NOT to abstract:
 import base64
 import difflib
 import logging
+import mimetypes
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -92,6 +96,7 @@ class DraftHeader:
     in_reply_to: str = ""
     source: str = ""
     time: str = ""
+    attachments: list[str] = field(default_factory=list)
 
 
 # =============================================================================
@@ -114,6 +119,9 @@ def parse_draft(content: str) -> tuple[DraftHeader, str]:
     section = sections[0]
     h = section.headers
 
+    raw_atts = h.get("attachments", [])
+    attachments = [str(item) for item in raw_atts]
+
     header = DraftHeader(
         draft_id=h.get("draft_id", ""),
         message_id=h.get("message_id", ""),
@@ -125,6 +133,7 @@ def parse_draft(content: str) -> tuple[DraftHeader, str]:
         in_reply_to=h.get("in_reply_to", ""),
         source=h.get("source", ""),
         time=h.get("time", ""),
+        attachments=attachments,
     )
 
     return header, section.content
@@ -154,6 +163,8 @@ def format_draft(header: DraftHeader, body: str) -> str:
         h["source"] = header.source
     if header.time:
         h["time"] = header.time
+    if header.attachments:
+        h["attachments"] = header.attachments
 
     return gaxfile.format_section(h, body)
 
@@ -189,9 +200,31 @@ def get_header(headers_list: list[dict], name: str) -> str:
     return ""
 
 
-def build_message(header: DraftHeader, body: str) -> dict:
-    """Build RFC 2822 message dict for Gmail API."""
-    message = MIMEText(body, "plain", "utf-8")
+def build_message(
+    header: DraftHeader,
+    body: str,
+    attachments: list[tuple[str, str, bytes]] | None = None,
+) -> dict:
+    """Build RFC 2822 message dict for Gmail API.
+
+    Args:
+        header: Draft metadata.
+        body: Plain text body.
+        attachments: Optional list of (filename, mime_type, data) tuples.
+    """
+    if attachments:
+        message = MIMEMultipart()
+        message.attach(MIMEText(body, "plain", "utf-8"))
+        for filename, mime_type, data in attachments:
+            maintype, subtype = mime_type.split("/", 1)
+            part = MIMEBase(maintype, subtype)
+            part.set_payload(data)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            message.attach(part)
+    else:
+        message = MIMEText(body, "plain", "utf-8")
+
     message["to"] = header.to
     message["subject"] = header.subject
 
@@ -418,7 +451,10 @@ class Draft(Resource):
             raise ValueError("'subject' field is required")
 
         if not header.draft_id:
-            return f"New draft: {header.subject}\nTo: {header.to}"
+            summary = f"New draft: {header.subject}\nTo: {header.to}"
+            if header.attachments:
+                summary += f"\nAttachments: {', '.join(header.attachments)}"
+            return summary
 
         remote_header, remote_body = fetch_draft(header.draft_id)
 
@@ -430,6 +466,15 @@ class Draft(Resource):
             lines.append(f"subject: {remote_header.subject} -> {header.subject}")
         if header.cc != remote_header.cc:
             lines.append(f"cc: {remote_header.cc} -> {header.cc}")
+
+        local_att_names = set(header.attachments)
+        remote_att_names = set(remote_header.attachments)
+        added = local_att_names - remote_att_names
+        removed = remote_att_names - local_att_names
+        if added:
+            lines.append(f"attachments added: {', '.join(sorted(added))}")
+        if removed:
+            lines.append(f"attachments removed: {', '.join(sorted(removed))}")
 
         body_diff = list(
             difflib.unified_diff(
@@ -456,9 +501,24 @@ class Draft(Resource):
         if not header.subject:
             raise ValueError("'subject' field is required")
 
+        # Resolve attachment paths and read file data
+        resolved_atts: list[tuple[str, str, bytes]] | None = None
+        if header.attachments:
+            resolved_atts = []
+            for att_path in header.attachments:
+                path = Path(att_path)
+                if not path.is_absolute():
+                    path = (self.path.parent / path).resolve()
+                if not path.exists():
+                    raise ValueError(f"Attachment not found: {att_path}")
+                data = path.read_bytes()
+                mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                resolved_atts.append((path.name, mime_type, data))
+                logger.info(f"Attaching: {path.name} ({len(data)} bytes)")
+
         creds = get_authenticated_credentials()
         service = build("gmail", "v1", credentials=creds)
-        message = build_message(header, body)
+        message = build_message(header, body, resolved_atts)
 
         if not header.draft_id:
             logger.info(f"Creating draft: {header.subject}")

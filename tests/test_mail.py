@@ -9,6 +9,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from gax.mail.draft import (
+    DraftHeader,
+    Draft,
+    build_message,
+    parse_draft,
+    format_draft,
+)
 from gax.mail.shared import (
     MailSection,
     pull_thread,
@@ -494,3 +501,187 @@ class TestThreadDiff:
         file.write_text("---\ntype: gax/mail\n---\nno thread id here\n")
         with pytest.raises(ValueError, match="No thread_id"):
             Thread(path=file).diff()
+
+
+# =============================================================================
+# Draft attachment tests
+# =============================================================================
+
+
+class TestDraftAttachments:
+    """Tests for draft attachment support."""
+
+    def test_parse_draft_with_attachments(self):
+        """Attachment paths are parsed from YAML list."""
+        content = (
+            "---\n"
+            "type: gax/draft\n"
+            "subject: Test\n"
+            "to: bob@test.com\n"
+            "attachments:\n"
+            "  - offer.pdf\n"
+            "  - docs/contract.pdf\n"
+            "---\n"
+            "Hello\n"
+        )
+        header, body = parse_draft(content)
+        assert header.attachments == ["offer.pdf", "docs/contract.pdf"]
+        assert "Hello" in body
+
+    def test_parse_draft_without_attachments(self):
+        """Drafts without attachments have empty list."""
+        content = (
+            "---\n"
+            "type: gax/draft\n"
+            "subject: Test\n"
+            "to: bob@test.com\n"
+            "---\n"
+            "Hello\n"
+        )
+        header, _ = parse_draft(content)
+        assert header.attachments == []
+
+    def test_format_draft_with_attachments(self):
+        """Attachments are serialized as YAML list."""
+        header = DraftHeader(
+            subject="Test",
+            to="bob@test.com",
+            attachments=["offer.pdf", "contract.pdf"],
+        )
+        content = format_draft(header, "Hello\n")
+        assert "attachments:" in content
+        assert "  - offer.pdf" in content
+        assert "  - contract.pdf" in content
+
+    def test_format_draft_without_attachments(self):
+        """No attachments field when list is empty."""
+        header = DraftHeader(subject="Test", to="bob@test.com")
+        content = format_draft(header, "Hello\n")
+        assert "attachments" not in content
+
+    def test_roundtrip_attachments(self):
+        """Parse then format preserves attachments."""
+        header = DraftHeader(
+            subject="Test",
+            to="bob@test.com",
+            attachments=["offer.pdf", "/abs/path/contract.pdf"],
+        )
+        content = format_draft(header, "Body text\n")
+        parsed_header, parsed_body = parse_draft(content)
+        assert parsed_header.attachments == header.attachments
+        assert parsed_header.subject == header.subject
+
+    def test_build_message_without_attachments(self):
+        """Without attachments, produces plain text MIME."""
+        header = DraftHeader(subject="Test", to="bob@test.com")
+        msg = build_message(header, "Hello")
+        assert "raw" in msg
+        import base64
+        raw = base64.urlsafe_b64decode(msg["raw"])
+        assert b"text/plain" in raw
+        assert b"multipart" not in raw
+
+    def test_build_message_with_attachments(self):
+        """With attachments, produces multipart MIME."""
+        header = DraftHeader(subject="Test", to="bob@test.com")
+        attachments = [("report.pdf", "application/pdf", b"fake-pdf-data")]
+        msg = build_message(header, "See attached.", attachments)
+        import base64
+        raw = base64.urlsafe_b64decode(msg["raw"])
+        assert b"multipart" in raw
+        assert b"report.pdf" in raw
+
+    def test_build_message_with_thread_id(self):
+        """Thread ID and reply headers are set."""
+        header = DraftHeader(
+            subject="Re: Test",
+            to="bob@test.com",
+            thread_id="thread-123",
+            in_reply_to="msg-456",
+        )
+        msg = build_message(header, "Reply body")
+        assert msg["threadId"] == "thread-123"
+
+    def test_push_missing_attachment_raises(self, tmp_path):
+        """Push raises ValueError for missing attachment file."""
+        draft_file = tmp_path / "test.draft.gax.md"
+        header = DraftHeader(
+            subject="Test",
+            to="bob@test.com",
+            attachments=["nonexistent.pdf"],
+        )
+        draft_file.write_text(format_draft(header, "Hello\n"))
+        with pytest.raises(ValueError, match="Attachment not found"):
+            Draft(path=draft_file).push()
+
+    def test_push_resolves_relative_paths(self, tmp_path, monkeypatch):
+        """Push reads attachment data from paths relative to draft file."""
+        # Create attachment file next to draft
+        att_file = tmp_path / "offer.pdf"
+        att_file.write_bytes(b"pdf-content-here")
+
+        draft_file = tmp_path / "test.draft.gax.md"
+        header = DraftHeader(
+            subject="Test",
+            to="bob@test.com",
+            attachments=["offer.pdf"],
+        )
+        draft_file.write_text(format_draft(header, "See attached.\n"))
+
+        # Mock Gmail API
+        mock_service = MagicMock()
+        mock_service.users().drafts().create().execute.return_value = {
+            "id": "draft-123",
+            "message": {"id": "msg-456"},
+        }
+        monkeypatch.setattr("gax.mail.draft.get_authenticated_credentials", lambda: None)
+        monkeypatch.setattr("gax.mail.draft.build", lambda *a, **kw: mock_service)
+
+        Draft(path=draft_file).push()
+
+        # Verify API was called with message containing attachment
+        call_args = mock_service.users().drafts().create.call_args
+        assert call_args is not None
+
+        # Verify draft file was updated with draft_id
+        updated = draft_file.read_text()
+        assert "draft_id: draft-123" in updated
+
+    def test_push_resolves_absolute_paths(self, tmp_path, monkeypatch):
+        """Push reads attachment data from absolute paths."""
+        att_file = tmp_path / "subdir" / "doc.pdf"
+        att_file.parent.mkdir()
+        att_file.write_bytes(b"absolute-pdf")
+
+        draft_file = tmp_path / "test.draft.gax.md"
+        header = DraftHeader(
+            subject="Test",
+            to="bob@test.com",
+            attachments=[str(att_file)],
+        )
+        draft_file.write_text(format_draft(header, "Body\n"))
+
+        mock_service = MagicMock()
+        mock_service.users().drafts().create().execute.return_value = {
+            "id": "draft-abs",
+            "message": {"id": "msg-abs"},
+        }
+        monkeypatch.setattr("gax.mail.draft.get_authenticated_credentials", lambda: None)
+        monkeypatch.setattr("gax.mail.draft.build", lambda *a, **kw: mock_service)
+
+        Draft(path=draft_file).push()
+        updated = draft_file.read_text()
+        assert "draft_id: draft-abs" in updated
+
+    def test_diff_new_draft_with_attachments(self, tmp_path):
+        """Diff for new draft shows attachment names."""
+        draft_file = tmp_path / "test.draft.gax.md"
+        header = DraftHeader(
+            subject="Test",
+            to="bob@test.com",
+            attachments=["offer.pdf", "contract.pdf"],
+        )
+        draft_file.write_text(format_draft(header, "Hello\n"))
+
+        result = Draft(path=draft_file).diff()
+        assert "Attachments: offer.pdf, contract.pdf" in result
