@@ -461,19 +461,44 @@ def changelog(verbose: bool, count: int):
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    for commit in json.loads(result.stdout):
-        sha = commit["sha"][:7]
-        message = commit["commit"]["message"]
-        title = message.split("\n")[0]
-        if verbose:
-            body = "\n".join(message.split("\n")[1:]).strip()
-            click.echo(f"  {sha}  {title}")
-            if body:
-                for line in body.splitlines():
-                    click.echo(f"            {line}")
-                click.echo()
-        else:
-            click.echo(f"  {sha}  {title}")
+    commits = json.loads(result.stdout)
+
+    # Group commits by date
+    from collections import OrderedDict
+
+    by_date: OrderedDict[str, list] = OrderedDict()
+    for commit in commits:
+        date_str = commit["commit"]["author"]["date"][:10]  # YYYY-MM-DD
+        by_date.setdefault(date_str, []).append(commit)
+
+    for date, day_commits in by_date.items():
+        click.echo(f"\n{date}")
+        for commit in day_commits:
+            message = commit["commit"]["message"]
+            title = message.split("\n")[0]
+            click.echo(f"  {title}")
+            if verbose:
+                body = "\n".join(message.split("\n")[1:]).strip()
+                # Skip co-authored-by lines and trailing separators
+                body_lines = [
+                    line
+                    for line in body.splitlines()
+                    if not line.startswith("Co-authored-by:")
+                    and not line.startswith("Co-Authored-By:")
+                    and line.strip() != "---------"
+                ]
+                # Collapse runs of blank lines into single blanks
+                cleaned = []
+                for line in body_lines:
+                    if not line.strip() and cleaned and not cleaned[-1].strip():
+                        continue
+                    cleaned.append(line)
+                body = "\n".join(cleaned).strip()
+                if body:
+                    click.echo()
+                    for line in body.splitlines():
+                        click.echo(f"    {line}")
+                    click.echo()
 
 
 def _get_installed_sha() -> str | None:
