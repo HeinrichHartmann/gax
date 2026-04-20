@@ -454,6 +454,7 @@ class SheetTab(Resource):
     name = "sheet-tab"
     URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
     FILE_EXTENSIONS = (".sheet.gax.md",)
+    SCOPES = ("spreadsheets",)
 
     @classmethod
     def from_file(cls, path: Path) -> "SheetTab":
@@ -558,6 +559,7 @@ class Sheet(Resource):
     URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
     CHECKOUT_TYPE = "gax/sheet-checkout"
     HAS_GENERIC_DISPATCH = False
+    SCOPES = ("spreadsheets",)
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Checkout all tabs into a folder.

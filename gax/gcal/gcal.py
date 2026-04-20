@@ -697,6 +697,7 @@ class Cal(Resource):
     name = "cal"
     URL_PATTERN = r"calendar\.google\.com/calendar/"
     FILE_TYPE = "gax/cal-list"
+    SCOPES = ("calendar.readonly",)
 
     def calendars(self, out, **kw) -> None:
         """List available calendars to file descriptor."""
@@ -897,6 +898,7 @@ class Event(Resource):
     FILE_TYPE = "gax/cal"
     FILE_EXTENSIONS = (".cal.gax.md",)
     HAS_GENERIC_DISPATCH = False
+    SCOPES = ("calendar",)
 
     @classmethod
     def from_id(cls, id_value: str) -> "Event":

@@ -93,6 +93,7 @@ class Thread(Resource):
     name = "thread"
     FILE_TYPE = "gax/mail"
     FILE_EXTENSIONS = (".mail.gax.md",)
+    SCOPES = ("gmail.readonly", "gmail.compose")
 
     @classmethod
     def from_url(cls, url: str) -> "Thread":

@@ -784,6 +784,7 @@ class Form(Resource):
     URL_PATTERN = r"docs\.google\.com/forms/d/"
     FILE_TYPE = "gax/form"
     FILE_EXTENSIONS = (".form.gax.md",)
+    SCOPES = ("forms.body",)
 
     def _output_path(self, title: str, output: Path | None) -> Path:
         if output:

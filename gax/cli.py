@@ -325,8 +325,14 @@ main.add_command(auth_cmd, name="auth")
 
 
 @auth_cmd.command()
+@click.option(
+    "--scopes",
+    default=None,
+    help="Comma-separated scopes to request (e.g. gmail.readonly,calendar). "
+    "Omit for all scopes. Use 'gax auth scopes' to list available scopes.",
+)
 @handle_errors
-def login():
+def login(scopes):
     """Authenticate with Google (opens browser)."""
     if not auth.credentials_exist():
         click.echo(f"OAuth credentials not found at {auth.CREDENTIALS_FILE}")
@@ -339,8 +345,15 @@ def login():
         click.echo(f"  3. Download JSON and save to: {auth.CREDENTIALS_FILE}")
         sys.exit(1)
 
+    scope_list = [s.strip() for s in scopes.split(",")] if scopes else None
+
+    if scope_list:
+        click.echo(f"Requesting scopes: {', '.join(scope_list)}")
+    else:
+        click.echo("Requesting all scopes.")
+
     click.echo("Opening browser for authentication...")
-    auth.login()
+    auth.login(scopes=scope_list)
     click.echo("Authenticated successfully!")
     click.echo(f"Token saved to: {auth.TOKEN_FILE}")
 
@@ -356,6 +369,23 @@ def status():
     click.echo(f"token_path\t{status['token_path']}")
     click.echo(f"token_exists\t{status['token_exists']}")
     click.echo(f"authenticated\t{status['authenticated']}")
+
+
+@auth_cmd.command()
+def scopes():
+    """List available OAuth scopes grouped by resource."""
+    from .resource import Resource
+
+    seen: set[str] = set()
+    for sub in Resource._subclasses:
+        if not sub.SCOPES:
+            continue
+        scope_str = ", ".join(sub.SCOPES)
+        key = f"{sub.name}:{scope_str}"
+        if key in seen:
+            continue
+        seen.add(key)
+        click.echo(f"{sub.name:15s} {scope_str}")
 
 
 @auth_cmd.command()

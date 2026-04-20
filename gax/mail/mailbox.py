@@ -409,6 +409,7 @@ class Mailbox(Resource):
 
     name = "mailbox"
     FILE_TYPE = "gax/list"
+    SCOPES = ("gmail.readonly", "gmail.modify")
 
     @classmethod
     def from_file(cls, path: Path) -> "Mailbox":
