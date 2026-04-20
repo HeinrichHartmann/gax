@@ -23,8 +23,8 @@ Non-standard CLI commands can add methods to the class as needed.
 Module-to-module imports (e.g. mail.py using draft internals) are fine.
 """
 
+import functools
 import glob
-import re
 import sys
 import click
 from pathlib import Path
@@ -46,6 +46,44 @@ from .gdoc import Tab, Doc  # noqa: F401 — registers with Resource._subclasses
 from .gslides import Slide, Presentation  # noqa: F401
 
 
+# =============================================================================
+# CLI helpers — keep UI concerns out of Resource classes
+# =============================================================================
+
+
+def handle_errors(fn):
+    """Decorator: catch exceptions, print error, exit 1."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            from .ui import error
+
+            error(str(e))
+            sys.exit(1)
+
+    return wrapper
+
+
+def _confirm_and_push(resource, *, yes=False, **kw):
+    """Standard diff → confirm → push flow."""
+    from .ui import success
+
+    diff_text = resource.diff(**kw)
+    if diff_text is None:
+        click.echo("No changes to push.")
+        return
+    if not yes:
+        click.echo(diff_text)
+        if not click.confirm("Push these changes?"):
+            click.echo("Cancelled.")
+            return
+    resource.push(**kw)
+    success("Pushed successfully.")
+
+
 @click.group()
 @click.version_option()
 def main():
@@ -58,15 +96,10 @@ def main():
 @docs.section("main")
 @main.command("pull")
 @click.argument("files", nargs=-1, required=True)
-@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
-def unified_pull(files: tuple[str, ...], verbose: bool, yes: bool):
+def unified_pull(files: tuple[str, ...]):
     """Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
 
-    Automatically detects file type from YAML header and calls
-    the appropriate pull command. For .gax.md.d folders, performs
-    a checkout to a scratch directory, shows diff, and prompts
-    for confirmation.
+    Automatically detects file type and calls the appropriate pull command.
 
     \b
     Examples:
@@ -252,39 +285,16 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
     default="md",
     help="Output format (for forms)",
 )
-@click.pass_context
-def clone(ctx, url: str, output: Path | None, fmt: str):
+@handle_errors
+def clone(url: str, output: Path | None, fmt: str):
     """Clone a Google resource from URL.
 
     Supports Google Docs, Sheets, Forms, Gmail, and Calendar.
     """
-    from .resource import Resource
+    from .ui import success
 
-    try:
-        r = Resource.from_url(url)
-    except ValueError:
-        click.echo(f"Unrecognized URL: {url}", err=True)
-        click.echo(
-            "Supported: Google Docs/Sheets/Forms/Slides, Gmail, Calendar", err=True
-        )
-        sys.exit(1)
-
-    try:
-        from .ui import success
-
-        kwargs = {"output": output, "fmt": fmt}
-        path = r.clone(**kwargs)
-        success(f"Created: {path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    path = Resource.from_url(url).clone(output=output, fmt=fmt)
+    success(f"Created: {path}")
 
 
 @docs.section("main")
@@ -292,8 +302,8 @@ def clone(ctx, url: str, output: Path | None, fmt: str):
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output folder")
 @click.option("-f", "--format", "fmt", default="md", help="Output format (for sheets)")
-@click.pass_context
-def checkout(ctx, url: str, output: Path | None, fmt: str):
+@handle_errors
+def checkout(url: str, output: Path | None, fmt: str):
     """Checkout a Google resource from URL into a folder of individual files.
 
     Supports Google Docs, Sheets, Slides, and Calendar.
@@ -304,32 +314,10 @@ def checkout(ctx, url: str, output: Path | None, fmt: str):
         gax checkout <sheets-url> -f csv
         gax checkout <calendar-url> -o Week/
     """
-    try:
-        r = Resource.from_url(url)
-    except ValueError:
-        click.echo(f"Unrecognized URL: {url}", err=True)
-        click.echo("Supported: Google Docs, Sheets, Slides, Calendar", err=True)
-        sys.exit(1)
+    from .ui import success
 
-    try:
-        from .ui import success
-
-        kwargs = {"output": output, "fmt": fmt}
-        path = r.checkout(**kwargs)
-        success(f"Checked out: {path}")
-    except NotImplementedError:
-        click.echo("Error: checkout not supported for this resource", err=True)
-        sys.exit(1)
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    path = Resource.from_url(url).checkout(output=output, fmt=fmt)
+    success(f"Checked out: {path}")
 
 
 @main.command()
@@ -386,27 +374,24 @@ main.add_command(auth_cmd, name="auth")
 
 
 @auth_cmd.command()
+@handle_errors
 def login():
     """Authenticate with Google (opens browser)."""
-    try:
-        if not auth.credentials_exist():
-            click.echo(f"OAuth credentials not found at {auth.CREDENTIALS_FILE}")
-            click.echo("")
-            click.echo(
-                "Please download OAuth client credentials from Google Cloud Console:"
-            )
-            click.echo("  1. Go to https://console.cloud.google.com/apis/credentials")
-            click.echo("  2. Create OAuth 2.0 Client ID (Desktop app)")
-            click.echo(f"  3. Download JSON and save to: {auth.CREDENTIALS_FILE}")
-            sys.exit(1)
-
-        click.echo("Opening browser for authentication...")
-        auth.login()
-        click.echo("Authenticated successfully!")
-        click.echo(f"Token saved to: {auth.TOKEN_FILE}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    if not auth.credentials_exist():
+        click.echo(f"OAuth credentials not found at {auth.CREDENTIALS_FILE}")
+        click.echo("")
+        click.echo(
+            "Please download OAuth client credentials from Google Cloud Console:"
+        )
+        click.echo("  1. Go to https://console.cloud.google.com/apis/credentials")
+        click.echo("  2. Create OAuth 2.0 Client ID (Desktop app)")
+        click.echo(f"  3. Download JSON and save to: {auth.CREDENTIALS_FILE}")
         sys.exit(1)
+
+    click.echo("Opening browser for authentication...")
+    auth.login()
+    click.echo("Authenticated successfully!")
+    click.echo(f"Token saved to: {auth.TOKEN_FILE}")
 
 
 @auth_cmd.command()
@@ -432,17 +417,6 @@ def logout():
 
 
 # --- GSheet commands ---
-
-
-def _extract_spreadsheet_id(url: str) -> str:
-    """Extract spreadsheet ID from Google Sheets URL."""
-    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
-    if match:
-        return match.group(1)
-    # Maybe it's already an ID
-    if re.fullmatch(r"[a-zA-Z0-9-_]+", url):
-        return url
-    raise ValueError(f"Could not parse spreadsheet ID from: {url}")
 
 
 def _find_sheet_folder() -> Path:
@@ -484,6 +458,7 @@ def sheet():
     is_flag=True,
     help="Suppress multi-tab status message",
 )
+@handle_errors
 def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
     """Clone first tab from a spreadsheet to a .sheet.gax.md file.
 
@@ -492,43 +467,35 @@ def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
     from .gsheet import SheetTab, _extract_spreadsheet_id
     from .gsheet.client import GSheetClient
 
-    try:
-        file_path = SheetTab.from_url(url).clone(output=output, fmt=fmt)
-        click.echo(f"Created: {file_path}")
+    file_path = SheetTab.from_url(url).clone(output=output, fmt=fmt)
+    click.echo(f"Created: {file_path}")
 
-        if not quiet:
-            spreadsheet_id = _extract_spreadsheet_id(url)
-            info = GSheetClient().get_spreadsheet_info(spreadsheet_id)
-            if len(info["tabs"]) > 1:
-                first_tab = info["tabs"][0]["title"]
-                click.echo(
-                    f'  Tab "{first_tab}" cloned (1 of {len(info["tabs"])} tabs).\n'
-                    f"  For all tabs: gax sheet checkout {url}"
-                )
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    if not quiet:
+        spreadsheet_id = _extract_spreadsheet_id(url)
+        info = GSheetClient().get_spreadsheet_info(spreadsheet_id)
+        if len(info["tabs"]) > 1:
+            first_tab = info["tabs"][0]["title"]
+            click.echo(
+                f'  Tab "{first_tab}" cloned (1 of {len(info["tabs"])} tabs).\n'
+                f"  For all tabs: gax sheet checkout {url}"
+            )
 
 
 @sheet.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def sheet_pull(file: Path):
     """Pull latest data for all tabs in a multipart file or checkout folder."""
     from .ui import success as ui_success
 
-    try:
-        if file.is_dir():
-            from .gsheet import Sheet
+    if file.is_dir():
+        from .gsheet import Sheet
 
-            Sheet(path=file).pull()
-            ui_success(f"Pulled: {file}")
-        else:
-            rows = pull_all(file)
-            ui_success(f"Pulled {rows} rows to {file}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+        Sheet(path=file).pull()
+        ui_success(f"Pulled: {file}")
+    else:
+        rows = pull_all(file)
+        ui_success(f"Pulled {rows} rows to {file}")
 
 
 @sheet.command("checkout")
@@ -546,6 +513,7 @@ def sheet_pull(file: Path):
     default="md",
     help="Output format: md, csv, tsv, psv, json, jsonl",
 )
+@handle_errors
 def sheet_checkout(url: str, output: Path | None, fmt: str):
     """Checkout all tabs to individual files in a folder.
 
@@ -559,15 +527,10 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
         gax sheet checkout <url> -f csv
     """
     from .gsheet import Sheet
+    from .ui import success
 
-    try:
-        from .ui import success as ui_success
-
-        folder = Sheet.from_url(url).checkout(output=output, fmt=fmt)
-        ui_success(f"Checked out to: {folder}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    folder = Sheet.from_url(url).checkout(output=output, fmt=fmt)
+    success(f"Checked out to: {folder}")
 
 
 @sheet.command("push")
@@ -576,6 +539,7 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
     "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+@handle_errors
 def sheet_push(folder: Path, with_formulas: bool, yes: bool):
     """Push all tabs in a checkout folder to Google Sheets.
 
@@ -589,26 +553,12 @@ def sheet_push(folder: Path, with_formulas: bool, yes: bool):
     """
     from .gsheet import Sheet
 
-    try:
-        s = Sheet(path=folder)
-        diff_text = s.diff()
-        if diff_text is None:
-            click.echo("No changes to push.")
-            return
-        if not yes:
-            click.echo("\n" + diff_text)
-            if not click.confirm("\nPush these changes?"):
-                click.echo("Cancelled.")
-                return
-        s.push(with_formulas=with_formulas)
-        click.echo("Pushed successfully.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    _confirm_and_push(Sheet(path=folder), yes=yes, with_formulas=with_formulas)
 
 
 @sheet.command("plan")
 @click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
+@handle_errors
 def sheet_plan(folder):
     """Show what changes would be pushed to Google Sheets.
 
@@ -622,22 +572,17 @@ def sheet_plan(folder):
     """
     from .gsheet import Sheet
 
-    try:
-        if folder is None:
-            folder = _find_sheet_folder()
+    if folder is None:
+        folder = _find_sheet_folder()
 
-        diff_text = Sheet(path=folder).diff()
-        if diff_text is None:
-            click.echo("No changes to push.")
-        else:
-            click.echo("\n" + diff_text)
-            click.echo(
-                "\nRun 'gax sheet apply' to push these changes, or 'gax sheet push <folder>' with confirmation."
-            )
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    diff_text = Sheet(path=folder).diff()
+    if diff_text is None:
+        click.echo("No changes to push.")
+    else:
+        click.echo("\n" + diff_text)
+        click.echo(
+            "\nRun 'gax sheet apply' to push these changes, or 'gax sheet push <folder>' with confirmation."
+        )
 
 
 @sheet.command("apply")
@@ -646,6 +591,7 @@ def sheet_plan(folder):
     "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def sheet_apply(folder, with_formulas: bool, yes: bool):
     """Apply planned changes by pushing to Google Sheets.
 
@@ -660,28 +606,10 @@ def sheet_apply(folder, with_formulas: bool, yes: bool):
     """
     from .gsheet import Sheet
 
-    try:
-        if folder is None:
-            folder = _find_sheet_folder()
+    if folder is None:
+        folder = _find_sheet_folder()
 
-        s = Sheet(path=folder)
-        diff_text = s.diff()
-        if diff_text is None:
-            click.echo("Nothing to apply.")
-            return
-
-        click.echo("\n" + diff_text)
-
-        if not yes and not click.confirm("\nApply these changes?"):
-            click.echo("Cancelled.")
-            return
-
-        s.push(with_formulas=with_formulas)
-        click.echo("Applied successfully.")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    _confirm_and_push(Sheet(path=folder), yes=yes, with_formulas=with_formulas)
 
 
 @sheet.group()
@@ -692,15 +620,12 @@ def tab():
 
 @tab.command("list")
 @click.argument("url")
+@handle_errors
 def tab_list(url: str):
     """List tabs in a spreadsheet (TSV output)."""
     from .gsheet import Sheet
 
-    try:
-        Sheet.from_url(url).tab_list(sys.stdout)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    Sheet.from_url(url).tab_list(sys.stdout)
 
 
 @tab.command("clone")
@@ -719,33 +644,26 @@ def tab_list(url: str):
     default="md",
     help="Output format: md, csv, tsv, psv, json, jsonl",
 )
+@handle_errors
 def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
     """Clone a single tab to a .sheet.gax.md file."""
     from .gsheet import SheetTab
+    from .ui import success
 
-    try:
-        file_path = SheetTab.from_url(url).clone(output=output, tab_name=tab_name, fmt=fmt)
-        click.echo(f"Created: {file_path}")
-    except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    path = SheetTab.from_url(url).clone(output=output, tab_name=tab_name, fmt=fmt)
+    success(f"Created: {path}")
 
 
 @tab.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def tab_pull(file: Path):
     """Pull latest data for a single tab."""
     from .gsheet import SheetTab
+    from .ui import success
 
-    try:
-        SheetTab(path=file).pull()
-        click.echo(f"Pulled: {file}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    SheetTab(path=file).pull()
+    success(f"Updated: {file}")
 
 
 @tab.command("push")
@@ -754,28 +672,25 @@ def tab_pull(file: Path):
     "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+@handle_errors
 def tab_push(file: Path, with_formulas: bool, yes: bool):
     """Push local data to a single tab."""
     from .gsheet import SheetTab
     from .gsheet.frontmatter import parse_file
     from .formats import get_format as get_fmt
 
-    try:
-        config, data = parse_file(file)
-        fmt = get_fmt(config.format)
-        df = fmt.read(data)
-        row_count = len(df)
+    config, data = parse_file(file)
+    fmt = get_fmt(config.format)
+    df = fmt.read(data)
+    row_count = len(df)
 
-        click.echo(f"Push {row_count} rows from {file} to {config.tab}?")
-        if not yes and not click.confirm("Proceed?"):
-            click.echo("Aborted.")
-            return
+    click.echo(f"Push {row_count} rows from {file} to {config.tab}?")
+    if not yes and not click.confirm("Proceed?"):
+        click.echo("Aborted.")
+        return
 
-        SheetTab(path=file).push(with_formulas=with_formulas)
-        click.echo(f"Pushed {row_count} rows")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    SheetTab(path=file).push(with_formulas=with_formulas)
+    click.echo(f"Pushed {row_count} rows")
 
 
 # =============================================================================
@@ -799,6 +714,7 @@ def draft():
 )
 @click.option("--to", "to_addr", default="", help="Recipient email address")
 @click.option("--subject", default="", help="Email subject")
+@handle_errors
 def draft_new(output, to_addr, subject):
     """Create a new local draft file.
 
@@ -810,22 +726,16 @@ def draft_new(output, to_addr, subject):
         gax draft new --to alice@example.com --subject "Hello"
         gax draft new -o my_draft.draft.gax.md
     """
+    from .ui import success
+
     if not to_addr:
         to_addr = click.prompt("To")
     if not subject:
         subject = click.prompt("Subject")
 
-    try:
-        from .ui import success
-
-        file_path = Draft().new(to=to_addr, subject=subject, output=output)
-        success(f"Created: {file_path}")
-        click.echo(f"Edit the file, then run: gax draft push {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Draft().new(to=to_addr, subject=subject, output=output)
+    success(f"Created: {file_path}")
+    click.echo(f"Edit the file, then run: gax draft push {file_path}")
 
 
 @draft.command("clone")
@@ -836,6 +746,7 @@ def draft_new(output, to_addr, subject):
     type=click.Path(path_type=Path),
     help="Output file (default: <subject>.draft.gax.md)",
 )
+@handle_errors
 def draft_clone(draft_id_or_url, output):
     """Clone an existing draft from Gmail.
 
@@ -845,39 +756,27 @@ def draft_clone(draft_id_or_url, output):
         gax draft clone "https://mail.google.com/mail/u/0/#drafts/..."
         gax draft clone r-1234567890 -o my_draft.draft.gax.md
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        try:
-            draft = Draft.from_url(draft_id_or_url)
-        except ValueError:
-            draft = Draft.from_id(draft_id_or_url)
-        file_path = draft.clone(output=output)
-        success(f"Created: {file_path}")
-    except Exception as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    path = Draft.from_url_or_id(draft_id_or_url).clone(output=output)
+    success(f"Created: {path}")
 
 
 @draft.command("list")
 @click.option("--limit", default=100, help="Maximum results (default: 100)")
+@handle_errors
 def draft_list(limit):
     """List Gmail drafts (TSV output).
 
     Output columns: draft_id, thread_id, date, to, subject
     """
-    try:
-        Draft().list(sys.stdout, limit=limit)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    Draft().list(sys.stdout, limit=limit)
 
 
 @draft.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+@handle_errors
 def draft_push(file, yes):
     """Push local draft to Gmail.
 
@@ -889,30 +788,12 @@ def draft_push(file, yes):
         gax draft push my_draft.draft.gax.md
         gax draft push my_draft.draft.gax.md -y
     """
-    try:
-        from .ui import success
-
-        d = Draft.from_file(file)
-        diff_text = d.diff()
-        if diff_text is None:
-            click.echo("No differences to push.")
-            return
-        if not yes:
-            click.echo(diff_text)
-            if not click.confirm("Push these changes?"):
-                click.echo("Aborted.")
-                return
-        d.push()
-        success("Pushed successfully.")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    _confirm_and_push(Draft.from_file(file), yes=yes)
 
 
 @draft.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def draft_pull(file):
     """Pull latest content from Gmail draft.
 
@@ -922,16 +803,10 @@ def draft_pull(file):
 
         gax draft pull my_draft.draft.gax.md
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        Draft.from_file(file).pull()
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Draft.from_file(file).pull()
+    success(f"Updated: {file}")
 
 
 # =============================================================================
@@ -961,6 +836,7 @@ def contacts():
     type=click.Path(path_type=Path),
     help="Output file (default: contacts.<format>)",
 )
+@handle_errors
 def contacts_clone(fmt, output):
     """Clone all contacts to a local file.
 
@@ -969,66 +845,37 @@ def contacts_clone(fmt, output):
       md     Human-readable markdown (default, view-only)
       jsonl  JSON Lines format (editable, scriptable)
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        file_path = Contacts().clone(fmt=fmt, output=output)
-        success(f"Created: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    path = Contacts().clone(fmt=fmt, output=output)
+    success(f"Created: {path}")
 
 
 @contacts.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def contacts_pull(file):
     """Pull latest contacts from Google.
 
     Updates the file with current contact data, preserving format.
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        Contacts(path=file).pull()
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Contacts(path=file).pull()
+    success(f"Updated: {file}")
 
 
 @contacts.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def contacts_push(file, yes):
     """Push local JSONL contacts to Google.
 
     Compares local contacts with remote, shows diff, and applies changes.
     Only works with JSONL format files.
     """
-    try:
-        from .ui import success
-
-        c = Contacts(path=file)
-        diff_text = c.diff()
-        if diff_text is None:
-            click.echo("No changes to push.")
-            return
-        if not yes:
-            click.echo(diff_text)
-            if not click.confirm("Push these changes?"):
-                click.echo("Aborted.")
-                return
-        c.push()
-        success("Pushed successfully.")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    _confirm_and_push(Contacts(path=file), yes=yes)
 
 
 @contacts.command("checkout")
@@ -1038,25 +885,20 @@ def contacts_push(file, yes):
     type=click.Path(path_type=Path),
     help="Output folder (default: contacts.contacts.gax.md.d)",
 )
+@handle_errors
 def contacts_checkout(output):
     """Checkout contacts as individual files into a folder.
 
     Creates one .contact.gax.yaml file per contact for easy per-contact
     editing and diffing.
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        cloned, skipped = Contacts().checkout(output=output)
-        parts = [f"{cloned} contacts"]
-        if skipped:
-            parts.append(f"({skipped} skipped)")
-        success(f"Checked out {' '.join(parts)}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    cloned, skipped = Contacts().checkout(output=output)
+    parts = [f"{cloned} contacts"]
+    if skipped:
+        parts.append(f"({skipped} skipped)")
+    success(f"Checked out {' '.join(parts)}")
 
 
 # =============================================================================
@@ -1077,6 +919,7 @@ def file_group():
 @click.option(
     "-o", "--output", type=click.Path(path_type=Path), help="Output file path"
 )
+@handle_errors
 def file_clone(url_or_id, output):
     """Clone a file from Google Drive.
 
@@ -1087,20 +930,10 @@ def file_clone(url_or_id, output):
         gax file clone https://drive.google.com/file/d/abc123/view
         gax file clone abc123 -o report.pdf
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        try:
-            file_resource = File.from_url(url_or_id)
-        except ValueError:
-            file_resource = File.from_id(url_or_id)
-        file_path = file_resource.clone(output=output)
-        success(f"Created: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    path = File.from_url_or_id(url_or_id).clone(output=output)
+    success(f"Created: {path}")
 
 
 @file_group.command("checkout")
@@ -1109,6 +942,7 @@ def file_clone(url_or_id, output):
     "-o", "--output", type=click.Path(path_type=Path), help="Output folder path"
 )
 @click.option("-R", "--recursive", is_flag=True, help="Recurse into subfolders")
+@handle_errors
 def file_checkout(url_or_id, output, recursive):
     """Checkout a Google Drive folder to a local directory.
 
@@ -1121,25 +955,16 @@ def file_checkout(url_or_id, output, recursive):
         gax file checkout abc123 -o my_folder
         gax file checkout abc123 -R
     """
-    try:
-        from .ui import success
-        from .gdrive import Folder
+    from .ui import success
+    from .gdrive import Folder
 
-        try:
-            folder_resource = Folder.from_url(url_or_id)
-        except ValueError:
-            folder_resource = Folder.from_id(url_or_id)
-        folder_path = folder_resource.checkout(output=output, recursive=recursive)
-        success(f"Checked out: {folder_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    path = Folder.from_url_or_id(url_or_id).checkout(output=output, recursive=recursive)
+    success(f"Checked out: {path}")
 
 
 @file_group.command("pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def file_pull(file_path):
     """Pull latest version of a file from Google Drive.
 
@@ -1149,22 +974,17 @@ def file_pull(file_path):
 
         gax file pull report.pdf
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        File(path=file_path).pull()
-        success(f"Updated: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    File(path=file_path).pull()
+    success(f"Updated: {file_path}")
 
 
 @file_group.command("push")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--public", is_flag=True, help="Make file publicly accessible")
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def file_push(file_path, public, yes):
     """Push local file to Google Drive.
 
@@ -1177,39 +997,33 @@ def file_push(file_path, public, yes):
         gax file push report.pdf --public
         gax file push report.pdf -y
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        tracking_path = file_path.with_suffix(file_path.suffix + ".gax.md")
+    tracking_path = file_path.with_suffix(file_path.suffix + ".gax.md")
 
-        if tracking_path.exists():
-            from .gdrive import read_tracking_file
+    if tracking_path.exists():
+        from .gdrive import read_tracking_file
 
-            tracking_data = read_tracking_file(tracking_path)
-            if not yes:
-                click.echo(f"Will update Drive file: {tracking_data.get('name')}")
-                click.echo(f"Local file: {file_path}")
-                if public:
-                    click.echo("Will make publicly accessible")
-                if not click.confirm("Push these changes?"):
-                    click.echo("Aborted.")
-                    return
-        else:
-            if not yes:
-                click.echo(f"Will upload new file: {file_path.name}")
-                if public:
-                    click.echo("Will make publicly accessible")
-                if not click.confirm("Upload this file?"):
-                    click.echo("Aborted.")
-                    return
+        tracking_data = read_tracking_file(tracking_path)
+        if not yes:
+            click.echo(f"Will update Drive file: {tracking_data.get('name')}")
+            click.echo(f"Local file: {file_path}")
+            if public:
+                click.echo("Will make publicly accessible")
+            if not click.confirm("Push these changes?"):
+                click.echo("Aborted.")
+                return
+    else:
+        if not yes:
+            click.echo(f"Will upload new file: {file_path.name}")
+            if public:
+                click.echo("Will make publicly accessible")
+            if not click.confirm("Upload this file?"):
+                click.echo("Aborted.")
+                return
 
-        File(path=file_path).push(public=public)
-        success("Pushed successfully.")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    File(path=file_path).push(public=public)
+    success("Pushed successfully.")
 
 
 # =============================================================================
@@ -1232,6 +1046,7 @@ def mail_group():
     type=click.Path(path_type=Path),
     help="Output file",
 )
+@handle_errors
 def mail_clone(thread_id_or_url, output):
     """Clone a single email thread to a local .mail.gax.md file.
 
@@ -1241,24 +1056,15 @@ def mail_clone(thread_id_or_url, output):
         gax mail clone "https://mail.google.com/..."
         gax mail clone 19d0bed1cddbab6d -o thread.mail.gax.md
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        try:
-            thread = Thread.from_url(thread_id_or_url)
-        except ValueError:
-            thread = Thread.from_id(thread_id_or_url)
-        file_path = thread.clone(output=output)
-        success(f"Created: {file_path}")
-    except Exception as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    path = Thread.from_url_or_id(thread_id_or_url).clone(output=output)
+    success(f"Created: {path}")
 
 
 @mail_group.command("pull")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def mail_pull(path):
     """Pull latest messages for .mail.gax.md file(s).
 
@@ -1270,16 +1076,10 @@ def mail_pull(path):
 
         gax mail pull Inbox/
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        Thread(path=path).pull()
-        success(f"Updated: {path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Thread(path=path).pull()
+    success(f"Updated: {path}")
 
 
 @mail_group.command("reply")
@@ -1290,6 +1090,7 @@ def mail_pull(path):
     type=click.Path(path_type=Path),
     help="Output file (default: Re_<subject>.draft.gax.md)",
 )
+@handle_errors
 def mail_reply(file_or_url, output):
     """Create a reply draft from a thread.
 
@@ -1299,25 +1100,16 @@ def mail_reply(file_or_url, output):
         gax mail reply "https://mail.google.com/mail/u/0/#inbox/abc123"
         gax mail reply thread.mail.gax.md -o my_reply.draft.gax.md
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        file_path = Path(file_or_url)
-        if file_path.exists():
-            thread = Thread(path=file_path)
-        else:
-            try:
-                thread = Thread.from_url(file_or_url)
-            except ValueError:
-                thread = Thread.from_id(file_or_url)
-        out_path = thread.reply(output=output)
-        success(f"Created: {out_path}")
-        click.echo(f"Edit the file, then run: gax draft push {out_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Path(file_or_url)
+    if file_path.exists():
+        thread = Thread(path=file_path)
+    else:
+        thread = Thread.from_url_or_id(file_or_url)
+    out_path = thread.reply(output=output)
+    success(f"Created: {out_path}")
+    click.echo(f"Edit the file, then run: gax draft push {out_path}")
 
 
 # =============================================================================
@@ -1332,6 +1124,7 @@ def mail_reply(file_or_url, output):
 )
 @click.option("--limit", default=20, help="Maximum results (default: 20)")
 @click.pass_context
+@handle_errors
 def mailbox_group(ctx, query, limit):
     """Search/list Gmail threads and bulk label operations.
 
@@ -1344,13 +1137,7 @@ def mailbox_group(ctx, query, limit):
         gax mailbox clone                  # Clone for bulk labeling
     """
     if ctx.invoked_subcommand is None:
-        try:
-            Mailbox().list(sys.stdout, query=query, limit=limit)
-        except ValueError as e:
-            from .ui import error
-
-            error(str(e))
-            sys.exit(1)
+        Mailbox().list(sys.stdout, query=query, limit=limit)
 
 
 @mailbox_group.command("fetch")
@@ -1365,18 +1152,13 @@ def mailbox_group(ctx, query, limit):
     "-q", "--query", default="in:inbox", help="Search query (default: in:inbox)"
 )
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
+@handle_errors
 def mailbox_fetch(output, query, limit):
     """Fetch full threads matching query into a folder."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        cloned, skipped = Mailbox().fetch(query=query, limit=limit, output=output)
-        success(f"Cloned: {cloned}, Skipped: {skipped} (already present)")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    cloned, skipped = Mailbox().fetch(query=query, limit=limit, output=output)
+    success(f"Cloned: {cloned}, Skipped: {skipped} (already present)")
 
 
 @mailbox_group.command("clone")
@@ -1390,34 +1172,24 @@ def mailbox_fetch(output, query, limit):
     "-q", "--query", default="in:inbox", help="Search query (default: in:inbox)"
 )
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
+@handle_errors
 def mailbox_clone_cmd(output, query, limit):
     """Clone threads from Gmail for bulk labeling."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        file_path = Mailbox().clone(query=query, limit=limit, output=Path(output))
-        success(f"Cloned to: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Mailbox().clone(query=query, limit=limit, output=Path(output))
+    success(f"Cloned to: {file_path}")
 
 
 @mailbox_group.command("pull")
 @click.argument("file", type=click.Path(exists=True))
+@handle_errors
 def mailbox_pull(file):
     """Update a .gax.md file by re-fetching from Gmail."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        Mailbox(path=Path(file)).pull()
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Mailbox(path=Path(file)).pull()
+    success(f"Updated: {file}")
 
 
 @mailbox_group.command("plan")
@@ -1428,108 +1200,95 @@ def mailbox_pull(file):
     default="mailbox.plan.yaml",
     help="Output file (default: mailbox.plan.yaml)",
 )
+@handle_errors
 def mailbox_plan_cmd(file, output):
     """Generate plan from edited list file."""
     import yaml
 
-    try:
-        plan = Mailbox(path=Path(file)).compute_plan()
+    plan = Mailbox(path=Path(file)).compute_plan()
 
-        if not plan["changes"]:
-            click.echo("No changes to apply.")
-            return
+    if not plan["changes"]:
+        click.echo("No changes to apply.")
+        return
 
-        path = Path(output)
-        with open(path, "w") as f:
-            yaml.dump(
-                plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-            )
-
-        changes = plan["changes"]
-        click.echo(f"Wrote {len(changes)} changes to {output}")
-
-        sys_add_count = sum(1 for c in changes if c.get("add_sys"))
-        sys_remove_count = sum(1 for c in changes if c.get("remove_sys"))
-        cat_change_count = sum(
-            1 for c in changes if c.get("add_cat") or c.get("remove_cat")
+    path = Path(output)
+    with open(path, "w") as f:
+        yaml.dump(
+            plan, f, default_flow_style=False, allow_unicode=True, sort_keys=False
         )
-        add_count = sum(1 for c in changes if c.get("add"))
-        remove_count = sum(1 for c in changes if c.get("remove"))
 
-        if sys_add_count or sys_remove_count:
-            click.echo(f"  System label changes: {sys_add_count + sys_remove_count}")
-        if cat_change_count:
-            click.echo(f"  Category changes: {cat_change_count}")
-        if add_count:
-            click.echo(f"  Add user labels: {add_count}")
-        if remove_count:
-            click.echo(f"  Remove user labels: {remove_count}")
+    changes = plan["changes"]
+    click.echo(f"Wrote {len(changes)} changes to {output}")
 
-    except ValueError as e:
-        from .ui import error
+    sys_add_count = sum(1 for c in changes if c.get("add_sys"))
+    sys_remove_count = sum(1 for c in changes if c.get("remove_sys"))
+    cat_change_count = sum(
+        1 for c in changes if c.get("add_cat") or c.get("remove_cat")
+    )
+    add_count = sum(1 for c in changes if c.get("add"))
+    remove_count = sum(1 for c in changes if c.get("remove"))
 
-        error(str(e))
-        sys.exit(1)
+    if sys_add_count or sys_remove_count:
+        click.echo(f"  System label changes: {sys_add_count + sys_remove_count}")
+    if cat_change_count:
+        click.echo(f"  Category changes: {cat_change_count}")
+    if add_count:
+        click.echo(f"  Add user labels: {add_count}")
+    if remove_count:
+        click.echo(f"  Remove user labels: {remove_count}")
 
 
 @mailbox_group.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def mailbox_apply(plan_file, yes):
     """Apply label changes from plan."""
     import yaml
+    from .ui import success, error
 
-    try:
-        with open(plan_file) as f:
-            plan = yaml.safe_load(f)
+    with open(plan_file) as f:
+        plan = yaml.safe_load(f)
 
-        changes = plan.get("changes", [])
-        if not changes:
-            click.echo("No changes in plan.")
-            return
+    changes = plan.get("changes", [])
+    if not changes:
+        click.echo("No changes in plan.")
+        return
 
-        click.echo(f"Plan: {plan_file}")
-        click.echo(f"Changes: {len(changes)}")
-        click.echo()
+    click.echo(f"Plan: {plan_file}")
+    click.echo(f"Changes: {len(changes)}")
+    click.echo()
 
-        for change in changes[:10]:
-            thread_id = change["id"][:12] + "..."
-            actions = []
-            if change.get("add_sys"):
-                actions.append("+sys:" + ",".join(change["add_sys"]))
-            if change.get("remove_sys"):
-                actions.append("-sys:" + ",".join(change["remove_sys"]))
-            if change.get("add_cat"):
-                actions.append("+cat:" + change["add_cat"])
-            if change.get("remove_cat"):
-                actions.append("-cat:" + change["remove_cat"])
-            if change.get("add"):
-                actions.append("+" + ",".join(change["add"]))
-            if change.get("remove"):
-                actions.append("-" + ",".join(change["remove"]))
-            click.echo(f"  {thread_id}  {' '.join(actions)}")
+    for change in changes[:10]:
+        thread_id = change["id"][:12] + "..."
+        actions = []
+        if change.get("add_sys"):
+            actions.append("+sys:" + ",".join(change["add_sys"]))
+        if change.get("remove_sys"):
+            actions.append("-sys:" + ",".join(change["remove_sys"]))
+        if change.get("add_cat"):
+            actions.append("+cat:" + change["add_cat"])
+        if change.get("remove_cat"):
+            actions.append("-cat:" + change["remove_cat"])
+        if change.get("add"):
+            actions.append("+" + ",".join(change["add"]))
+        if change.get("remove"):
+            actions.append("-" + ",".join(change["remove"]))
+        click.echo(f"  {thread_id}  {' '.join(actions)}")
 
-        if len(changes) > 10:
-            click.echo(f"  ... and {len(changes) - 10} more")
+    if len(changes) > 10:
+        click.echo(f"  ... and {len(changes) - 10} more")
 
-        click.echo()
+    click.echo()
 
-        if not yes and not click.confirm("Apply these changes?"):
-            click.echo("Aborted.")
-            return
+    if not yes and not click.confirm("Apply these changes?"):
+        click.echo("Aborted.")
+        return
 
-        from .ui import success, error
-
-        succeeded, failed = Mailbox().apply_plan(plan)
-        success(f"Applied: {succeeded} threads")
-        if failed:
-            error(f"Failed: {failed} threads")
-
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    succeeded, failed = Mailbox().apply_plan(plan)
+    success(f"Applied: {succeeded} threads")
+    if failed:
+        error(f"Failed: {failed} threads")
 
 
 # =============================================================================
@@ -1545,13 +1304,10 @@ def mail_label():
 
 
 @mail_label.command("list")
+@handle_errors
 def label_list():
     """List Gmail labels (TSV output)."""
-    try:
-        Label().list(sys.stdout)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    Label().list(sys.stdout)
 
 
 @mail_label.command("clone")
@@ -1562,35 +1318,25 @@ def label_list():
     help="Output file (default: labels.mail.gax.md)",
 )
 @click.option("--all", "include_all", is_flag=True, help="Include system labels")
+@handle_errors
 def label_clone(output, include_all):
     """Clone Gmail labels to a .gax.md file."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        file_path = Label().clone(output=output, include_all=include_all)
-        success(f"Created: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Label().clone(output=output, include_all=include_all)
+    success(f"Created: {file_path}")
 
 
 @mail_label.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("--all", "include_all", is_flag=True, help="Include system labels")
+@handle_errors
 def label_pull(file, include_all):
     """Pull latest labels to existing file."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        Label.from_file(file).pull(include_all=include_all)
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Label.from_file(file).pull(include_all=include_all)
+    success(f"Updated: {file}")
 
 
 @mail_label.command("plan")
@@ -1603,47 +1349,24 @@ def label_pull(file, include_all):
     help="Output plan file",
 )
 @click.option("--delete", "allow_delete", is_flag=True, help="Include deletions")
+@handle_errors
 def label_plan(file, output, allow_delete):
     """Preview label changes (diff)."""
-    try:
-        diff_text = Label.from_file(file).diff(allow_delete=allow_delete)
-        if diff_text is None:
-            click.echo("No changes to apply.")
-            return
-        click.echo(diff_text)
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    diff_text = Label.from_file(file).diff(allow_delete=allow_delete)
+    if diff_text is None:
+        click.echo("No changes to apply.")
+        return
+    click.echo(diff_text)
 
 
 @mail_label.command("apply")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 @click.option("--delete", "allow_delete", is_flag=True, help="Include deletions")
+@handle_errors
 def label_apply(file, yes, allow_delete):
     """Apply label changes to Gmail."""
-    try:
-        from .ui import success
-
-        lbl = Label.from_file(file)
-        diff_text = lbl.diff(allow_delete=allow_delete)
-        if diff_text is None:
-            click.echo("No changes to apply.")
-            return
-        if not yes:
-            click.echo(diff_text)
-            if not click.confirm("Apply these changes?"):
-                click.echo("Aborted.")
-                return
-        lbl.push(allow_delete=allow_delete)
-        success("Done.")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    _confirm_and_push(Label.from_file(file), yes=yes, allow_delete=allow_delete)
 
 
 # =============================================================================
@@ -1663,13 +1386,10 @@ def mail_filter():
 
 
 @mail_filter.command("list")
+@handle_errors
 def filter_list():
     """List Gmail filters (TSV output)."""
-    try:
-        Filter().list(sys.stdout)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    Filter().list(sys.stdout)
 
 
 @mail_filter.command("clone")
@@ -1679,78 +1399,45 @@ def filter_list():
     type=click.Path(path_type=Path),
     help="Output file (default: filters.mail.gax.md)",
 )
+@handle_errors
 def filter_clone(output):
     """Clone Gmail filters to a .gax.md file."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        file_path = Filter(path=output).clone(output=output)
-        success(f"Created: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Filter().clone(output=output)
+    success(f"Created: {file_path}")
 
 
 @mail_filter.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def filter_pull(file):
     """Pull latest filters to existing file."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        Filter.from_file(file).pull()
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Filter.from_file(file).pull()
+    success(f"Updated: {file}")
 
 
 @mail_filter.command("plan")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def filter_plan(file):
     """Preview filter changes (diff)."""
-    try:
-        diff_text = Filter.from_file(file).diff()
-        if diff_text is None:
-            click.echo("No changes to apply.")
-            return
-        click.echo(diff_text)
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    diff_text = Filter.from_file(file).diff()
+    if diff_text is None:
+        click.echo("No changes to apply.")
+        return
+    click.echo(diff_text)
 
 
 @mail_filter.command("apply")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def filter_apply(file, yes):
     """Apply filter changes to Gmail."""
-    try:
-        from .ui import success
-
-        flt = Filter.from_file(file)
-        diff_text = flt.diff()
-        if diff_text is None:
-            click.echo("No changes to apply.")
-            return
-        if not yes:
-            click.echo(diff_text)
-            if not click.confirm("Apply these changes?"):
-                click.echo("Aborted.")
-                return
-        flt.push()
-        success("Done.")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    _confirm_and_push(Filter.from_file(file), yes=yes)
 
 
 # =============================================================================
@@ -1766,13 +1453,10 @@ def cal_group():
 
 
 @cal_group.command(name="calendars")
+@handle_errors
 def cal_calendars_cmd():
     """List available calendars."""
-    try:
-        Cal().calendars(sys.stdout)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    Cal().calendars(sys.stdout)
 
 
 @cal_group.command(name="list")
@@ -1791,6 +1475,7 @@ def cal_calendars_cmd():
     help="Output format (default: md)",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
+@handle_errors
 def cal_list_cmd(
     calendar: str | None,
     days: int | None,
@@ -1820,22 +1505,16 @@ def cal_list_cmd(
         format_events_markdown,
     )
 
-    try:
-        time_min, time_max = resolve_time_range(days, date_from, date_to)
-        calendar_id = resolve_calendar_id(calendar)
-        events = list_events(
-            time_min=time_min, time_max=time_max, calendar_id=calendar_id
-        )
+    time_min, time_max = resolve_time_range(days, date_from, date_to)
+    calendar_id = resolve_calendar_id(calendar)
+    events = list_events(
+        time_min=time_min, time_max=time_max, calendar_id=calendar_id
+    )
 
-        if fmt == "tsv":
-            click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
-        else:
-            click.echo(format_events_markdown(events, include_desc=verbose), nl=False)
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    if fmt == "tsv":
+        click.echo(format_events_tsv(events, include_desc=verbose), nl=False)
+    else:
+        click.echo(format_events_markdown(events, include_desc=verbose), nl=False)
 
 
 @cal_group.command(name="clone")
@@ -1852,6 +1531,7 @@ def cal_list_cmd(
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
+@handle_errors
 def cal_clone_cmd(
     calendar: str | None,
     output: Path | None,
@@ -1871,27 +1551,22 @@ def cal_clone_cmd(
         gax cal clone Work -o week.cal.gax.md -d 7
         gax cal clone --from 2026-03-01 --to 2026-03-31 -o march.cal.gax.md
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        file_path = Cal().clone(
-            output=output,
-            calendar=calendar,
-            days=days,
-            date_from=date_from,
-            date_to=date_to,
-            verbose=verbose,
-        )
-        success(f"Created: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Cal().clone(
+        output=output,
+        calendar=calendar,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+        verbose=verbose,
+    )
+    success(f"Created: {file_path}")
 
 
 @cal_group.command(name="pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def cal_pull_cmd(file: Path):
     """Pull latest events to existing file.
 
@@ -1899,16 +1574,10 @@ def cal_pull_cmd(file: Path):
     Example:
         gax cal pull week.cal.gax.md
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        Cal(path=file).pull()
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Cal(path=file).pull()
+    success(f"Updated: {file}")
 
 
 @cal_group.command(name="checkout")
@@ -1925,6 +1594,7 @@ def cal_pull_cmd(file: Path):
 )
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
+@handle_errors
 def cal_checkout_cmd(
     calendar: str | None,
     output: Path,
@@ -1943,22 +1613,16 @@ def cal_checkout_cmd(
         gax cal checkout -o Week/
         gax cal checkout Work -o Week/ -d 7
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        folder = Cal().checkout(
-            output=output,
-            calendar=calendar,
-            days=days,
-            date_from=date_from,
-            date_to=date_to,
-        )
-        success(f"Checked out to: {folder}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    folder = Cal().checkout(
+        output=output,
+        calendar=calendar,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    success(f"Checked out to: {folder}")
 
 
 @cal_group.group(name="event")
@@ -1979,22 +1643,13 @@ def cal_event_group():
     type=click.Path(path_type=Path),
     help="Output file path",
 )
+@handle_errors
 def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None):
     """Clone an event to a local .cal.gax.md file."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        try:
-            event = Event.from_url(id_or_url)
-        except ValueError:
-            event = Event.from_id(id_or_url)
-        file_path = event.clone(calendar=calendar, output=output_path)
-        success(f"Cloned event to {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Event.from_url_or_id(id_or_url).clone(calendar=calendar, output=output_path)
+    success(f"Cloned event to {file_path}")
 
 
 @cal_event_group.command(name="new")
@@ -2008,92 +1663,71 @@ def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None)
     type=click.Path(path_type=Path),
     help="Output file path",
 )
+@handle_errors
 def cal_event_new_cmd(calendar: str, output_path: Path | None):
     """Create a new event file (edit and push to create upstream)."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        file_path = Event().new(calendar=calendar, output=output_path)
-        success(f"Created event template at {file_path}")
-        click.echo(f"Edit the file, then run: gax cal event push {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Event().new(calendar=calendar, output=output_path)
+    success(f"Created event template at {file_path}")
+    click.echo(f"Edit the file, then run: gax cal event push {file_path}")
 
 
 @cal_event_group.command(name="pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def cal_event_pull_cmd(file_path: Path):
     """Pull latest event data from API."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        Event(path=file_path).pull()
-        success(f"Pulled latest data to {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Event(path=file_path).pull()
+    success(f"Pulled latest data to {file_path}")
 
 
 @cal_event_group.command(name="push")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def cal_event_push_cmd(file_path: Path, yes: bool):
     """Push local changes to API."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        ev = Event(path=file_path)
-        diff_text = ev.diff()
-        if diff_text is None:
-            click.echo("No changes to push.")
+    ev = Event(path=file_path)
+    diff_text = ev.diff()
+    if diff_text is None:
+        click.echo("No changes to push.")
+        return
+    if not yes:
+        click.echo(diff_text)
+        if not click.confirm("Push these changes?"):
+            click.echo("Cancelled.")
             return
-        if not yes:
-            click.echo(diff_text)
-            if not click.confirm("Push these changes?"):
-                click.echo("Cancelled.")
-                return
 
-        link = ev.push()
-        success(f"Pushed event: {link}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    link = ev.push()
+    success(f"Pushed event: {link}")
 
 
 @cal_event_group.command(name="delete")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def cal_event_delete_cmd(file_path: Path, yes: bool):
     """Delete event from calendar."""
     from .gcal import yaml_to_event
+    from .ui import success
 
-    try:
-        from .ui import success
+    content = file_path.read_text()
+    local_event = yaml_to_event(content)
 
-        content = file_path.read_text()
-        local_event = yaml_to_event(content)
+    if not yes:
+        click.echo(f"Delete event '{local_event.title}' from calendar?")
+        click.echo("This will also delete the local file.")
+        if not click.confirm("Proceed?"):
+            click.echo("Cancelled.")
+            return
 
-        if not yes:
-            click.echo(f"Delete event '{local_event.title}' from calendar?")
-            click.echo("This will also delete the local file.")
-            if not click.confirm("Proceed?"):
-                click.echo("Cancelled.")
-                return
-
-        title = Event(path=file_path).delete()
-        success(f"Deleted event '{title}'")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    title = Event(path=file_path).delete()
+    success(f"Deleted event '{title}'")
 
 
 # =============================================================================
@@ -2109,13 +1743,10 @@ def task_group():
 
 
 @task_group.command(name="lists")
+@handle_errors
 def task_lists_cmd():
     """List available task lists."""
-    try:
-        TaskList().lists(sys.stdout)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    TaskList().lists(sys.stdout)
 
 
 @task_group.command(name="list")
@@ -2129,13 +1760,10 @@ def task_lists_cmd():
     default="md",
     help="Output format (default: md)",
 )
+@handle_errors
 def task_list_cmd(tasklist: str | None, show_all: bool, fmt: str):
     """View tasks from a task list."""
-    try:
-        TaskList().list(sys.stdout, tasklist=tasklist, show_all=show_all, fmt=fmt)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    TaskList().list(sys.stdout, tasklist=tasklist, show_all=show_all, fmt=fmt)
 
 
 @task_group.command(name="clone")
@@ -2155,20 +1783,15 @@ def task_list_cmd(tasklist: str | None, show_all: bool, fmt: str):
     default="md",
     help="Output format (default: md)",
 )
+@handle_errors
 def task_clone_cmd(tasklist: str | None, output: Path | None, show_all: bool, fmt: str):
     """Clone a task list to a single file."""
-    try:
-        path = TaskList().clone(
-            tasklist=tasklist, output=output, fmt=fmt, show_all=show_all
-        )
-        from .ui import success
+    from .ui import success
 
-        success(f"Created: {path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    path = TaskList().clone(
+        tasklist=tasklist, output=output, fmt=fmt, show_all=show_all
+    )
+    success(f"Created: {path}")
 
 
 @task_group.command(name="checkout")
@@ -2180,40 +1803,30 @@ def task_clone_cmd(tasklist: str | None, output: Path | None, show_all: bool, fm
     help="Output folder path",
 )
 @click.option("--all", "show_all", is_flag=True, help="Include completed tasks")
+@handle_errors
 def task_checkout_cmd(tasklist: str | None, output: Path | None, show_all: bool):
     """Checkout a task list as a folder of individual task files."""
-    try:
-        cloned, skipped = TaskList().checkout(
-            tasklist=tasklist, output=output, show_all=show_all
-        )
-        from .ui import success
+    from .ui import success
 
-        success(f"Checked out: {cloned}, Skipped: {skipped}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    cloned, skipped = TaskList().checkout(
+        tasklist=tasklist, output=output, show_all=show_all
+    )
+    success(f"Checked out: {cloned}, Skipped: {skipped}")
 
 
 @task_group.command(name="pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def task_pull_cmd(file_path: Path):
     """Pull latest task data from API."""
-    try:
-        name = file_path.name
-        if name.endswith(".tasks.gax.md") or name.endswith(".tasks.gax.yaml"):
-            TaskList.from_file(file_path).pull()
-        else:
-            TaskResource.from_file(file_path).pull()
-        from .ui import success
+    from .ui import success
 
-        success(f"Updated: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    name = file_path.name
+    if name.endswith(".tasks.gax.md") or name.endswith(".tasks.gax.yaml"):
+        TaskList.from_file(file_path).pull()
+    else:
+        TaskResource.from_file(file_path).pull()
+    success(f"Updated: {file_path}")
 
 
 @task_group.command(name="new")
@@ -2228,104 +1841,79 @@ def task_pull_cmd(file_path: Path):
     type=click.Path(path_type=Path),
     help="Output file path",
 )
+@handle_errors
 def task_new_cmd(title: str, tasklist: str | None, output: Path | None):
     """Create a new task on Google."""
-    try:
-        path = TaskResource().new(title, tasklist=tasklist, output=output)
-        from .ui import success
+    from .ui import success
 
-        success(f"Created: {path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    path = TaskResource().new(title, tasklist=tasklist, output=output)
+    success(f"Created: {path}")
 
 
 @task_group.command(name="diff")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def task_diff_cmd(file_path: Path):
     """Show differences between local task and remote."""
-    try:
-        diff_text = TaskResource.from_file(file_path).diff()
-        if diff_text is None:
-            click.echo("No changes.")
-        else:
-            click.echo(diff_text)
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    diff_text = TaskResource.from_file(file_path).diff()
+    if diff_text is None:
+        click.echo("No changes.")
+    else:
+        click.echo(diff_text)
 
 
 @task_group.command(name="push")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def task_push_cmd(file_path: Path, yes: bool):
     """Push local task changes to API."""
-    try:
-        t = TaskResource.from_file(file_path)
-        diff_text = t.diff()
-        if diff_text is None:
-            click.echo("No changes to push.")
+    from .ui import success
+
+    t = TaskResource.from_file(file_path)
+    diff_text = t.diff()
+    if diff_text is None:
+        click.echo("No changes to push.")
+        return
+    if not yes:
+        click.echo(diff_text)
+        if not click.confirm("Push these changes?"):
+            click.echo("Cancelled.")
             return
-        if not yes:
-            click.echo(diff_text)
-            if not click.confirm("Push these changes?"):
-                click.echo("Cancelled.")
-                return
-        title = t.push()
-        from .ui import success
-
-        success(f"Pushed: {title}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    title = t.push()
+    success(f"Pushed: {title}")
 
 
 @task_group.command(name="done")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def task_done_cmd(file_path: Path, yes: bool):
     """Mark a task as completed and push."""
-    try:
-        if not yes:
-            if not click.confirm(f"Mark {file_path.name} as done?"):
-                click.echo("Cancelled.")
-                return
-        title = TaskResource.from_file(file_path).done()
-        from .ui import success
+    from .ui import success
 
-        success(f"Done: {title}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    if not yes:
+        if not click.confirm(f"Mark {file_path.name} as done?"):
+            click.echo("Cancelled.")
+            return
+    title = TaskResource.from_file(file_path).done()
+    success(f"Done: {title}")
 
 
 @task_group.command(name="delete")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def task_delete_cmd(file_path: Path, yes: bool):
     """Delete a task from Google and local file."""
-    try:
-        if not yes:
-            if not click.confirm(f"Delete {file_path.name}?"):
-                click.echo("Cancelled.")
-                return
-        title = TaskResource.from_file(file_path).delete()
-        from .ui import success
+    from .ui import success
 
-        success(f"Deleted: {title}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    if not yes:
+        if not click.confirm(f"Delete {file_path.name}?"):
+            click.echo("Cancelled.")
+            return
+    title = TaskResource.from_file(file_path).delete()
+    success(f"Deleted: {title}")
 
 
 # =============================================================================
@@ -2357,40 +1945,30 @@ def form():
     default="md",
     help="Content format: md (readable, default) or yaml (round-trip safe)",
 )
+@handle_errors
 def form_clone(url, output, fmt):
     """Clone a Google Form to a local .form.gax.md file.
 
     By default, creates a human-readable markdown representation.
     Use --format yaml for faithful round-trip representation (required for push).
     """
-    try:
-        from .ui import success
+    from .ui import success
 
-        file_path = Form.from_url(url).clone(output=output, format=fmt)
-        success(f"Created: {file_path}")
-        if fmt == "md":
-            click.echo("Note: Use --format yaml for round-trip safe format")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    file_path = Form.from_url(url).clone(output=output, format=fmt)
+    success(f"Created: {file_path}")
+    if fmt == "md":
+        click.echo("Note: Use --format yaml for round-trip safe format")
 
 
 @form.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def form_pull(file):
     """Pull latest form definition from Google Forms."""
-    try:
-        from .ui import success
+    from .ui import success
 
-        Form.from_file(file).pull()
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    Form.from_file(file).pull()
+    success(f"Updated: {file}")
 
 
 @form.command("plan")
@@ -2402,46 +1980,23 @@ def form_pull(file):
     default="form.plan.yaml",
     help="Output plan file",
 )
+@handle_errors
 def form_plan(file, output):
     """Preview form changes (diff)."""
-    try:
-        diff_text = Form.from_file(file).diff()
-        if diff_text is None:
-            click.echo("No changes to apply.")
-            return
-        click.echo(diff_text)
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    diff_text = Form.from_file(file).diff()
+    if diff_text is None:
+        click.echo("No changes to apply.")
+        return
+    click.echo(diff_text)
 
 
 @form.command("apply")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
+@handle_errors
 def form_apply(file, yes):
     """Apply form changes to Google Forms."""
-    try:
-        from .ui import success
-
-        f = Form.from_file(file)
-        diff_text = f.diff()
-        if diff_text is None:
-            click.echo("No changes to apply.")
-            return
-        if not yes:
-            click.echo(diff_text)
-            if not click.confirm("Apply these changes?"):
-                click.echo("Aborted.")
-                return
-        f.push()
-        success("Done.")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
+    _confirm_and_push(Form.from_file(file), yes=yes)
 
 
 # =============================================================================
@@ -2464,14 +2019,10 @@ def doc_tab():
 
 @doc_tab.command("list")
 @click.argument("url")
+@handle_errors
 def doc_tab_list(url: str):
     """List tabs in a document (TSV output)."""
-
-    try:
-        Doc.from_url(url).tab_list(sys.stdout)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    Doc.from_url(url).tab_list(sys.stdout)
 
 
 @doc_tab.command("import")
@@ -2483,24 +2034,13 @@ def doc_tab_list(url: str):
     type=click.Path(path_type=Path),
     help="Output tracking file (default: <filename>.tab.gax.md)",
 )
+@handle_errors
 def doc_tab_import(url: str, file: Path, output: Path | None):
     """Import a markdown file as a new tab in a document."""
+    from .ui import success
 
-    try:
-        from .ui import success
-
-        tracking_path = Doc.from_url(url).tab_import(file, output=output)
-        success(f"Created: {tracking_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    tracking_path = Doc.from_url(url).tab_import(file, output=output)
+    success(f"Created: {tracking_path}")
 
 
 @doc_tab.command("clone")
@@ -2512,62 +2052,36 @@ def doc_tab_import(url: str, file: Path, output: Path | None):
     type=click.Path(path_type=Path),
     help="Output file (default: <tab>.tab.gax.md)",
 )
+@handle_errors
 def doc_tab_clone(url: str, tab_name: str, output: Path | None):
     """Clone a single tab to a .tab.gax.md file."""
+    from .ui import success
 
-    try:
-        from .ui import success
-
-        file_path = Tab.from_url(url).clone(output=output, tab_name=tab_name)
-        success(f"Created: {file_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    file_path = Tab.from_url(url).clone(output=output, tab_name=tab_name)
+    success(f"Created: {file_path}")
 
 
 @doc_tab.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def doc_tab_pull(file: Path):
     """Pull latest content for a single tab."""
+    from .ui import success
 
-    try:
-        from .ui import success
-
-        Tab.from_file(file).pull()
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    Tab.from_file(file).pull()
+    success(f"Updated: {file}")
 
 
 @doc_tab.command("diff")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def doc_tab_diff(file: Path):
     """Show diff between local file and remote tab."""
-
-    try:
-        diff_text = Tab.from_file(file).diff()
-        if diff_text is None:
-            click.echo("No differences.")
-        else:
-            click.echo(diff_text)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    diff_text = Tab.from_file(file).diff()
+    if diff_text is None:
+        click.echo("No differences.")
+    else:
+        click.echo(diff_text)
 
 
 @doc_tab.command("push")
@@ -2579,6 +2093,7 @@ def doc_tab_diff(file: Path):
     is_flag=True,
     help="Incremental push: apply only changed elements (experimental)",
 )
+@handle_errors
 def doc_tab_push(file: Path, yes: bool, use_patch: bool):
     """Push local changes to a single tab (with confirmation).
 
@@ -2589,86 +2104,78 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
     structural changes; when in doubt, omit the flag.
     """
     from .gdoc import parse_multipart, extract_doc_id
+    from .ui import success, error
 
-    try:
-        from .ui import success, error
+    t = Tab.from_file(file)
 
-        t = Tab.from_file(file)
+    if use_patch:
+        from .gdoc.diff_push import preview_diff
+        from .gdoc import native_md as _native_md
 
-        if use_patch:
-            from .gdoc.diff_push import preview_diff
-            from .gdoc import native_md as _native_md
+        section = parse_multipart(file.read_text(encoding="utf-8"))[0]
+        source_url = section.source
+        tab_name = section.section_title
+        document_id = extract_doc_id(source_url)
 
-            section = parse_multipart(file.read_text(encoding="utf-8"))[0]
-            source_url = section.source
-            tab_name = section.section_title
-            document_id = extract_doc_id(source_url)
+        content_to_push = _native_md.inline_images_from_store(section.content)
 
-            content_to_push = _native_md.inline_images_from_store(section.content)
+        preview = preview_diff(document_id, tab_name, content_to_push)
 
-            preview = preview_diff(document_id, tab_name, content_to_push)
+        if not preview.ops:
+            click.echo("No differences to push.")
+            return
 
-            if not preview.ops:
-                click.echo("No differences to push.")
+        click.echo("Patch operations:")
+        click.echo("-" * 40)
+        for line in preview.summary_lines:
+            click.echo(line)
+        click.echo("-" * 40)
+
+        if preview.warnings:
+            for w in preview.warnings:
+                error(w)
+            click.echo("Use regular push (without --patch) for structural changes.")
+            sys.exit(1)
+
+        if not yes:
+            if not click.confirm("Apply patch?"):
+                click.echo("Aborted.")
                 return
 
-            click.echo("Patch operations:")
-            click.echo("-" * 40)
-            for line in preview.summary_lines:
-                click.echo(line)
-            click.echo("-" * 40)
+        t.push(use_patch=True)
+        success("Patched successfully.")
+    else:
+        diff_text = t.diff()
+        if diff_text is None:
+            click.echo("No differences to push.")
+            return
 
-            if preview.warnings:
-                for w in preview.warnings:
-                    error(w)
-                click.echo("Use regular push (without --patch) for structural changes.")
-                sys.exit(1)
+        click.echo("Changes to push:")
+        click.echo("-" * 40)
+        click.echo(diff_text)
+        click.echo("-" * 40)
 
-            if not yes:
-                if not click.confirm("Apply patch?"):
-                    click.echo("Aborted.")
-                    return
+        from .gdoc.ir import from_markdown, check_unsupported
 
-            t.push(use_patch=True)
-            success("Patched successfully.")
-        else:
-            diff_text = t.diff()
-            if diff_text is None:
-                click.echo("No differences to push.")
+        section = parse_multipart(file.read_text(encoding="utf-8"))[0]
+        push_warnings = check_unsupported(from_markdown(section.content))
+        for w in push_warnings:
+            click.echo(f"  Warning: {w.feature}: {w.detail}")
+
+        click.echo(
+            "Warning: markdown cannot faithfully represent a Google Doc. "
+            "Non-markdown formatting (colors, fonts, alignment, comments, "
+            "suggestions, images) may be lost. Use --patch for incremental "
+            "updates that preserve formatting (experimental)."
+        )
+
+        if not yes:
+            if not click.confirm("Push these changes?"):
+                click.echo("Aborted.")
                 return
 
-            click.echo("Changes to push:")
-            click.echo("-" * 40)
-            click.echo(diff_text)
-            click.echo("-" * 40)
-
-            from .gdoc.ir import from_markdown, check_unsupported
-
-            section = parse_multipart(file.read_text(encoding="utf-8"))[0]
-            push_warnings = check_unsupported(from_markdown(section.content))
-            for w in push_warnings:
-                click.echo(f"  Warning: {w.feature}: {w.detail}")
-
-            click.echo(
-                "Warning: markdown cannot faithfully represent a Google Doc. "
-                "Non-markdown formatting (colors, fonts, alignment, comments, "
-                "suggestions, images) may be lost. Use --patch for incremental "
-                "updates that preserve formatting (experimental)."
-            )
-
-            if not yes:
-                if not click.confirm("Push these changes?"):
-                    click.echo("Aborted.")
-                    return
-
-            t.push()
-            success("Pushed successfully.")
-
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+        t.push()
+        success("Pushed successfully.")
 
 
 @doc.command("clone")
@@ -2690,39 +2197,27 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
     is_flag=True,
     help="Suppress multi-tab status message",
 )
+@handle_errors
 def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
     """Clone a Google Doc to a local .doc.gax.md file.
 
     Clones a single tab. For multi-tab documents, use 'gax doc checkout'.
     """
     from .gdoc import extract_doc_id, get_tabs_list
+    from .ui import success
 
-    try:
-        from .ui import success
+    file_path = Tab.from_url(url).clone(output=output, with_comments=with_comments)
+    success(f"Created: {file_path}")
 
-        file_path = Tab.from_url(url).clone(output=output, with_comments=with_comments)
-        success(f"Created: {file_path}")
-
-        if not quiet:
-            document_id = extract_doc_id(url)
-            tabs = get_tabs_list(document_id)
-            if len(tabs["tabs"]) > 1:
-                first_tab = tabs["tabs"][0].title
-                click.echo(
-                    f'  Tab "{first_tab}" cloned (1 of {len(tabs["tabs"])} tabs).\n'
-                    f"  For all tabs: gax doc checkout {url}"
-                )
-
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    if not quiet:
+        document_id = extract_doc_id(url)
+        tabs = get_tabs_list(document_id)
+        if len(tabs["tabs"]) > 1:
+            first_tab = tabs["tabs"][0].title
+            click.echo(
+                f'  Tab "{first_tab}" cloned (1 of {len(tabs["tabs"])} tabs).\n'
+                f"  For all tabs: gax doc checkout {url}"
+            )
 
 
 @doc.command("pull")
@@ -2732,24 +2227,13 @@ def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
     is_flag=True,
     help="Include document comments as separate sections",
 )
+@handle_errors
 def doc_pull(file: Path, with_comments: bool):
     """Pull latest content from Google Docs to local file."""
+    from .ui import success
 
-    try:
-        from .ui import success
-
-        Tab.from_file(file).pull(with_comments=with_comments)
-        success(f"Updated: {file}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    Tab.from_file(file).pull(with_comments=with_comments)
+    success(f"Updated: {file}")
 
 
 @doc.command("checkout")
@@ -2760,27 +2244,16 @@ def doc_pull(file: Path, with_comments: bool):
     type=click.Path(path_type=Path),
     help="Output folder (default: <title>.doc.gax.md.d)",
 )
+@handle_errors
 def doc_checkout(url: str, output: Path | None):
     """Checkout all tabs to individual files in a folder.
 
     Creates a folder with individual .doc.gax.md files for each tab.
     """
+    from .ui import success
 
-    try:
-        from .ui import success
-
-        folder = Doc.from_url(url).checkout(output=output)
-        success(f"Checked out to: {folder}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    folder = Doc.from_url(url).checkout(output=output)
+    success(f"Checked out to: {folder}")
 
 
 # =============================================================================
@@ -2812,6 +2285,7 @@ def slides():
     show_default=True,
     help="Output format: md (read-only) or json (read-write)",
 )
+@handle_errors
 def slides_checkout(url: str, output: Path | None, fmt: str):
     """Checkout a Google Slides presentation to a local directory.
 
@@ -2828,26 +2302,15 @@ def slides_checkout(url: str, output: Path | None, fmt: str):
         gax slides checkout abc123 -o my_slides
         gax slides checkout abc123 --format json
     """
-    try:
-        from .ui import success
-        from .gslides import Presentation
+    from .ui import success
 
-        folder_path = Presentation.from_url(url).checkout(output=output, fmt=fmt)
-        success(f"Checked out: {folder_path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    folder_path = Presentation.from_url(url).checkout(output=output, fmt=fmt)
+    success(f"Checked out: {folder_path}")
 
 
 @slides.command("pull")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
+@handle_errors
 def slides_pull(path: Path):
     """Pull latest slides from Google.
 
@@ -2858,30 +2321,19 @@ def slides_pull(path: Path):
         gax slides pull my_deck.slides.gax.md.d/
         gax slides pull 00_Welcome.slides.gax.md
     """
-    try:
-        from .ui import success
-        from .gslides import Slide, Presentation
+    from .ui import success
 
-        if path.is_dir():
-            Presentation.from_file(path).pull()
-        else:
-            Slide.from_file(path).pull()
-        success(f"Updated: {path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    if path.is_dir():
+        Presentation.from_file(path).pull()
+    else:
+        Slide.from_file(path).pull()
+    success(f"Updated: {path}")
 
 
 @slides.command("push")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+@handle_errors
 def slides_push(path: Path, yes: bool):
     """Push local slides to Google. JSON format only.
 
@@ -2894,47 +2346,34 @@ def slides_push(path: Path, yes: bool):
         gax slides push my_deck.slides.gax.md.d/ -y
         gax slides push 00_Welcome.slides.gax.md
     """
-    try:
-        from .gslides import Slide, Presentation
+    from .ui import success
 
-        if path.is_dir():
-            p = Presentation.from_file(path)
-            diff_text = p.diff()
-            if diff_text is None:
-                click.echo("No changes to push.")
+    if path.is_dir():
+        p = Presentation.from_file(path)
+        diff_text = p.diff()
+        if diff_text is None:
+            click.echo("No changes to push.")
+            return
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Push these changes?"):
+                click.echo("Cancelled.")
                 return
-            if not yes:
-                click.echo(diff_text)
-                if not click.confirm("Push these changes?"):
-                    click.echo("Cancelled.")
-                    return
-            p.push()
-        else:
-            s = Slide.from_file(path)
-            diff_text = s.diff()
-            if diff_text is None:
-                click.echo("No changes to push.")
+        p.push()
+    else:
+        s = Slide.from_file(path)
+        diff_text = s.diff()
+        if diff_text is None:
+            click.echo("No changes to push.")
+            return
+        if not yes:
+            click.echo(diff_text)
+            if not click.confirm("Push these changes?"):
+                click.echo("Cancelled.")
                 return
-            if not yes:
-                click.echo(diff_text)
-                if not click.confirm("Push these changes?"):
-                    click.echo("Cancelled.")
-                    return
-            s.push()
+        s.push()
 
-        from .ui import success
-
-        success(f"Pushed: {path}")
-    except ValueError as e:
-        from .ui import error
-
-        error(str(e))
-        sys.exit(1)
-    except Exception as e:
-        from .ui import error
-
-        error(f"Error: {e}")
-        sys.exit(1)
+    success(f"Pushed: {path}")
 
 
 # Register command groups

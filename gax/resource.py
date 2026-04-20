@@ -143,6 +143,14 @@ class Resource:
         raise ValueError(f"{cls.__name__} does not support ID-based construction")
 
     @classmethod
+    def from_url_or_id(cls, value: str) -> "Resource":
+        """Try from_url first, fall back to from_id."""
+        try:
+            return cls.from_url(value)
+        except ValueError:
+            return cls.from_id(value)
+
+    @classmethod
     def from_file(cls, path: Path) -> "Resource":
         """Construct a resource from a local file or directory.
 
