@@ -41,7 +41,7 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
-from .. import gaxfile
+from ..gaxfile import parse as gaxfile_parse, format as gaxfile_format
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -104,7 +104,7 @@ def parse_labels_file(path: Path) -> tuple[LabelHeader, list[dict]]:
     content = path.read_text(encoding="utf-8")
 
     try:
-        header_data, body = gaxfile.parse(content)
+        header_data, body = gaxfile_parse(content)
     except ValueError:
         # Old format: single YAML doc with labels key
         doc = yaml.safe_load(content)
@@ -133,7 +133,7 @@ def format_labels_file(header: LabelHeader, labels: list[dict]) -> str:
         "# Rename: add 'rename_from: OldName'\n"
         "# Delete: remove from list, use --delete flag\n"
     )
-    return comments + gaxfile.format(file_header, body)
+    return comments + gaxfile_format(file_header, body)
 
 
 # =============================================================================

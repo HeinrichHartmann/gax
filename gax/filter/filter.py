@@ -45,7 +45,7 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
-from .. import gaxfile
+from ..gaxfile import parse as gaxfile_parse, format as gaxfile_format
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -74,7 +74,7 @@ def parse_filters_file(path: Path) -> tuple[FilterHeader, list[dict]]:
     content = path.read_text(encoding="utf-8")
 
     try:
-        header_data, body = gaxfile.parse(content)
+        header_data, body = gaxfile_parse(content)
     except ValueError:
         # Old format: single YAML doc with filters key
         doc = yaml.safe_load(content)
@@ -96,7 +96,7 @@ def format_filters_file(header: FilterHeader, filters: list[dict]) -> str:
     body = yaml.dump(
         filters, default_flow_style=False, allow_unicode=True, sort_keys=False
     )
-    return gaxfile.format(file_header, body)
+    return gaxfile_format(file_header, body)
 
 
 # =============================================================================

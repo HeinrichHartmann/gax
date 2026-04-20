@@ -43,7 +43,7 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
-from .. import gaxfile
+from ..gaxfile import GaxFile, format as gaxfile_format
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -76,16 +76,15 @@ class ContactsHeader:
 
 def parse_contacts_file(path: Path) -> tuple[ContactsHeader, str]:
     """Parse a contacts file into header and body."""
-    content = path.read_text(encoding="utf-8")
-    fields, body = gaxfile.parse(content)
+    gf = GaxFile.from_path(path, multipart=False)
 
     header = ContactsHeader(
-        format=fields.get("format", "md"),
-        count=int(fields.get("count", 0)),
-        pulled=fields.get("pulled", ""),
+        format=gf.headers.get("format", "md"),
+        count=int(gf.headers.get("count", 0)),
+        pulled=gf.headers.get("pulled", ""),
     )
 
-    return header, body
+    return header, gf.body
 
 
 def format_contacts_file(header: ContactsHeader, body: str) -> str:
@@ -96,7 +95,7 @@ def format_contacts_file(header: ContactsHeader, body: str) -> str:
         "pulled": header.pulled,
         "count": header.count,
     }
-    return gaxfile.format(h, body + "\n")
+    return gaxfile_format(h, body + "\n")
 
 
 def parse_jsonl_body(body: str) -> list[dict]:

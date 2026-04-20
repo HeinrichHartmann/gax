@@ -47,12 +47,12 @@ and import the module's CLI group in cli.py so it loads at startup.
 import re
 from pathlib import Path
 
-from . import gaxfile
+from .gaxfile import read_type
 
 
 def _read_file_type(path: Path) -> str | None:
     """Read the type field from a gax file's YAML header."""
-    return gaxfile.read_type(path)
+    return read_type(path)
 
 
 def _read_checkout_url(gax_yaml_path: Path) -> str:

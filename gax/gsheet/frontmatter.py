@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import gaxfile
+from ..gaxfile import GaxFile, parse as gaxfile_parse, format as gaxfile_format
 
 
 @dataclass
@@ -18,15 +18,18 @@ class SheetConfig:
 
 def parse_file(path: Path) -> tuple[SheetConfig, str]:
     """Parse a .sheet.gax.md file into config and data sections."""
-    content = path.read_text()
-    return parse_content(content)
+    gf = GaxFile.from_path(path, multipart=False)
+    return _headers_to_config(gf.headers), gf.body
 
 
 def parse_content(content: str) -> tuple[SheetConfig, str]:
     """Parse content string into config and data sections."""
-    headers, data_str = gaxfile.parse(content)
+    headers, data_str = gaxfile_parse(content)
+    return _headers_to_config(headers), data_str
 
-    config = SheetConfig(
+
+def _headers_to_config(headers: dict) -> SheetConfig:
+    return SheetConfig(
         spreadsheet_id=headers["spreadsheet_id"],
         tab=headers["tab"],
         format=headers.get("format", "csv"),
@@ -34,8 +37,6 @@ def parse_content(content: str) -> tuple[SheetConfig, str]:
         range=headers.get("range"),
         separator=headers.get("separator"),
     )
-
-    return config, data_str
 
 
 def write_file(path: Path, config: SheetConfig, data: str) -> None:
@@ -58,4 +59,4 @@ def format_content(config: SheetConfig, data: str) -> str:
     if config.separator:
         headers["separator"] = config.separator
 
-    return gaxfile.format(headers, data)
+    return gaxfile_format(headers, data)

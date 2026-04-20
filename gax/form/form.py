@@ -39,7 +39,7 @@ from typing import Any
 import yaml
 from googleapiclient.discovery import build
 
-from .. import gaxfile
+from ..gaxfile import GaxFile, format as gaxfile_format
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -73,8 +73,8 @@ def parse_form_file(file_path: Path) -> tuple[FormHeader, str]:
     Returns:
         Tuple of (FormHeader, body_content)
     """
-    content = file_path.read_text(encoding="utf-8")
-    h, body = gaxfile.parse(content)
+    gf = GaxFile.from_path(file_path, multipart=False)
+    h = gf.headers
 
     header = FormHeader(
         id=h.get("id", ""),
@@ -84,7 +84,7 @@ def parse_form_file(file_path: Path) -> tuple[FormHeader, str]:
         content_type=h.get("content-type", "text/markdown"),
     )
 
-    return header, body.strip()
+    return header, gf.body.strip()
 
 
 def parse_form_body(body: str) -> dict:
@@ -111,7 +111,7 @@ def format_form_file(header: FormHeader, body_str: str) -> str:
 
     h["content-type"] = header.content_type
 
-    return gaxfile.format(h, body_str)
+    return gaxfile_format(h, body_str)
 
 
 # =============================================================================

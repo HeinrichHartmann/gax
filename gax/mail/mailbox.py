@@ -34,7 +34,7 @@ from typing import Any
 
 from googleapiclient.discovery import build
 
-from .. import gaxfile
+from ..gaxfile import GaxFile
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -150,29 +150,27 @@ def _write_gax_file(path: Path, query: str, limit: int, thread_data: list[dict])
 
 def _parse_gax_header(path: Path) -> dict:
     """Parse YAML header from .gax.md file to get query and limit."""
-    content = path.read_text(encoding="utf-8")
     try:
-        headers, _ = gaxfile.parse(content)
+        gf = GaxFile.from_path(path, multipart=False)
     except ValueError:
         return {"query": None, "limit": 50}
     try:
-        limit = int(headers.get("limit", 50))
+        limit = int(gf.headers.get("limit", 50))
     except (ValueError, TypeError):
         limit = 50
     return {
-        "query": headers.get("query"),
+        "query": gf.headers.get("query"),
         "limit": limit,
     }
 
 
 def _parse_gax_content(path: Path) -> str:
     """Extract TSV content from .gax.md file (skip YAML header)."""
-    content = path.read_text(encoding="utf-8")
     try:
-        _, body = gaxfile.parse(content)
+        gf = GaxFile.from_path(path, multipart=False)
     except ValueError:
-        return content
-    return body
+        return path.read_text(encoding="utf-8")
+    return gf.body
 
 
 # =============================================================================
