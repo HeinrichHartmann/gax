@@ -839,3 +839,7 @@ class Task(Resource):
         delete_task(local.tasklist, local.id)
         self.path.unlink()
         return local.title
+
+
+Resource.register(TaskList)
+Resource.register(Task)

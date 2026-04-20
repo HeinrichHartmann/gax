@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..ui import handle_errors, confirm_and_push, success
 from .. import docs
-from . import Contact, Contacts  # noqa: F401 — both imported to register with Resource
+from . import Contacts
 
 
 @docs.section("resource")

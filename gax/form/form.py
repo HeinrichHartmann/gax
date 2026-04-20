@@ -927,3 +927,6 @@ class Form(Resource):
 
         # Suggest pulling to sync local file with new IDs
         logger.info(f"Run 'gax form pull {self.path}' to sync local file with new IDs")
+
+
+Resource.register(Form)

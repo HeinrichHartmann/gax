@@ -572,3 +572,7 @@ class Presentation(Resource):
 
         for slide_file in sorted(self.path.glob("*.slides.gax.md")):
             Slide.from_file(slide_file).push()
+
+
+Resource.register(Slide)
+Resource.register(Presentation)

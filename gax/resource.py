@@ -26,9 +26,8 @@ Override from_url/from_file only for non-standard matching logic.
 Registration
 ============
 
-Subclasses are auto-registered via ``__init_subclass__``: every class that
-inherits from Resource is appended to ``Resource._subclasses`` at class
-definition time. Registration is triggered by importing the module.
+Subclasses must call ``Resource.register(cls)`` after class definition.
+This is explicit — no implicit registration via import side effects.
 
 Dispatch is order-independent because matching criteria are orthogonal:
 
@@ -74,8 +73,8 @@ class Resource:
     Operations: clone, checkout, pull, diff, push — all use instance state.
     Unimplemented operations raise NotImplementedError.
 
-    Subclasses are auto-registered via __init_subclass__ and
-    discovered by Resource.from_url() / Resource.from_file().
+    Subclasses must call Resource.register(cls) after class definition.
+    Registered classes are discovered by Resource.from_url() / Resource.from_file().
 
     Dispatch metadata (set on subclasses):
         URL_PATTERN     — regex string for URL matching
@@ -98,9 +97,10 @@ class Resource:
         self.url = url
         self.path = path or Path()
 
-    def __init_subclass__(cls, **kw):
-        super().__init_subclass__(**kw)
-        Resource._subclasses.append(cls)
+    @classmethod
+    def register(cls, subclass: type["Resource"]) -> None:
+        """Register a Resource subclass for from_url/from_file dispatch."""
+        Resource._subclasses.append(subclass)
 
     @classmethod
     def from_url(cls, url: str) -> "Resource":

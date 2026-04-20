@@ -707,3 +707,7 @@ def _workspace_file_exists(folder: Path, item: dict) -> bool:
     }
     ext = ext_map.get(resource_type, "")
     return (target_dir / f"{safe_name}{ext}").exists() if ext else False
+
+
+Resource.register(File)
+Resource.register(Folder)

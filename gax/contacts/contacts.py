@@ -884,3 +884,7 @@ class Contacts(Resource):
             f"Applied: {len(creates)} created, {len(updates)} updated, "
             f"{len(deletes)} deleted"
         )
+
+
+Resource.register(Contact)
+Resource.register(Contacts)

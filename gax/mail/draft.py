@@ -483,3 +483,6 @@ class Draft(Resource):
         new_content = format_draft(header, body)
         self.path.write_text(new_content, encoding="utf-8")
         logger.info("Pushed successfully")
+
+
+Resource.register(Draft)

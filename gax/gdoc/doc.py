@@ -1375,3 +1375,7 @@ class Doc(Resource):
         tracking_content = format_section(section)
         tracking_path.write_text(tracking_content, encoding="utf-8")
         return tracking_path
+
+
+Resource.register(Tab)
+Resource.register(Doc)

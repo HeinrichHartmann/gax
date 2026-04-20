@@ -723,3 +723,7 @@ class Sheet(Resource):
         out.write("index\tid\ttitle\n")
         for t in info["tabs"]:
             out.write(f"{t['index']}\t{t['id']}\t{t['title']}\n")
+
+
+Resource.register(SheetTab)
+Resource.register(Sheet)

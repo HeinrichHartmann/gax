@@ -861,3 +861,6 @@ class Mailbox(Resource):
 
         logger.info(f"Cloned: {cloned}, Skipped: {skipped}")
         return cloned, skipped
+
+
+Resource.register(Mailbox)

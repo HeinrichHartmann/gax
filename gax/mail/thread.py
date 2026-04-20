@@ -276,3 +276,6 @@ class Thread(Resource):
         out_path.write_text(draft_content, encoding="utf-8")
         logger.info(f"To: {from_addr}, Subject: {subject}")
         return out_path
+
+
+Resource.register(Thread)

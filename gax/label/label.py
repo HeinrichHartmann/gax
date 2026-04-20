@@ -522,3 +522,6 @@ class Label(Resource):
         current_labels[name] = result
         created.add(name)
         logger.info(f"Created: {name}")
+
+
+Resource.register(Label)

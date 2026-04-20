@@ -1053,3 +1053,7 @@ class Event(Resource):
         delete_event(local_event.id, local_event.calendar)
         self.path.unlink()
         return local_event.title
+
+
+Resource.register(Cal)
+Resource.register(Event)

@@ -570,3 +570,6 @@ class Filter(Resource):
             }
             filters.append(entry)
         return filters
+
+
+Resource.register(Filter)
