@@ -155,9 +155,13 @@ def _parse_gax_header(path: Path) -> dict:
         headers, _ = gaxfile.parse(content)
     except ValueError:
         return {"query": None, "limit": 50}
+    try:
+        limit = int(headers.get("limit", 50))
+    except (ValueError, TypeError):
+        limit = 50
     return {
         "query": headers.get("query"),
-        "limit": int(headers.get("limit", 50)),
+        "limit": limit,
     }
 
 

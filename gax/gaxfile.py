@@ -15,20 +15,24 @@ documents (mail threads, docs with tabs), see multipart.py instead.
 
 from pathlib import Path
 
-import yaml
 
-
-def parse(content: str) -> tuple[dict, str]:
+def parse(content: str) -> tuple[dict[str, str], str]:
     """Parse YAML frontmatter and body from a .gax.md file.
 
-    Handles optional leading comment lines (# ...).
+    Handles optional leading comment lines (# ...) and CRLF line endings.
+
+    All header values are returned as strings to preserve round-trip
+    fidelity (yaml.safe_load would coerce timestamps into datetime objects).
 
     Returns:
-        (headers_dict, body_str) where headers are parsed via yaml.safe_load.
+        (headers_dict, body_str)
 
     Raises:
         ValueError: if no valid frontmatter found.
     """
+    # Normalize CRLF to LF
+    content = content.replace("\r\n", "\n")
+
     # Skip leading comment lines
     lines = content.split("\n")
     start = 0
@@ -37,7 +41,7 @@ def parse(content: str) -> tuple[dict, str]:
 
     rest = "\n".join(lines[start:])
 
-    if not rest.startswith("---\n") and not rest.startswith("---\r\n"):
+    if not rest.startswith("---\n"):
         raise ValueError("File must start with YAML frontmatter (---)")
 
     # Find closing ---
@@ -52,7 +56,13 @@ def parse(content: str) -> tuple[dict, str]:
     header_text = rest[4:end]
     body = rest[end + 5:]  # skip \n---\n
 
-    headers = yaml.safe_load(header_text) or {}
+    # Parse as simple key: value pairs to preserve string types.
+    # yaml.safe_load would coerce "2026-01-01T00:00:00Z" into datetime.
+    headers: dict[str, str] = {}
+    for line in header_text.split("\n"):
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip()] = value.strip()
 
     return headers, body
 
@@ -65,11 +75,15 @@ def format(headers: dict, body: str) -> str:
         key: value
         ---
         body
+
+    Uses simple key: value formatting (not yaml.dump) to preserve
+    round-trip fidelity with parse().
     """
-    yaml_str = yaml.dump(
-        headers, default_flow_style=False, allow_unicode=True, sort_keys=False
-    )
-    return f"---\n{yaml_str}---\n{body}"
+    lines = ["---"]
+    for key, value in headers.items():
+        lines.append(f"{key}: {value}")
+    lines.append("---")
+    return "\n".join(lines) + "\n" + body
 
 
 def read_type(path: Path) -> str | None:
