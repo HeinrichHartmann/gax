@@ -61,7 +61,10 @@ class GaxFile:
 
     @classmethod
     def from_path(cls, path: Path) -> GaxFile:
-        """Read and parse a .gax.md file."""
+        """Read and parse a .gax.md file.
+
+        Raises ValueError if the file contains no valid sections.
+        """
         content = path.read_text(encoding="utf-8")
         return cls(parse_multipart(content))
 
@@ -295,8 +298,10 @@ def parse_multipart(text: str) -> list[Section]:
     - Multiple sections with YAML headers
     - content-length for precise byte counting
     - Sections without content-length (scan for next ---)
+
+    Raises ValueError if no valid sections are found.
     """
-    sections = []
+    sections: list[Section] = []
     pos = 0
     text_bytes = text.encode("utf-8")
 
@@ -345,5 +350,8 @@ def parse_multipart(text: str) -> list[Section]:
                 content=content.strip(),
             )
         )
+
+    if not sections:
+        raise ValueError("No valid sections found (expected ---\\nheaders\\n---\\nbody)")
 
     return sections
