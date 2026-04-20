@@ -23,7 +23,25 @@ Subclasses declare dispatch metadata as class attributes:
 
 Override from_url/from_file only for non-standard matching logic.
 
-See draft.py for a reference implementation with design rationale.
+Registration
+============
+
+Subclasses are auto-registered via ``__init_subclass__``: every class that
+inherits from Resource is appended to ``Resource._subclasses`` at class
+definition time. Registration is triggered by importing the module.
+
+Dispatch is order-independent because matching criteria are orthogonal:
+
+  - FILE_EXTENSIONS are unique per resource (no two resources claim the
+    same suffix).
+  - FILE_TYPE strings are unique per resource.
+  - URL_PATTERN collisions are resolved via HAS_GENERIC_DISPATCH=False:
+    resources with ambiguous URL patterns (e.g. Doc vs Tab on the same
+    docs.google.com domain) opt out of generic dispatch and are only
+    reached via explicit subclass calls.
+
+To add a new resource: subclass Resource, declare unique dispatch metadata,
+and import the module's CLI group in cli.py so it loads at startup.
 """
 
 import re

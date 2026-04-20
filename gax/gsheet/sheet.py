@@ -42,6 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
+import gspread.exceptions
 import pandas as pd
 import yaml
 
@@ -323,7 +324,7 @@ def create_push_plan(
 
         try:
             remote_df = client.read(spreadsheet_id, config.tab)
-        except Exception:
+        except gspread.exceptions.WorksheetNotFound:
             changes.append(
                 TabChange(
                     tab_name=config.tab,
@@ -356,7 +357,7 @@ def create_push_plan(
         try:
             remote_df = client.read(spreadsheet_id, tab_name)
             remote_rows = len(remote_df)
-        except Exception:
+        except gspread.exceptions.WorksheetNotFound:
             remote_rows = 0
 
         changes.append(
