@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..cli_lib import handle_errors, success
+from ..ui import handle_errors, success
 from .. import docs
 from . import File
 
@@ -55,7 +55,7 @@ def file_checkout(url_or_id, output, recursive):
         gax file checkout abc123 -o my_folder
         gax file checkout abc123 -R
     """
-    from . import Folder
+    from .gdrive import Folder
 
     path = Folder.from_url_or_id(url_or_id).checkout(output=output, recursive=recursive)
     success(f"Checked out: {path}")
@@ -97,7 +97,7 @@ def file_push(file_path, public, yes):
     tracking_path = file_path.with_suffix(file_path.suffix + ".gax.md")
 
     if tracking_path.exists():
-        from . import read_tracking_file
+        from .gdrive import read_tracking_file
 
         tracking_data = read_tracking_file(tracking_path)
         if not yes:

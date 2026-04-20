@@ -4,7 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from gax.gtask import (
+from gax.gtask import Task
+from gax.gtask.gtask import (
     TaskItem,
     api_to_task,
     task_to_api_body,
@@ -13,7 +14,6 @@ from gax.gtask import (
     format_tasks_md,
     parse_tasks_md,
     format_tasks_yaml,
-    Task,
 )
 
 

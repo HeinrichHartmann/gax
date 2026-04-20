@@ -7,7 +7,8 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from gax.gsheet import GSheetClient, pull, push, clone_all, pull_all
+from gax.gsheet.client import GSheetClient
+from gax.gsheet.sheet import pull_single_tab as pull, push_single_tab as push, clone_all, pull_all
 from gax.gsheet.frontmatter import SheetConfig, format_content
 from gax.multipart import parse_multipart, format_multipart
 

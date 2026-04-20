@@ -4,9 +4,10 @@ import sys
 import click
 from pathlib import Path
 
-from ..cli_lib import handle_errors, _confirm_and_push, success
+from ..ui import handle_errors, _confirm_and_push, success
 from .. import docs
-from . import Sheet, SheetTab, pull_all, _extract_spreadsheet_id
+from . import Sheet, SheetTab
+from .sheet import pull_all, _extract_spreadsheet_id
 from .client import GSheetClient
 
 

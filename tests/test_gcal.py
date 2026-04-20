@@ -2,8 +2,8 @@
 
 from unittest.mock import patch
 
-from gax.gcal import (
-    Event,
+from gax.gcal import Event
+from gax.gcal.gcal import (
     CalendarEvent,
     Conference,
     api_event_to_dataclass,

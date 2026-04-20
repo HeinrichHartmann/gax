@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import multipart
-from .. import draft as draft_module
+from . import draft as draft_module
 from ..resource import Resource
 
 from .shared import (

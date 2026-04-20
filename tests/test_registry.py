@@ -3,7 +3,7 @@
 import pytest
 
 from gax.contacts import Contacts
-from gax.draft import Draft
+from gax.mail import Draft
 from gax.filter import Filter
 from gax.form import Form
 from gax.gcal import Cal, Event

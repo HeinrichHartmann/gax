@@ -11,15 +11,14 @@ from pathlib import Path
 
 from . import auth
 from . import docs
-from .cli_lib import handle_errors, _confirm_and_push  # noqa: F401
+from .ui import handle_errors, _confirm_and_push  # noqa: F401
 from .resource import Resource
 
 # Import resource CLI groups — triggers Resource.__init_subclass__ registration
 from .gsheet.cli import sheet
-from .draft.cli import draft
 from .contacts.cli import contacts
 from .gdrive.cli import file_group
-from .mail.cli import mail_group, mailbox_group
+from .mail.cli import mail_group, mailbox_group, draft
 from .label.cli import mail_label
 from .filter.cli import mail_filter
 from .gcal.cli import cal_group
@@ -275,7 +274,7 @@ def checkout(url: str, output: Path | None, fmt: str):
 @click.pass_context
 def man(ctx, md: bool):
     """Print the complete manual (auto-generated from commands)."""
-    from .man import _collect_commands, format_man_plain, format_man_md
+    from .docs import _collect_commands, format_man_plain, format_man_md
 
     root = ctx.find_root().command
 

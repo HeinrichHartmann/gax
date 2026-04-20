@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..cli_lib import handle_errors, success
+from ..ui import handle_errors, success
 from .. import docs
 from . import Cal, Event
 
@@ -61,7 +61,7 @@ def cal_list_cmd(
         gax cal list --from 2026-03-01 --to 2026-03-15
         gax cal list -f tsv           # TSV output
     """
-    from . import (
+    from .gcal import (
         resolve_time_range,
         resolve_calendar_id,
         list_events,
@@ -263,7 +263,7 @@ def cal_event_push_cmd(file_path: Path, yes: bool):
 @handle_errors
 def cal_event_delete_cmd(file_path: Path, yes: bool):
     """Delete event from calendar."""
-    from . import yaml_to_event
+    from .gcal import yaml_to_event
 
     content = file_path.read_text()
     local_event = yaml_to_event(content)

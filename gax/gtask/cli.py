@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..cli_lib import handle_errors, success
+from ..ui import handle_errors, success
 from .. import docs
 from . import TaskList, Task as TaskResource
 

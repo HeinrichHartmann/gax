@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from gax.mail import (
+from gax.mail.shared import (
     MailSection,
     pull_thread,
     format_multipart,

@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import yaml
 
-from gax.contacts import (
-    Contacts,
+from gax.contacts import Contacts
+from gax.contacts.contacts import (
     api_to_contact,
     contact_to_api,
     contact_to_yaml,

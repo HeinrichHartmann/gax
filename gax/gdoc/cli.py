@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..cli_lib import handle_errors, success
+from ..ui import handle_errors, success
 from .. import docs
 from . import Tab, Doc
 
@@ -102,8 +102,8 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
     elements. The ``--patch`` path is under evaluation and may fail on
     structural changes; when in doubt, omit the flag.
     """
-    from . import parse_multipart, extract_doc_id
-    from ..cli_lib import error
+    from .doc import parse_multipart, extract_doc_id
+    from ..ui import error
 
     t = Tab.from_file(file)
 
@@ -202,7 +202,7 @@ def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
 
     Clones a single tab. For multi-tab documents, use 'gax doc checkout'.
     """
-    from . import extract_doc_id, get_tabs_list
+    from .doc import extract_doc_id, get_tabs_list
 
     file_path = Tab.from_url(url).clone(output=output, with_comments=with_comments)
     success(f"Created: {file_path}")

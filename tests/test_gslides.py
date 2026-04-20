@@ -9,9 +9,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from gax.gslides import (
-    Presentation,
-    Slide,
+from gax.gslides import Presentation, Slide
+from gax.gslides.gslides import (
     _extract_slide_markdown,
     _extract_speaker_notes,
     _get_slide_title,
