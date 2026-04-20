@@ -60,13 +60,21 @@ class GaxFile:
         self.sections = sections
 
     @classmethod
-    def from_path(cls, path: Path) -> GaxFile:
+    def from_path(cls, path: Path, *, multipart: bool = True) -> GaxFile:
         """Read and parse a .gax.md file.
+
+        Args:
+            multipart: If True (default), parse as multipart (multiple
+                sections). If False, parse as single-section (body may
+                contain --- without being split).
 
         Raises ValueError if the file contains no valid sections.
         """
         content = path.read_text(encoding="utf-8")
-        return cls(parse_multipart(content))
+        if multipart:
+            return cls(parse_multipart(content))
+        headers, body = parse(content)
+        return cls([Section(headers=headers, content=body)])
 
     @property
     def headers(self) -> dict[str, Any]:
@@ -347,7 +355,7 @@ def parse_multipart(text: str) -> list[Section]:
         sections.append(
             Section(
                 headers=headers,
-                content=content.strip(),
+                content=content,
             )
         )
 
