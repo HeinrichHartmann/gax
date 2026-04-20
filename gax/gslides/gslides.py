@@ -33,7 +33,7 @@ import yaml
 from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
-from ..multipart import Section, format_section, parse_multipart
+from ..gaxfile import Section, format_section, parse_multipart
 from ..resource import Resource
 
 logger = logging.getLogger(__name__)

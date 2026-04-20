@@ -1,6 +1,6 @@
 """Tests for multipart YAML-markdown format parsing and formatting."""
 
-from gax.multipart import (
+from gax.gaxfile import (
     Section,
     needs_content_length,
     format_section,

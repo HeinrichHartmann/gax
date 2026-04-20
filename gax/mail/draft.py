@@ -66,7 +66,7 @@ from typing import Any
 from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
-from .. import multipart
+from .. import gaxfile as multipart
 from ..resource import Resource
 
 logger = logging.getLogger(__name__)

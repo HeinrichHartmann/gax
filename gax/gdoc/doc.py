@@ -47,7 +47,7 @@ import yaml
 from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
-from .. import multipart
+from .. import gaxfile as multipart
 from .native_md import extract_images_to_store, inline_images_from_store
 from ..ui import operation
 from ..resource import Resource

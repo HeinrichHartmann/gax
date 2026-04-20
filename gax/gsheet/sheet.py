@@ -48,7 +48,7 @@ import yaml
 
 from ..resource import Resource
 from ..formats import get_format
-from ..multipart import Section, format_multipart, parse_multipart
+from ..gaxfile import Section, format_multipart, parse_multipart
 from ..ui import operation
 from .client import GSheetClient
 from .frontmatter import SheetConfig, parse_file, parse_content, write_file, format_content

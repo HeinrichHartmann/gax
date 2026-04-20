@@ -28,7 +28,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import multipart
+from .. import gaxfile as multipart
 from . import draft as draft_module
 from ..resource import Resource
 

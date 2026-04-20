@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
 from ..store import store_blob
-from .. import multipart
+from .. import gaxfile as multipart
 
 logger = logging.getLogger(__name__)
 
