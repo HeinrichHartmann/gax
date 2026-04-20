@@ -433,6 +433,49 @@ def issue(title: str | None, body: str | None, issue_type: str):
     sys.exit(subprocess.call(cmd))
 
 
+@docs.section("utility")
+@main.command()
+@click.option("-v", "--verbose", is_flag=True, help="Show full commit descriptions")
+@click.option("-n", "--count", default=20, help="Number of commits (default: 20)")
+def changelog(verbose: bool, count: int):
+    """Show recent commits on main (requires gh CLI)."""
+    import json
+    import shutil
+    import subprocess
+
+    if not shutil.which("gh"):
+        click.echo("Error: 'gh' (GitHub CLI) is required.", err=True)
+        sys.exit(1)
+
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{REPO}/commits?sha=main&per_page={count}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            click.echo("Failed to fetch commits from GitHub.", err=True)
+            sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    for commit in json.loads(result.stdout):
+        sha = commit["sha"][:7]
+        message = commit["commit"]["message"]
+        title = message.split("\n")[0]
+        if verbose:
+            body = "\n".join(message.split("\n")[1:]).strip()
+            click.echo(f"  {sha}  {title}")
+            if body:
+                for line in body.splitlines():
+                    click.echo(f"            {line}")
+                click.echo()
+        else:
+            click.echo(f"  {sha}  {title}")
+
+
 def _get_installed_sha() -> str | None:
     """Return the git commit SHA of the currently installed gax uv tool, or None."""
     import glob
