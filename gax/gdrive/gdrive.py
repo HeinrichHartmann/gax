@@ -465,7 +465,7 @@ class Folder(Resource):
         self,
         output: Path | None = None,
         *,
-        recursive: bool = False,
+        recursive: bool = True,
         **kw,
     ) -> Path:
         """Checkout a Drive folder to a local directory. Returns path created.
