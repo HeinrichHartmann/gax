@@ -1,4 +1,4 @@
-"""CLI commands for Google Drive file operations."""
+"""CLI commands for Google Drive operations."""
 
 import click
 from pathlib import Path
@@ -10,13 +10,13 @@ from . import File
 
 @docs.section("resource")
 @docs.maturity("unstable")
-@click.group("file")
-def file_group():
-    """Google Drive file operations."""
+@click.group("drive")
+def drive_group():
+    """Google Drive operations (files and folders)."""
     pass
 
 
-@file_group.command("clone")
+@drive_group.command("clone")
 @click.argument("url_or_id")
 @click.option(
     "-o", "--output", type=click.Path(path_type=Path), help="Output file path"
@@ -37,7 +37,7 @@ def file_clone(url_or_id, output):
     success(f"Created: {path}")
 
 
-@file_group.command("checkout")
+@drive_group.command("checkout")
 @click.argument("url_or_id")
 @click.option(
     "-o", "--output", type=click.Path(path_type=Path), help="Output folder path"
@@ -66,7 +66,7 @@ def file_checkout(url_or_id, output, shallow):
     success(f"Checked out: {path}")
 
 
-@file_group.command("pull")
+@drive_group.command("pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @handle_errors
 def file_pull(file_path):
@@ -83,7 +83,7 @@ def file_pull(file_path):
     success(f"Updated: {file_path}")
 
 
-@file_group.command("push")
+@drive_group.command("push")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--public", is_flag=True, help="Make file publicly accessible")
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")

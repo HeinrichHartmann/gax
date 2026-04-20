@@ -17,7 +17,7 @@ from .resource import Resource
 # Import resource CLI groups — triggers Resource.__init_subclass__ registration
 from .gsheet.cli import sheet
 from .contacts.cli import contacts
-from .gdrive.cli import file_group
+from .gdrive.cli import drive_group
 from .mail.cli import mail_group, mailbox_group, draft
 from .label.cli import mail_label
 from .filter.cli import mail_filter
@@ -412,7 +412,7 @@ main.add_command(task_group)
 main.add_command(form)
 main.add_command(draft)  # Flattened from mail.draft (ADR 020)
 main.add_command(contacts)
-main.add_command(file_group, name="file")
+main.add_command(drive_group, name="drive")
 main.add_command(slides)
 
 
