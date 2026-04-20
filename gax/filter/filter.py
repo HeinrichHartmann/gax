@@ -45,6 +45,7 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
+from .. import gaxfile
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -72,25 +73,16 @@ def parse_filters_file(path: Path) -> tuple[FilterHeader, list[dict]]:
     """Parse a filters file into header and filter list."""
     content = path.read_text(encoding="utf-8")
 
-    # Skip comment lines at start
-    lines = content.split("\n")
-    while lines and lines[0].startswith("#"):
-        lines = lines[1:]
-    content = "\n".join(lines)
+    try:
+        header_data, body = gaxfile.parse(content)
+    except ValueError:
+        # Old format: single YAML doc with filters key
+        doc = yaml.safe_load(content)
+        filters = doc.get("filters", []) if doc else []
+        return FilterHeader(), filters
 
-    header = FilterHeader()
-
-    if content.startswith("---\n"):
-        parts = content.split("---\n", 2)
-        if len(parts) >= 3:
-            header_data = yaml.safe_load(parts[1]) or {}
-            header.pulled = header_data.get("pulled", "")
-            filters = yaml.safe_load(parts[2]) or []
-            return header, filters
-
-    # Old format: single YAML doc with filters key
-    doc = yaml.safe_load(content)
-    filters = doc.get("filters", []) if doc else []
+    header = FilterHeader(pulled=header_data.get("pulled", ""))
+    filters = yaml.safe_load(body) or []
     return header, filters
 
 
@@ -101,18 +93,10 @@ def format_filters_file(header: FilterHeader, filters: list[dict]) -> str:
         "content-type": "application/yaml",
         "pulled": header.pulled,
     }
-
-    parts = [
-        "---\n",
-        yaml.dump(
-            file_header, default_flow_style=False, allow_unicode=True, sort_keys=False
-        ),
-        "---\n",
-        yaml.dump(
-            filters, default_flow_style=False, allow_unicode=True, sort_keys=False
-        ),
-    ]
-    return "".join(parts)
+    body = yaml.dump(
+        filters, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
+    return gaxfile.format(file_header, body)
 
 
 # =============================================================================

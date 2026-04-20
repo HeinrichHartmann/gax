@@ -43,6 +43,7 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
+from .. import gaxfile
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -76,42 +77,26 @@ class ContactsHeader:
 def parse_contacts_file(path: Path) -> tuple[ContactsHeader, str]:
     """Parse a contacts file into header and body."""
     content = path.read_text(encoding="utf-8")
-
-    if not content.startswith("---"):
-        raise ValueError("File must start with YAML header (---)")
-
-    end = content.find("\n---\n", 4)
-    if end == -1:
-        raise ValueError("Could not find end of YAML header")
-
-    header_text = content[4:end]
-    fields = {}
-    for line in header_text.split("\n"):
-        if ":" in line:
-            key, value = line.split(":", 1)
-            fields[key.strip()] = value.strip()
+    fields, body = gaxfile.parse(content)
 
     header = ContactsHeader(
         format=fields.get("format", "md"),
-        count=int(fields.get("count", "0")),
+        count=int(fields.get("count", 0)),
         pulled=fields.get("pulled", ""),
     )
 
-    body = content[end + 5 :]  # Skip closing --- and newline
     return header, body
 
 
 def format_contacts_file(header: ContactsHeader, body: str) -> str:
     """Format a contacts header and body as file content."""
-    lines = [
-        "---",
-        "type: gax/contacts",
-        f"format: {header.format}",
-        f"pulled: {header.pulled}",
-        f"count: {header.count}",
-        "---",
-    ]
-    return "\n".join(lines) + "\n" + body + "\n"
+    h = {
+        "type": "gax/contacts",
+        "format": header.format,
+        "pulled": header.pulled,
+        "count": header.count,
+    }
+    return gaxfile.format(h, body + "\n")
 
 
 def parse_jsonl_body(body: str) -> list[dict]:

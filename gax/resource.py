@@ -29,30 +29,12 @@ See draft.py for a reference implementation with design rationale.
 import re
 from pathlib import Path
 
+from . import gaxfile
+
 
 def _read_file_type(path: Path) -> str | None:
     """Read the type field from a gax file's YAML header."""
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-    if not content.startswith("---"):
-        # Simple YAML without --- prefix
-        for line in content.split("\n")[:20]:
-            if line.startswith("type:"):
-                return line.split(":", 1)[1].strip()
-        return None
-
-    # Multipart format: find type in first section header
-    for line in content.split("\n"):
-        if line == "---":
-            continue
-        if line.startswith("type:"):
-            return line.split(":", 1)[1].strip()
-        if not line or line.startswith("---"):
-            break
-    return None
+    return gaxfile.read_type(path)
 
 
 def _read_checkout_url(gax_yaml_path: Path) -> str:

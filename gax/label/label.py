@@ -41,6 +41,7 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
+from .. import gaxfile
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -102,25 +103,16 @@ def parse_labels_file(path: Path) -> tuple[LabelHeader, list[dict]]:
     """Parse a labels file into header and label list."""
     content = path.read_text(encoding="utf-8")
 
-    # Skip comment lines at start
-    lines = content.split("\n")
-    while lines and lines[0].startswith("#"):
-        lines = lines[1:]
-    content = "\n".join(lines)
+    try:
+        header_data, body = gaxfile.parse(content)
+    except ValueError:
+        # Old format: single YAML doc with labels key
+        doc = yaml.safe_load(content)
+        labels = doc.get("labels", []) if doc else []
+        return LabelHeader(), labels
 
-    header = LabelHeader()
-
-    if content.startswith("---\n"):
-        parts = content.split("---\n", 2)
-        if len(parts) >= 3:
-            header_data = yaml.safe_load(parts[1]) or {}
-            header.pulled = header_data.get("pulled", "")
-            labels = yaml.safe_load(parts[2]) or []
-            return header, labels
-
-    # Old format: single YAML doc with labels key
-    doc = yaml.safe_load(content)
-    labels = doc.get("labels", []) if doc else []
+    header = LabelHeader(pulled=header_data.get("pulled", ""))
+    labels = yaml.safe_load(body) or []
     return header, labels
 
 
@@ -131,22 +123,17 @@ def format_labels_file(header: LabelHeader, labels: list[dict]) -> str:
         "content-type": "application/yaml",
         "pulled": header.pulled,
     }
+    body = yaml.dump(
+        labels, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
 
-    parts = [
-        "# Gmail Labels\n",
-        "# Visibility: visible (show|hide|unread), show_in_list (show|hide)\n",
-        "# Rename: add 'rename_from: OldName'\n",
-        "# Delete: remove from list, use --delete flag\n",
-        "---\n",
-        yaml.dump(
-            file_header, default_flow_style=False, allow_unicode=True, sort_keys=False
-        ),
-        "---\n",
-        yaml.dump(
-            labels, default_flow_style=False, allow_unicode=True, sort_keys=False
-        ),
-    ]
-    return "".join(parts)
+    comments = (
+        "# Gmail Labels\n"
+        "# Visibility: visible (show|hide|unread), show_in_list (show|hide)\n"
+        "# Rename: add 'rename_from: OldName'\n"
+        "# Delete: remove from list, use --delete flag\n"
+    )
+    return comments + gaxfile.format(file_header, body)
 
 
 # =============================================================================

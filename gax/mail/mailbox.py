@@ -34,6 +34,7 @@ from typing import Any
 
 from googleapiclient.discovery import build
 
+from .. import gaxfile
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -149,43 +150,25 @@ def _write_gax_file(path: Path, query: str, limit: int, thread_data: list[dict])
 
 def _parse_gax_header(path: Path) -> dict:
     """Parse YAML header from .gax.md file to get query and limit."""
-    header = {"query": None, "limit": 50}
-    with open(path) as f:
-        content = f.read()
-
-    if not content.startswith("---\n"):
-        return header
-
-    header_end = content.find("\n---\n", 4)
-    if header_end == -1:
-        return header
-
-    header_text = content[4:header_end]
-    for line in header_text.split("\n"):
-        if line.startswith("query:"):
-            header["query"] = line.split(":", 1)[1].strip()
-        elif line.startswith("limit:"):
-            try:
-                header["limit"] = int(line.split(":", 1)[1].strip())
-            except ValueError:
-                pass
-
-    return header
+    content = path.read_text(encoding="utf-8")
+    try:
+        headers, _ = gaxfile.parse(content)
+    except ValueError:
+        return {"query": None, "limit": 50}
+    return {
+        "query": headers.get("query"),
+        "limit": int(headers.get("limit", 50)),
+    }
 
 
 def _parse_gax_content(path: Path) -> str:
     """Extract TSV content from .gax.md file (skip YAML header)."""
-    with open(path) as f:
-        content = f.read()
-
-    if not content.startswith("---\n"):
+    content = path.read_text(encoding="utf-8")
+    try:
+        _, body = gaxfile.parse(content)
+    except ValueError:
         return content
-
-    header_end = content.find("\n---\n", 4)
-    if header_end == -1:
-        return content
-
-    return content[header_end + 5 :]
+    return body
 
 
 # =============================================================================

@@ -39,6 +39,7 @@ from typing import Any
 import yaml
 from googleapiclient.discovery import build
 
+from .. import gaxfile
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
 
@@ -73,18 +74,7 @@ def parse_form_file(file_path: Path) -> tuple[FormHeader, str]:
         Tuple of (FormHeader, body_content)
     """
     content = file_path.read_text(encoding="utf-8")
-
-    if not content.startswith("---"):
-        raise ValueError("Invalid .form.gax.md file: missing YAML header")
-
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        raise ValueError("Invalid .form.gax.md file: malformed header")
-
-    header_yaml = parts[1].strip()
-    body_content = parts[2].strip()
-
-    h = yaml.safe_load(header_yaml)
+    h, body = gaxfile.parse(content)
 
     header = FormHeader(
         id=h.get("id", ""),
@@ -94,7 +84,7 @@ def parse_form_file(file_path: Path) -> tuple[FormHeader, str]:
         content_type=h.get("content-type", "text/markdown"),
     )
 
-    return header, body_content
+    return header, body.strip()
 
 
 def parse_form_body(body: str) -> dict:
@@ -121,11 +111,7 @@ def format_form_file(header: FormHeader, body_str: str) -> str:
 
     h["content-type"] = header.content_type
 
-    header_yaml = yaml.dump(
-        h, default_flow_style=False, allow_unicode=True, sort_keys=False
-    )
-
-    return f"---\n{header_yaml}---\n{body_str}"
+    return gaxfile.format(h, body_str)
 
 
 # =============================================================================
