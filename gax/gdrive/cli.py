@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, success
+from ..ui import handle_errors, success, operation
 from .. import docs
 from . import File
 
@@ -32,7 +32,8 @@ def file_clone(url_or_id, output):
         gax file clone https://drive.google.com/file/d/abc123/view
         gax file clone abc123 -o report.pdf
     """
-    path = File.from_url_or_id(url_or_id).clone(output=output)
+    with operation("Cloning file"):
+        path = File.from_url_or_id(url_or_id).clone(output=output)
     success(f"Created: {path}")
 
 
@@ -41,23 +42,27 @@ def file_clone(url_or_id, output):
 @click.option(
     "-o", "--output", type=click.Path(path_type=Path), help="Output folder path"
 )
-@click.option("-R", "--recursive", is_flag=True, help="Recurse into subfolders")
+@click.option("--shallow", is_flag=True, help="Don't recurse into subfolders")
 @handle_errors
-def file_checkout(url_or_id, output, recursive):
+def file_checkout(url_or_id, output, shallow):
     """Checkout a Google Drive folder to a local directory.
 
-    Downloads all files. Google Workspace files (Docs, Sheets, Forms)
-    are cloned via their native gax resource.
+    Downloads all files recursively (use --shallow to skip subfolders).
+    Google Workspace files (Docs, Sheets, Forms) are cloned via their
+    native gax resource.
 
     \b
     Examples:
         gax file checkout https://drive.google.com/drive/folders/abc123
         gax file checkout abc123 -o my_folder
-        gax file checkout abc123 -R
+        gax file checkout abc123 --shallow
     """
     from .gdrive import Folder
 
-    path = Folder.from_url_or_id(url_or_id).checkout(output=output, recursive=recursive)
+    with operation("Checking out folder"):
+        path = Folder.from_url_or_id(url_or_id).checkout(
+            output=output, recursive=not shallow
+        )
     success(f"Checked out: {path}")
 
 
@@ -73,7 +78,8 @@ def file_pull(file_path):
 
         gax file pull report.pdf
     """
-    File(path=file_path).pull()
+    with operation("Pulling file"):
+        File(path=file_path).pull()
     success(f"Updated: {file_path}")
 
 
