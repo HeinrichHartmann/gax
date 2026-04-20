@@ -43,8 +43,9 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
-from .auth import get_authenticated_credentials
-from .resource import Resource
+from ..gaxfile import GaxFile, format_single
+from ..auth import get_authenticated_credentials
+from ..resource import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -75,43 +76,26 @@ class ContactsHeader:
 
 def parse_contacts_file(path: Path) -> tuple[ContactsHeader, str]:
     """Parse a contacts file into header and body."""
-    content = path.read_text(encoding="utf-8")
-
-    if not content.startswith("---"):
-        raise ValueError("File must start with YAML header (---)")
-
-    end = content.find("\n---\n", 4)
-    if end == -1:
-        raise ValueError("Could not find end of YAML header")
-
-    header_text = content[4:end]
-    fields = {}
-    for line in header_text.split("\n"):
-        if ":" in line:
-            key, value = line.split(":", 1)
-            fields[key.strip()] = value.strip()
+    gf = GaxFile.from_path(path, multipart=False)
 
     header = ContactsHeader(
-        format=fields.get("format", "md"),
-        count=int(fields.get("count", "0")),
-        pulled=fields.get("pulled", ""),
+        format=gf.headers.get("format", "md"),
+        count=int(gf.headers.get("count", 0)),
+        pulled=gf.headers.get("pulled", ""),
     )
 
-    body = content[end + 5 :]  # Skip closing --- and newline
-    return header, body
+    return header, gf.body
 
 
 def format_contacts_file(header: ContactsHeader, body: str) -> str:
     """Format a contacts header and body as file content."""
-    lines = [
-        "---",
-        "type: gax/contacts",
-        f"format: {header.format}",
-        f"pulled: {header.pulled}",
-        f"count: {header.count}",
-        "---",
-    ]
-    return "\n".join(lines) + "\n" + body + "\n"
+    h = {
+        "type": "gax/contacts",
+        "format": header.format,
+        "pulled": header.pulled,
+        "count": header.count,
+    }
+    return format_single(h, body + "\n")
 
 
 def parse_jsonl_body(body: str) -> list[dict]:
@@ -568,14 +552,45 @@ def format_diff_summary(
 
 
 # =============================================================================
-# Resource class — the public interface for cli.py.
+# Resource classes — the public interface for cli.py.
 # =============================================================================
 
 
+class Contact(Resource):
+    """A single Google Contact (.contact.gax.yaml file)."""
+
+    name = "contact"
+    FILE_TYPE = "gax/contact"
+    FILE_EXTENSIONS = (".contact.gax.yaml",)
+
+    def pull(self, **kw) -> None:
+        """Pull latest contact data from Google."""
+        content = self.path.read_text(encoding="utf-8")
+        local = yaml_to_contact(content)
+        rn = local.get("resourceName", "")
+        if not rn:
+            raise ValueError("Contact has no resourceName")
+
+        raw_contacts, groups = fetch_contacts()
+        for raw_c in raw_contacts:
+            if raw_c.get("resourceName") == rn:
+                updated = api_to_contact(raw_c, groups)
+                self.path.write_text(contact_to_yaml(updated), encoding="utf-8")
+                return
+        raise ValueError(f"Contact {rn} not found remotely")
+
+
 class Contacts(Resource):
-    """Google Contacts resource."""
+    """Google Contacts resource.
+
+    Constructed via from_file(path).
+    Operations use instance state (self.path).
+    """
 
     name = "contacts"
+    FILE_TYPE = "gax/contacts"
+    FILE_EXTENSIONS = (".contacts.gax.md",)
+    CHECKOUT_TYPE = "gax/contacts-checkout"
 
     def _fetch_and_normalize(self, *, service=None):
         """Fetch contacts from API and normalize. Returns (normalized, groups)."""
@@ -584,7 +599,7 @@ class Contacts(Resource):
         return normalized, groups
 
     def clone(
-        self, url: str = "", output: Path | None = None, *, fmt: str = "md", **kw
+        self, output: Path | None = None, *, fmt: str = "md", **kw
     ) -> Path:
         """Clone all contacts to a local file."""
         logger.info("Fetching contacts...")
@@ -612,9 +627,13 @@ class Contacts(Resource):
         logger.info(f"Contacts: {len(normalized)}")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest contacts from Google."""
-        header, _ = parse_contacts_file(path)
+        if self.path.is_dir():
+            self._pull_checkout()
+            return
+
+        header, _ = parse_contacts_file(self.path)
 
         logger.info("Fetching contacts...")
         normalized, _ = self._fetch_and_normalize()
@@ -630,12 +649,15 @@ class Contacts(Resource):
             pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         content = format_contacts_file(new_header, body)
-        path.write_text(content, encoding="utf-8")
+        self.path.write_text(content, encoding="utf-8")
         logger.info(f"Contacts: {len(normalized)}")
 
-    def diff(self, path: Path, **kw) -> str | None:
-        """Preview changes between local JSONL and remote contacts."""
-        header, body = parse_contacts_file(path)
+    def diff(self, **kw) -> str | None:
+        """Preview changes between local and remote contacts."""
+        if self.path.is_dir():
+            return self._diff_checkout()
+
+        header, body = parse_contacts_file(self.path)
         if header.format != "jsonl":
             raise ValueError("diff/push only works with JSONL format")
 
@@ -647,9 +669,13 @@ class Contacts(Resource):
         creates, updates, deletes = compare_contacts(local_contacts, remote_contacts)
         return format_diff_summary(creates, updates, deletes) or None
 
-    def push(self, path: Path, **kw) -> None:
-        """Push local JSONL contacts to Google. Unconditional."""
-        header, body = parse_contacts_file(path)
+    def push(self, **kw) -> None:
+        """Push local contacts to Google. Unconditional."""
+        if self.path.is_dir():
+            self._push_checkout()
+            return
+
+        header, body = parse_contacts_file(self.path)
         if header.format != "jsonl":
             raise ValueError("push only works with JSONL format")
 
@@ -718,8 +744,9 @@ class Contacts(Resource):
         logger.info(f"Contacts: {cloned} cloned, {skipped} skipped")
         return cloned, skipped
 
-    def pull_checkout(self, folder: Path, **kw) -> None:
+    def _pull_checkout(self) -> None:
         """Pull latest contacts into checkout folder, updating/adding/removing files."""
+        folder = self.path
         logger.info("Fetching contacts...")
         normalized, _ = self._fetch_and_normalize()
         remote_by_id = {
@@ -776,9 +803,9 @@ class Contacts(Resource):
             f"{len(local_files) - sum(1 for rn in local_files if rn in remote_by_id)} removed"
         )
 
-    def diff_checkout(self, folder: Path, **kw) -> str | None:
+    def _diff_checkout(self) -> str | None:
         """Preview changes between checkout folder and remote contacts."""
-        local_contacts = self._read_checkout_contacts(folder)
+        local_contacts = self._read_checkout_contacts(self.path)
 
         logger.info("Fetching remote contacts...")
         remote_contacts, _ = self._fetch_and_normalize()
@@ -786,9 +813,9 @@ class Contacts(Resource):
         creates, updates, deletes = compare_contacts(local_contacts, remote_contacts)
         return format_diff_summary(creates, updates, deletes) or None
 
-    def push_checkout(self, folder: Path, **kw) -> None:
+    def _push_checkout(self) -> None:
         """Push checkout folder contacts to Google."""
-        local_contacts = self._read_checkout_contacts(folder)
+        local_contacts = self._read_checkout_contacts(self.path)
         self._push_contacts(local_contacts)
 
     # ── Private helpers ──────────────────────────────────────────────────
@@ -857,3 +884,7 @@ class Contacts(Resource):
             f"Applied: {len(creates)} created, {len(updates)} updated, "
             f"{len(deletes)} deleted"
         )
+
+
+Resource.register(Contact)
+Resource.register(Contacts)

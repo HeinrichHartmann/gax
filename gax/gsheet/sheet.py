@@ -42,15 +42,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
+import gspread.exceptions
 import pandas as pd
 import yaml
 
 from ..resource import Resource
 from ..formats import get_format
-from ..multipart import Section, format_multipart, parse_multipart
+from ..gaxfile import Section, format_multipart, parse_multipart
 from ..ui import operation
 from .client import GSheetClient
-from .frontmatter import SheetConfig, parse_file, write_file, format_content
+from .frontmatter import SheetConfig, parse_file, parse_content, write_file, format_content
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +324,7 @@ def create_push_plan(
 
         try:
             remote_df = client.read(spreadsheet_id, config.tab)
-        except Exception:
+        except gspread.exceptions.WorksheetNotFound:
             changes.append(
                 TabChange(
                     tab_name=config.tab,
@@ -356,7 +357,7 @@ def create_push_plan(
         try:
             remote_df = client.read(spreadsheet_id, tab_name)
             remote_rows = len(remote_df)
-        except Exception:
+        except gspread.exceptions.WorksheetNotFound:
             remote_rows = 0
 
         changes.append(
@@ -444,11 +445,33 @@ def _safe_filename(name: str) -> str:
 
 
 class SheetTab(Resource):
-    """A single Google Sheets tab (.tab.sheet.gax.md file)."""
+    """A single Google Sheets tab (.tab.sheet.gax.md file).
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "sheet-tab"
+    URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
+    FILE_EXTENSIONS = (".sheet.gax.md",)
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    @classmethod
+    def from_file(cls, path: Path) -> "SheetTab":
+        """Construct from a .sheet.gax.md file."""
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            raise ValueError(f"Cannot read: {path}")
+        if content.startswith("---"):
+            try:
+                config, _ = parse_content(content)
+                if config.spreadsheet_id and config.tab:
+                    return cls(path=path)
+            except Exception:
+                pass
+        raise ValueError(f"Not a sheet-tab file: {path}")
+
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a single tab to a .sheet.gax.md file.
 
         Keyword args:
@@ -458,7 +481,7 @@ class SheetTab(Resource):
         tab_name = kw.get("tab_name")
         fmt = kw.get("fmt", "md")
 
-        spreadsheet_id = _extract_spreadsheet_id(url)
+        spreadsheet_id = _extract_spreadsheet_id(self.url)
         client = GSheetClient()
         info = client.get_spreadsheet_info(spreadsheet_id)
         title = info["title"]
@@ -476,7 +499,7 @@ class SheetTab(Resource):
             spreadsheet_id=spreadsheet_id,
             tab=tab_name,
             format=fmt,
-            url=url,
+            url=self.url,
         )
 
         content = format_content(config, data)
@@ -493,20 +516,30 @@ class SheetTab(Resource):
         file_path.write_text(content, encoding="utf-8")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Refresh a single-tab file from remote."""
-        logger.info(f"Pulling: {path.name}")
-        pull_single_tab(path)
+        logger.info(f"Pulling: {self.path.name}")
+        pull_single_tab(self.path)
 
-    def push(self, path: Path, **kw) -> None:
+    def diff(self, **kw) -> str | None:
+        """Preview push — shows row count summary."""
+        from .frontmatter import parse_file
+        from ..formats import get_format as get_fmt
+
+        config, data = parse_file(self.path)
+        fmt = get_fmt(config.format)
+        df = fmt.read(data)
+        return f"Push {len(df)} rows from {self.path} to {config.tab}"
+
+    def push(self, **kw) -> None:
         """Push a single-tab file to remote.
 
         Keyword args:
             with_formulas: interpret formulas (default: False)
         """
         with_formulas = kw.get("with_formulas", False)
-        logger.info(f"Pushing: {path.name}")
-        push_single_tab(path, with_formulas=with_formulas)
+        logger.info(f"Pushing: {self.path.name}")
+        push_single_tab(self.path, with_formulas=with_formulas)
 
 
 # =============================================================================
@@ -515,11 +548,18 @@ class SheetTab(Resource):
 
 
 class Sheet(Resource):
-    """A Google Spreadsheet (.sheet.gax.md.d/ folder)."""
+    """A Google Spreadsheet (.sheet.gax.md.d/ folder).
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "sheet"
+    URL_PATTERN = r"docs\.google\.com/spreadsheets/d/"
+    CHECKOUT_TYPE = "gax/sheet-checkout"
+    HAS_GENERIC_DISPATCH = False
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Checkout all tabs into a folder.
 
         Keyword args:
@@ -527,7 +567,7 @@ class Sheet(Resource):
         """
         fmt = kw.get("fmt", "md")
 
-        spreadsheet_id = _extract_spreadsheet_id(url)
+        spreadsheet_id = _extract_spreadsheet_id(self.url)
         client = GSheetClient()
         info = client.get_spreadsheet_info(spreadsheet_id)
 
@@ -544,7 +584,7 @@ class Sheet(Resource):
         metadata = {
             "type": "gax/sheet-checkout",
             "spreadsheet_id": spreadsheet_id,
-            "url": url,
+            "url": self.url,
             "title": title,
             "format": fmt,
             "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -582,7 +622,7 @@ class Sheet(Resource):
                     spreadsheet_id=spreadsheet_id,
                     tab=tab_name,
                     format=fmt,
-                    url=url,
+                    url=self.url,
                 )
 
                 content = format_content(config, data)
@@ -594,11 +634,15 @@ class Sheet(Resource):
         logger.info(f"Checked out: {created}, Skipped: {skipped}")
         return folder
 
-    def pull(self, path: Path, **kw) -> None:
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Checkout all tabs into a folder."""
+        return self.clone(output=output, **kw)
+
+    def pull(self, **kw) -> None:
         """Pull all tabs in a checkout folder."""
-        metadata_path = path / ".gax.yaml"
+        metadata_path = self.path / ".gax.yaml"
         if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
+            raise ValueError(f"No .gax.yaml found in {self.path}")
 
         with open(metadata_path) as f:
             metadata = yaml.safe_load(f)
@@ -628,7 +672,7 @@ class Sheet(Resource):
         with operation("Pulling tabs", total=len(info["tabs"])) as op:
             for tab_info in info["tabs"]:
                 tab_name = tab_info["title"]
-                file_path = path / f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
+                file_path = self.path / f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
 
                 logger.info(f"Pulling tab: {tab_name}")
                 df = client.read(spreadsheet_id, tab_name)
@@ -648,30 +692,30 @@ class Sheet(Resource):
 
                 op.advance()
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local folder and remote.
 
         Returns a human-readable summary, or None if no changes.
         """
-        plan = create_push_plan(path)
+        plan = create_push_plan(self.path)
         if not plan.has_changes:
             return None
         return plan.format_summary()
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push all changed tabs in a checkout folder.
 
         Keyword args:
             with_formulas: interpret formulas (default: False)
         """
         with_formulas = kw.get("with_formulas", False)
-        plan = create_push_plan(path)
+        plan = create_push_plan(self.path)
         if plan.has_changes:
             apply_push_plan(plan, with_formulas=with_formulas)
 
-    def tab_list(self, url: str, out) -> None:
+    def tab_list(self, out) -> None:
         """Write tab listing to file descriptor."""
-        spreadsheet_id = _extract_spreadsheet_id(url)
+        spreadsheet_id = _extract_spreadsheet_id(self.url)
         client = GSheetClient()
         info = client.get_spreadsheet_info(spreadsheet_id)
 
@@ -679,3 +723,7 @@ class Sheet(Resource):
         out.write("index\tid\ttitle\n")
         for t in info["tabs"]:
             out.write(f"{t['index']}\t{t['id']}\t{t['title']}\n")
+
+
+Resource.register(SheetTab)
+Resource.register(Sheet)

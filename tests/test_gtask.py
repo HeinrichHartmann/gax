@@ -4,7 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from gax.gtask import (
+from gax.gtask import Task
+from gax.gtask.gtask import (
     TaskItem,
     api_to_task,
     task_to_api_body,
@@ -13,7 +14,6 @@ from gax.gtask import (
     format_tasks_md,
     parse_tasks_md,
     format_tasks_yaml,
-    Task,
 )
 
 
@@ -349,12 +349,12 @@ class TestTaskDiff:
         path = tmp_path / "new.task.gax.yaml"
         path.write_text(task_to_yaml(task))
 
-        result = Task().diff(path)
+        result = Task(path=path).diff()
         assert "New task" in result
         assert "2026-04-21" in result
 
-    @patch("gax.gtask.get_task")
-    @patch("gax.gtask.api_to_task")
+    @patch("gax.gtask.gtask.get_task")
+    @patch("gax.gtask.gtask.api_to_task")
     def test_no_changes_returns_none(self, mock_api_to, mock_get, tmp_path):
         """Identical local/remote returns None."""
         task = TaskItem("A", "TL1", "", "", "Same", "needsAction", due="2026-04-21")
@@ -366,11 +366,11 @@ class TestTaskDiff:
             "A", "TL1", "", "", "Same", "needsAction", due="2026-04-21"
         )
 
-        result = Task().diff(path)
+        result = Task(path=path).diff()
         assert result is None
 
-    @patch("gax.gtask.get_task")
-    @patch("gax.gtask.api_to_task")
+    @patch("gax.gtask.gtask.get_task")
+    @patch("gax.gtask.gtask.api_to_task")
     def test_field_changes(self, mock_api_to, mock_get, tmp_path):
         """Changed fields shown in diff output."""
         local = TaskItem(
@@ -384,7 +384,7 @@ class TestTaskDiff:
             "A", "TL1", "", "", "Original title", "needsAction", due="2026-04-21"
         )
 
-        result = Task().diff(path)
+        result = Task(path=path).diff()
         assert "title:" in result
         assert "status:" in result
         assert "due:" in result
@@ -398,14 +398,14 @@ class TestTaskDiff:
 class TestTaskDone:
     """Tests for Task.done() shortcut."""
 
-    @patch("gax.gtask.update_task")
+    @patch("gax.gtask.gtask.update_task")
     def test_done_sets_completed_and_pushes(self, mock_update, tmp_path):
         """done() sets status=completed, writes file, calls API."""
         task = TaskItem("A", "TL1", "", "", "My task", "needsAction")
         path = tmp_path / "task.task.gax.yaml"
         path.write_text(task_to_yaml(task))
 
-        title = Task().done(path)
+        title = Task(path=path).done()
 
         assert title == "My task"
 

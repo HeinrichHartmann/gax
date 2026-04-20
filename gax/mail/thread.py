@@ -28,8 +28,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import multipart
-from .. import draft as draft_module
+from .. import gaxfile
+from . import draft as draft_module
 from ..resource import Resource
 
 from .shared import (
@@ -84,9 +84,30 @@ def _pull_single_file(file_path: Path) -> tuple[int, int]:
 
 
 class Thread(Resource):
-    """Gmail thread resource."""
+    """Gmail thread resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "thread"
+    FILE_TYPE = "gax/mail"
+    FILE_EXTENSIONS = (".mail.gax.md",)
+
+    @classmethod
+    def from_url(cls, url: str) -> "Thread":
+        """Construct from a Gmail thread URL."""
+        # Must NOT match draft URLs
+        if re.search(r"mail\.google\.com/mail/", url) and "#drafts/" not in url:
+            return cls(url=url)
+        raise ValueError(f"Not a Gmail thread URL: {url}")
+
+    @classmethod
+    def from_id(cls, id_value: str) -> "Thread":
+        """Construct from a Gmail thread ID."""
+        if _is_thread_id(id_value):
+            return cls(url=id_value)
+        raise ValueError(f"Not a Gmail thread ID: {id_value}")
 
     def _output_path(self, subject: str, thread_id: str, output: Path | None) -> Path:
         if output:
@@ -95,15 +116,15 @@ class Thread(Resource):
         safe = re.sub(r"\s+", "_", safe)[:50]
         return Path(f"{safe}_{thread_id}.mail.gax.md")
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a single email thread to a local file. Returns path created."""
-        if not _is_thread_id(url):
+        if not _is_thread_id(self.url):
             raise ValueError(
-                f"'{url}' is not a valid thread ID or URL.\n"
+                f"'{self.url}' is not a valid thread ID or URL.\n"
                 "For bulk cloning, use: gax mailbox fetch -q QUERY"
             )
 
-        thread_id = extract_thread_id(url)
+        thread_id = extract_thread_id(self.url)
         logger.info(f"Fetching thread: {thread_id}")
 
         sections = pull_thread(thread_id)
@@ -125,8 +146,9 @@ class Thread(Resource):
 
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest messages for a .mail.gax.md file or folder."""
+        path = self.path
         if path.is_dir():
             files = list(path.glob("*.mail.gax.md"))
             if not files:
@@ -156,12 +178,13 @@ class Thread(Resource):
             old_count, new_count = _pull_single_file(path)
             logger.info(f"Messages: {old_count} -> {new_count}")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Compare local file with remote thread.
 
         Returns human-readable summary of differences, or None if unchanged.
         For threads this means checking for new messages in the conversation.
         """
+        path = self.path
         content = path.read_text(encoding="utf-8")
 
         match = re.search(r"^thread_id:\s*(\S+)", content, re.MULTILINE)
@@ -169,7 +192,7 @@ class Thread(Resource):
             raise ValueError(f"No thread_id found in {path}")
         thread_id = match.group(1)
 
-        local_sections = multipart.parse_multipart(content)
+        local_sections = gaxfile.parse_multipart(content)
         remote_sections = pull_thread(thread_id)
 
         local_count = len(local_sections)
@@ -201,13 +224,11 @@ class Thread(Resource):
 
         return "\n".join(lines).rstrip() if lines else None
 
-    def reply(self, file_or_url: str, output: Path | None = None) -> Path:
+    def reply(self, output: Path | None = None) -> Path:
         """Create a reply draft from a thread file or URL. Returns path created."""
-        file_path = Path(file_or_url)
-
-        if file_path.exists() and file_path.name.endswith(".gax.md"):
-            content = file_path.read_text(encoding="utf-8")
-            sections = multipart.parse_multipart(content)
+        if self.path and self.path.exists() and self.path.name.endswith(".gax.md"):
+            content = self.path.read_text(encoding="utf-8")
+            sections = gaxfile.parse_multipart(content)
             if not sections:
                 raise ValueError("No sections found in file")
 
@@ -217,7 +238,7 @@ class Thread(Resource):
             from_addr = last_section.headers.get("from", "")
             in_reply_to = ""
         else:
-            thread_id = extract_thread_id(file_or_url)
+            thread_id = extract_thread_id(self.url)
             logger.info(f"Fetching thread: {thread_id}")
 
             sections = pull_thread(thread_id)
@@ -255,3 +276,6 @@ class Thread(Resource):
         out_path.write_text(draft_content, encoding="utf-8")
         logger.info(f"To: {from_addr}, Subject: {subject}")
         return out_path
+
+
+Resource.register(Thread)

@@ -22,7 +22,7 @@ import pytest
 from googleapiclient.discovery import build
 
 from gax.auth import get_authenticated_credentials, is_authenticated
-from gax.gdoc import create_tab_with_content, pull_single_tab
+from gax.gdoc.doc import create_tab_with_content, pull_single_tab
 
 
 # =============================================================================

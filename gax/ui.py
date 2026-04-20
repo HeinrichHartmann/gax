@@ -18,10 +18,13 @@ Usage:
     success("Done!")  # Explicit output still works
 """
 
+import functools
 import logging
+import sys
 from contextlib import contextmanager
 from typing import Optional
 
+import click
 from rich.console import Console
 from rich.progress import (
     Progress,
@@ -164,3 +167,32 @@ def warning(msg: str) -> None:
 def confirm(question: str, default: bool = False) -> bool:
     """Ask yes/no question."""
     return Confirm.ask(question, default=default)
+
+
+def handle_errors(fn):
+    """Decorator: catch exceptions, print error, exit 1."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            error(str(e))
+            sys.exit(1)
+
+    return wrapper
+
+
+def confirm_and_push(resource, *, yes=False, **kw):
+    """Standard diff -> confirm -> push flow."""
+    diff_text = resource.diff(**kw)
+    if diff_text is None:
+        click.echo("No changes to push.")
+        return
+    if not yes:
+        click.echo(diff_text)
+        if not click.confirm("Push these changes?"):
+            click.echo("Cancelled.")
+            return
+    resource.push(**kw)
+    success("Pushed successfully.")

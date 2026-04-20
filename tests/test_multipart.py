@@ -1,6 +1,6 @@
 """Tests for multipart YAML-markdown format parsing and formatting."""
 
-from gax.multipart import (
+from gax.gaxfile import (
     Section,
     needs_content_length,
     format_section,
@@ -326,11 +326,16 @@ Content here
 
         sections = parse_multipart(text)
 
-        assert sections[0].content == "Content here"
+        assert sections[0].content == "Content here\n\n\n"
 
 
 class TestRoundTrip:
-    """Tests for format -> parse round-trip consistency."""
+    """Tests for format -> parse round-trip consistency.
+
+    format_section() ensures content ends with a newline, so parsed
+    content includes a trailing newline. This is by design — the
+    parser preserves content exactly as written.
+    """
 
     def test_simple_roundtrip(self):
         """Simple content should round-trip correctly."""
@@ -351,7 +356,7 @@ class TestRoundTrip:
         assert len(parsed) == 1
         assert parsed[0].headers["title"] == "Test"
         assert parsed[0].headers["source"] == "https://example.com"
-        assert parsed[0].content == "Hello world"
+        assert parsed[0].content == "Hello world\n"
 
     def test_dangerous_content_roundtrip(self):
         """Content with --- should round-trip correctly."""
@@ -362,7 +367,7 @@ class TestRoundTrip:
         parsed = parse_multipart(formatted)
 
         assert len(parsed) == 1
-        assert parsed[0].content == dangerous
+        assert parsed[0].content == dangerous + "\n"
 
     def test_multi_section_roundtrip(self):
         """Multiple sections should round-trip correctly."""
@@ -378,9 +383,9 @@ class TestRoundTrip:
         parsed = parse_multipart(formatted)
 
         assert len(parsed) == 3
-        assert parsed[0].content == "First"
-        assert parsed[1].content == "Second\n---\nDanger"
-        assert parsed[2].content == "Third"
+        assert parsed[0].content == "First\n"
+        assert parsed[1].content == "Second\n---\nDanger\n"
+        assert parsed[2].content == "Third\n"
 
     def test_unicode_roundtrip(self):
         """Unicode content should round-trip correctly."""

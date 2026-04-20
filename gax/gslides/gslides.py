@@ -32,9 +32,9 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
-from .auth import get_authenticated_credentials
-from .multipart import Section, format_section, parse_multipart
-from .resource import Resource
+from ..auth import get_authenticated_credentials
+from ..gaxfile import Section, format_section, parse_multipart
+from ..resource import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -240,13 +240,17 @@ class Slide(Resource):
     """Single Google Slide — pull/push/diff a .slides.gax.md file.
 
     Not used standalone (no clone). Created by Presentation.clone().
+    Constructed via from_file(path). No from_url (slides are not
+    individually URL-addressable).
     """
 
     name = "slides"
+    FILE_TYPE = "gax/slides"
+    FILE_EXTENSIONS = (".slides.gax.md",)
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Refresh a single slide file from remote."""
-        section = _parse_slide_file(path)
+        section = _parse_slide_file(self.path)
         headers = section.headers
 
         source = headers.get("source", "")
@@ -255,7 +259,7 @@ class Slide(Resource):
         fmt = headers.get("format", "md")
 
         if not slide_id:
-            raise ValueError(f"No slide_id in {path}")
+            raise ValueError(f"No slide_id in {self.path}")
 
         pres = _get_presentation(presentation_id)
         for i, slide in enumerate(pres.get("slides", [])):
@@ -267,15 +271,15 @@ class Slide(Resource):
                     i,
                     fmt,
                 )
-                path.write_text(content, encoding="utf-8")
-                logger.info(f"Updated: {path.name}")
+                self.path.write_text(content, encoding="utf-8")
+                logger.info(f"Updated: {self.path.name}")
                 return
 
         raise ValueError(f"Slide {slide_id} not found in presentation")
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push a single slide to remote. JSON format only."""
-        section = _parse_slide_file(path)
+        section = _parse_slide_file(self.path)
         headers = section.headers
         fmt = headers.get("format", "md")
 
@@ -291,7 +295,7 @@ class Slide(Resource):
         slide_id = headers.get("slide_id", "")
 
         if not slide_id:
-            raise ValueError(f"No slide_id in {path}")
+            raise ValueError(f"No slide_id in {self.path}")
 
         # Parse local JSON
         local_slide = json.loads(section.content)
@@ -345,13 +349,13 @@ class Slide(Resource):
                 presentationId=presentation_id,
                 body={"requests": requests},
             ).execute()
-            logger.info(f"Pushed: {path.name}")
+            logger.info(f"Pushed: {self.path.name}")
         else:
-            logger.info(f"No text changes to push: {path.name}")
+            logger.info(f"No text changes to push: {self.path.name}")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Diff a single slide file against remote."""
-        section = _parse_slide_file(path)
+        section = _parse_slide_file(self.path)
         headers = section.headers
         local_content = section.content
 
@@ -361,7 +365,7 @@ class Slide(Resource):
         fmt = headers.get("format", "md")
 
         if not slide_id:
-            raise ValueError(f"No slide_id in {path}")
+            raise ValueError(f"No slide_id in {self.path}")
 
         pres = _get_presentation(presentation_id)
         for i, slide in enumerate(pres.get("slides", [])):
@@ -372,8 +376,8 @@ class Slide(Resource):
                 diff_lines = unified_diff(
                     remote_content.splitlines(keepends=True),
                     local_content.splitlines(keepends=True),
-                    fromfile=f"{path.name} (remote)",
-                    tofile=f"{path.name} (local)",
+                    fromfile=f"{self.path.name} (remote)",
+                    tofile=f"{self.path.name} (local)",
                 )
                 return "".join(diff_lines)
 
@@ -385,23 +389,26 @@ class Slide(Resource):
 # =============================================================================
 
 
-class Presentation:
+class Presentation(Resource):
     """Google Slides presentation — checkout/pull/push a slide deck.
 
-    Not a Resource subclass (collection manager, like Doc and Sheet).
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
     """
 
     name = "presentation"
+    URL_PATTERN = r"docs\.google\.com/presentation/d/"
+    CHECKOUT_TYPE = "gax/slides-checkout"
 
     def clone(
         self,
-        url: str,
         output: Path | None = None,
         *,
         fmt: str = "md",
+        **kw,
     ) -> Path:
         """Checkout a presentation to a local directory. Returns path created."""
-        presentation_id = extract_presentation_id(url)
+        presentation_id = extract_presentation_id(self.url)
         source_url = f"https://docs.google.com/presentation/d/{presentation_id}/edit"
 
         logger.info(f"Fetching: {presentation_id}")
@@ -447,11 +454,15 @@ class Presentation:
         logger.info(f"Checked out {len(slides)} slides to {folder}")
         return folder
 
-    def pull(self, path: Path, **kw) -> None:
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Checkout a presentation to a folder."""
+        return self.clone(output=output, **kw)
+
+    def pull(self, **kw) -> None:
         """Pull all slides in a checkout folder."""
-        metadata_path = path / ".gax.yaml"
+        metadata_path = self.path / ".gax.yaml"
         if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
+            raise ValueError(f"No .gax.yaml found in {self.path}")
 
         with open(metadata_path) as f:
             metadata = yaml.safe_load(f)
@@ -486,7 +497,7 @@ class Presentation:
         for i, slide in enumerate(slides):
             slide_title = _get_slide_title(slide)
             filename = f"{i:02d}_{_safe_filename(slide_title)}.slides.gax.md"
-            file_path = path / filename
+            file_path = self.path / filename
             written_files.add(filename)
 
             content = _format_slide_file(title, url, slide, i, fmt)
@@ -494,16 +505,16 @@ class Presentation:
             logger.info(f"Updated: {filename}")
 
         # Remove stale slide files (deleted or reordered slides)
-        for existing in path.glob("*.slides.gax.md"):
+        for existing in self.path.glob("*.slides.gax.md"):
             if existing.name not in written_files:
                 existing.unlink()
                 logger.info(f"Removed: {existing.name}")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Diff all slides in a checkout folder against remote."""
-        metadata_path = path / ".gax.yaml"
+        metadata_path = self.path / ".gax.yaml"
         if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
+            raise ValueError(f"No .gax.yaml found in {self.path}")
 
         with open(metadata_path) as f:
             metadata = yaml.safe_load(f)
@@ -520,7 +531,7 @@ class Presentation:
         all_diffs = []
         slide_by_id = {s.get("objectId"): s for s in slides}
 
-        for slide_file in sorted(path.glob("*.slides.gax.md")):
+        for slide_file in sorted(self.path.glob("*.slides.gax.md")):
             section = _parse_slide_file(slide_file)
             slide_id = section.headers.get("slide_id", "")
             local_content = section.content
@@ -542,11 +553,11 @@ class Presentation:
 
         return "\n".join(all_diffs) if all_diffs else None
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push all slides. JSON format only."""
-        metadata_path = path / ".gax.yaml"
+        metadata_path = self.path / ".gax.yaml"
         if not metadata_path.exists():
-            raise ValueError(f"No .gax.yaml found in {path}")
+            raise ValueError(f"No .gax.yaml found in {self.path}")
 
         with open(metadata_path) as f:
             metadata = yaml.safe_load(f)
@@ -559,6 +570,9 @@ class Presentation:
                 "  gax slides checkout <url> --format json"
             )
 
-        slide_obj = Slide()
-        for slide_file in sorted(path.glob("*.slides.gax.md")):
-            slide_obj.push(slide_file)
+        for slide_file in sorted(self.path.glob("*.slides.gax.md")):
+            Slide.from_file(slide_file).push()
+
+
+Resource.register(Slide)
+Resource.register(Presentation)

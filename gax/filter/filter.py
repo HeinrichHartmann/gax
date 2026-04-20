@@ -45,8 +45,9 @@ from pathlib import Path
 import yaml
 from googleapiclient.discovery import build
 
-from .auth import get_authenticated_credentials
-from .resource import Resource
+from ..gaxfile import parse as gaxfile_parse, format_single
+from ..auth import get_authenticated_credentials
+from ..resource import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -72,25 +73,16 @@ def parse_filters_file(path: Path) -> tuple[FilterHeader, list[dict]]:
     """Parse a filters file into header and filter list."""
     content = path.read_text(encoding="utf-8")
 
-    # Skip comment lines at start
-    lines = content.split("\n")
-    while lines and lines[0].startswith("#"):
-        lines = lines[1:]
-    content = "\n".join(lines)
+    try:
+        header_data, body = gaxfile_parse(content)
+    except ValueError:
+        # Old format: single YAML doc with filters key
+        doc = yaml.safe_load(content)
+        filters = doc.get("filters", []) if doc else []
+        return FilterHeader(), filters
 
-    header = FilterHeader()
-
-    if content.startswith("---\n"):
-        parts = content.split("---\n", 2)
-        if len(parts) >= 3:
-            header_data = yaml.safe_load(parts[1]) or {}
-            header.pulled = header_data.get("pulled", "")
-            filters = yaml.safe_load(parts[2]) or []
-            return header, filters
-
-    # Old format: single YAML doc with filters key
-    doc = yaml.safe_load(content)
-    filters = doc.get("filters", []) if doc else []
+    header = FilterHeader(pulled=header_data.get("pulled", ""))
+    filters = yaml.safe_load(body) or []
     return header, filters
 
 
@@ -101,18 +93,10 @@ def format_filters_file(header: FilterHeader, filters: list[dict]) -> str:
         "content-type": "application/yaml",
         "pulled": header.pulled,
     }
-
-    parts = [
-        "---\n",
-        yaml.dump(
-            file_header, default_flow_style=False, allow_unicode=True, sort_keys=False
-        ),
-        "---\n",
-        yaml.dump(
-            filters, default_flow_style=False, allow_unicode=True, sort_keys=False
-        ),
-    ]
-    return "".join(parts)
+    body = yaml.dump(
+        filters, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
+    return format_single(file_header, body)
 
 
 # =============================================================================
@@ -431,11 +415,16 @@ def format_diff_summary(changes: dict) -> str:
 
 
 class Filter(Resource):
-    """Gmail filter resource."""
+    """Gmail filter resource.
+
+    Constructed via from_file(path) or directly with Filter(path=...).
+    Account-level resource (no URL dispatch).
+    """
 
     name = "filter"
+    FILE_TYPE = "gax/filters"
 
-    def clone(self, url: str = "", output: Path | None = None, **kw) -> Path:
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone Gmail filters to a local file."""
         service = get_service()
         filters = self._fetch_normalized(service=service)
@@ -453,7 +442,7 @@ class Filter(Resource):
         logger.info(f"Filters: {len(filters)}")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest filters from Gmail."""
         service = get_service()
         filters = self._fetch_normalized(service=service)
@@ -462,7 +451,7 @@ class Filter(Resource):
             pulled=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         content = format_filters_file(header, filters)
-        path.write_text(content, encoding="utf-8")
+        self.path.write_text(content, encoding="utf-8")
         logger.info(f"Filters: {len(filters)}")
 
     def list(self, out, **kw) -> None:
@@ -508,9 +497,9 @@ class Filter(Resource):
                 f"\t{labels_str}\t{actions_str}\n"
             )
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local filters file and Gmail."""
-        _, desired_filters = parse_filters_file(path)
+        _, desired_filters = parse_filters_file(self.path)
 
         service = get_service()
         current_filters = fetch_filters(service=service)
@@ -520,9 +509,9 @@ class Filter(Resource):
         summary = format_diff_summary(changes)
         return summary or None
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push local filter changes to Gmail. Unconditional."""
-        _, desired_filters = parse_filters_file(path)
+        _, desired_filters = parse_filters_file(self.path)
 
         service = get_service()
         current_filters = fetch_filters(service=service)
@@ -581,3 +570,6 @@ class Filter(Resource):
             }
             filters.append(entry)
         return filters
+
+
+Resource.register(Filter)

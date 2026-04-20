@@ -47,8 +47,8 @@ from typing import Any
 import yaml
 from googleapiclient.discovery import build
 
-from .auth import get_authenticated_credentials
-from .resource import Resource
+from ..auth import get_authenticated_credentials
+from ..resource import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -481,10 +481,17 @@ def _safe_filename(title: str) -> str:
 # =============================================================================
 
 
-class TaskList:
-    """Task list collection resource."""
+class TaskList(Resource):
+    """Task list collection resource.
+
+    Constructed via from_file(path). No from_url (task list URLs are not standard).
+    Operations use instance state (self.path).
+    """
 
     name = "task-list"
+    FILE_TYPE = "gax/task-list"
+    FILE_EXTENSIONS = (".tasks.gax.md", ".tasks.gax.yaml")
+    CHECKOUT_TYPE = "gax/task-checkout"
 
     def lists(self, out) -> None:
         """List available task lists to file descriptor."""
@@ -534,9 +541,17 @@ class TaskList:
         logger.info(f"Tasks: {len(items)}")
         return file_path
 
-    def pull(self, path: Path) -> None:
-        """Pull latest tasks to existing list file."""
-        content = path.read_text()
+    def pull(self, **kw) -> None:
+        """Pull latest tasks to existing list file or checkout folder."""
+        if self.path.is_dir():
+            for task_file in sorted(self.path.glob("*.task.gax.yaml")):
+                try:
+                    Task.from_file(task_file).pull()
+                except ValueError:
+                    pass
+            return
+
+        content = self.path.read_text()
         if not content.startswith("---"):
             raise ValueError("File must start with YAML header (---)")
 
@@ -552,7 +567,7 @@ class TaskList:
         api_tasks = list_tasks(tl_id, show_completed=show_all)
         items = [api_to_task(t, tl_id) for t in api_tasks]
 
-        self._write_list_file(path, tl_id, tl_title, items, fmt, show_all)
+        self._write_list_file(self.path, tl_id, tl_title, items, fmt, show_all)
 
     def checkout(
         self,
@@ -668,9 +683,15 @@ class TaskList:
 
 
 class Task(Resource):
-    """Google Tasks single-task resource."""
+    """Google Tasks single-task resource.
+
+    Constructed via from_file(path). No from_url (task URLs are not standard).
+    Operations use instance state (self.path).
+    """
 
     name = "task"
+    FILE_TYPE = "gax/task"
+    FILE_EXTENSIONS = (".task.gax.yaml",)
 
     def clone(
         self,
@@ -715,9 +736,9 @@ class Task(Resource):
         file_path.write_text(content)
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest task data from API."""
-        content = path.read_text()
+        content = self.path.read_text()
         local = yaml_to_task(content)
 
         if not local.id:
@@ -727,15 +748,15 @@ class Task(Resource):
         updated = api_to_task(api_task, local.tasklist)
 
         new_content = task_to_yaml(updated)
-        path.write_text(new_content)
+        self.path.write_text(new_content)
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local task file and remote.
 
         Returns a human-readable diff string, or None if no changes.
         For new tasks (no id), returns a summary of what will be created.
         """
-        content = path.read_text()
+        content = self.path.read_text()
         local = yaml_to_task(content)
 
         if not local.id:
@@ -755,15 +776,15 @@ class Task(Resource):
         ]
 
         lines = []
-        for name, local_val, remote_val in fields:
+        for fname, local_val, remote_val in fields:
             if local_val != remote_val:
-                lines.append(f"{name}: {remote_val} -> {local_val}")
+                lines.append(f"{fname}: {remote_val} -> {local_val}")
 
         return "\n".join(lines) if lines else None
 
-    def push(self, path: Path, **kw) -> str:
+    def push(self, **kw) -> str:
         """Push local task changes to API. Returns task title."""
-        content = path.read_text()
+        content = self.path.read_text()
         local = yaml_to_task(content)
 
         body = task_to_api_body(local)
@@ -785,20 +806,20 @@ class Task(Resource):
             local.synced = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             new_content = task_to_yaml(local)
-            path.write_text(new_content)
+            self.path.write_text(new_content)
 
             return local.title
 
-    def done(self, path: Path) -> str:
+    def done(self) -> str:
         """Mark task as completed and push. Returns task title."""
-        content = path.read_text()
+        content = self.path.read_text()
         local = yaml_to_task(content)
 
         local.status = "completed"
         local.completed = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Write updated status locally
-        path.write_text(task_to_yaml(local))
+        self.path.write_text(task_to_yaml(local))
 
         # Push to API
         if local.id:
@@ -807,14 +828,18 @@ class Task(Resource):
 
         return local.title
 
-    def delete(self, path: Path) -> str:
+    def delete(self) -> str:
         """Delete task from Google and local file. Returns task title."""
-        content = path.read_text()
+        content = self.path.read_text()
         local = yaml_to_task(content)
 
         if not local.id:
             raise ValueError("Task has no ID (not on Google)")
 
         delete_task(local.tasklist, local.id)
-        path.unlink()
+        self.path.unlink()
         return local.title
+
+
+Resource.register(TaskList)
+Resource.register(Task)

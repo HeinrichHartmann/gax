@@ -1,6 +1,6 @@
 """Unit tests for filter module -- no API calls needed."""
 
-from gax.filter import (
+from gax.filter.filter import (
     api_to_criteria,
     criteria_to_api,
     api_to_action,

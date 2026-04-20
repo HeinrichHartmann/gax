@@ -7,9 +7,10 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from gax.gsheet import GSheetClient, pull, push, clone_all, pull_all
+from gax.gsheet.client import GSheetClient
+from gax.gsheet.sheet import pull_single_tab as pull, push_single_tab as push, clone_all, pull_all
 from gax.gsheet.frontmatter import SheetConfig, format_content
-from gax.multipart import parse_multipart, format_multipart
+from gax.gaxfile import parse_multipart, format_multipart
 
 
 def make_mock_gc(sheet_data: list[list[str]]):
@@ -381,7 +382,7 @@ class TestPullAll:
     def test_pull_all_tabs(self, tmp_path):
         """Test pulling updates for all tabs in a multipart file."""
         # Create initial multipart file
-        from gax.multipart import Section
+        from gax.gaxfile import Section
 
         sections = [
             Section(

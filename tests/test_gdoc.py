@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from gax.gdoc import (
+from gax.gdoc.doc import (
     pull_doc,
     format_multipart,
     format_section,

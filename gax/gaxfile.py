@@ -1,13 +1,43 @@
-"""Multipart YAML-markdown format parser and formatter.
+"""Shared file format for .gax.md files.
 
-Implements the multipart format from ADR 002:
-- Multiple sections separated by YAML headers
-- Each section has metadata header + markdown body
-- Optional content-length for bodies containing '---'
+Two formats:
+
+  Single-section (contacts, labels, filters, forms, sheets, mailbox):
+
+      # optional comments
+      ---
+      type: gax/something
+      key: value
+      ---
+      body content
+
+  Multipart (mail threads, drafts, docs):
+
+      ---
+      type: gax/mail
+      thread_id: abc123
+      ---
+      first section body
+      ---
+      type: gax/mail
+      from: alice@example.com
+      ---
+      second section body
+
+Read path: GaxFile.from_path(path) -> .headers, .body, .sections
+Write path: format(), format_section(), format_multipart()
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+
+# =============================================================================
+# Data types
+# =============================================================================
 
 
 @dataclass
@@ -16,6 +46,144 @@ class Section:
 
     headers: dict[str, Any] = field(default_factory=dict)
     content: str = ""
+
+
+# =============================================================================
+# GaxFile — read path
+# =============================================================================
+
+
+class GaxFile:
+    """A parsed .gax.md file (single or multipart)."""
+
+    def __init__(self, sections: list[Section]):
+        self.sections = sections
+
+    @classmethod
+    def from_path(cls, path: Path, *, multipart: bool = True) -> GaxFile:
+        """Read and parse a .gax.md file.
+
+        Args:
+            multipart: If True (default), parse as multipart (multiple
+                sections). If False, parse as single-section (body may
+                contain --- without being split).
+
+        Raises ValueError if the file contains no valid sections.
+        """
+        content = path.read_text(encoding="utf-8")
+        if multipart:
+            return cls(parse_multipart(content))
+        headers, body = parse(content)
+        return cls([Section(headers=headers, content=body)])
+
+    @property
+    def headers(self) -> dict[str, Any]:
+        """Headers of the first (or only) section."""
+        return self.sections[0].headers
+
+    @property
+    def body(self) -> str:
+        """Body content of the first (or only) section."""
+        return self.sections[0].content
+
+
+# =============================================================================
+# Single-section parsing (simple key: value frontmatter)
+# =============================================================================
+
+
+def parse(content: str) -> tuple[dict[str, str], str]:
+    """Parse YAML frontmatter and body from a single-section .gax.md file.
+
+    Handles optional leading comment lines (# ...) and CRLF line endings.
+
+    All header values are returned as strings to preserve round-trip
+    fidelity (yaml.safe_load would coerce timestamps into datetime objects).
+
+    Returns:
+        (headers_dict, body_str)
+
+    Raises:
+        ValueError: if no valid frontmatter found.
+    """
+    # Normalize CRLF to LF
+    content = content.replace("\r\n", "\n")
+
+    # Skip leading comment lines
+    lines = content.split("\n")
+    start = 0
+    while start < len(lines) and lines[start].startswith("#"):
+        start += 1
+
+    rest = "\n".join(lines[start:])
+
+    if not rest.startswith("---\n"):
+        raise ValueError("File must start with YAML frontmatter (---)")
+
+    # Find closing ---
+    end = rest.find("\n---\n", 4)
+    if end == -1:
+        # Check if --- is at end of file
+        if rest.endswith("\n---"):
+            end = len(rest) - 3
+        else:
+            raise ValueError("No closing --- found for frontmatter")
+
+    header_text = rest[4:end]
+    body = rest[end + 5:]  # skip \n---\n
+
+    # Parse as simple key: value pairs to preserve string types.
+    # yaml.safe_load would coerce "2026-01-01T00:00:00Z" into datetime.
+    headers: dict[str, str] = {}
+    for line in header_text.split("\n"):
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip()] = value.strip()
+
+    return headers, body
+
+
+def format_single(headers: dict, body: str) -> str:
+    """Format headers and body as a single-section .gax.md file.
+
+    Uses simple key: value formatting (not yaml.dump) to preserve
+    round-trip fidelity with parse().
+    """
+    lines = ["---"]
+    for key, value in headers.items():
+        lines.append(f"{key}: {value}")
+    lines.append("---")
+    return "\n".join(lines) + "\n" + body
+
+
+def read_type(path: Path) -> str | None:
+    """Fast extraction of the type: field without full YAML parse.
+
+    Used by Resource.from_file() dispatch. Scans the first 20 lines
+    for a type: field, handling both simple YAML and --- delimited formats.
+    """
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    for line in content.split("\n")[:20]:
+        if line == "---":
+            continue
+        if line.startswith("type:"):
+            return line.split(":", 1)[1].strip()
+        if line.startswith("#"):
+            continue
+        # Stop at empty line or second --- (end of header)
+        if not line or (line.startswith("---") and line.strip() == "---"):
+            break
+
+    return None
+
+
+# =============================================================================
+# Multipart parsing (multiple sections with content-length support)
+# =============================================================================
 
 
 def needs_content_length(content: str) -> bool:
@@ -138,8 +306,10 @@ def parse_multipart(text: str) -> list[Section]:
     - Multiple sections with YAML headers
     - content-length for precise byte counting
     - Sections without content-length (scan for next ---)
+
+    Raises ValueError if no valid sections are found.
     """
-    sections = []
+    sections: list[Section] = []
     pos = 0
     text_bytes = text.encode("utf-8")
 
@@ -185,8 +355,11 @@ def parse_multipart(text: str) -> list[Section]:
         sections.append(
             Section(
                 headers=headers,
-                content=content.strip(),
+                content=content,
             )
         )
+
+    if not sections:
+        raise ValueError("No valid sections found (expected ---\\nheaders\\n---\\nbody)")
 
     return sections

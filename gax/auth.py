@@ -130,7 +130,7 @@ def login() -> Credentials:
             "Please download OAuth client credentials from Google Cloud Console:\n"
             "  1. Go to https://console.cloud.google.com/apis/credentials\n"
             "  2. Create OAuth 2.0 Client ID (Desktop app)\n"
-            "  3. Download JSON and save to: {CREDENTIALS_FILE}"
+            f"  3. Download JSON and save to: {CREDENTIALS_FILE}"
         )
 
     flow = InstalledAppFlow.from_client_secrets_file(

@@ -45,8 +45,8 @@ from typing import Any, Optional
 import yaml
 from googleapiclient.discovery import build
 
-from .auth import get_authenticated_credentials
-from .resource import Resource
+from ..auth import get_authenticated_credentials
+from ..resource import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -688,9 +688,15 @@ def parse_cal_list_file(path: Path) -> tuple[datetime, datetime, str | None, boo
 
 
 class Cal(Resource):
-    """Google Calendar resource."""
+    """Google Calendar resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "cal"
+    URL_PATTERN = r"calendar\.google\.com/calendar/"
+    FILE_TYPE = "gax/cal-list"
 
     def calendars(self, out, **kw) -> None:
         """List available calendars to file descriptor."""
@@ -702,7 +708,6 @@ class Cal(Resource):
 
     def clone(
         self,
-        url: str = "",
         output: Path | None = None,
         *,
         calendar: str | None = None,
@@ -732,8 +737,9 @@ class Cal(Resource):
         logger.info(f"Events: {count}")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest events to existing list file."""
+        path = self.path
         time_min, time_max, calendar, verbose = parse_cal_list_file(path)
 
         # Recover original header values for re-serialization
@@ -752,15 +758,15 @@ class Cal(Resource):
 
     def checkout(
         self,
-        *,
         output: Path | None = None,
+        *,
         calendar: str | None = None,
         days: int | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
         **kw,
-    ) -> tuple[int, int]:
-        """Checkout events as individual files. Returns (cloned, skipped)."""
+    ) -> Path:
+        """Checkout events as individual files into a folder."""
         time_min, time_max = resolve_time_range(days, date_from, date_to)
         folder = output or Path("calendar.cal.gax.md.d")
         folder.mkdir(parents=True, exist_ok=True)
@@ -771,7 +777,8 @@ class Cal(Resource):
         )
 
         if not events:
-            return 0, 0
+            logger.info("Checked out: 0, Skipped: 0")
+            return folder
 
         # Get existing event IDs in output folder
         existing_ids = set()
@@ -817,7 +824,8 @@ class Cal(Resource):
             cloned += 1
             logger.info(f"Writing {filename}")
 
-        return cloned, skipped
+        logger.info(f"Checked out: {cloned}, Skipped: {skipped}")
+        return folder
 
     def _clone_events_to_file(
         self,
@@ -878,15 +886,30 @@ class Cal(Resource):
 
 
 class Event(Resource):
-    """Google Calendar event resource."""
+    """Google Calendar event resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "event"
+    URL_PATTERN = r"calendar\.google\.com/calendar/"
+    FILE_TYPE = "gax/cal"
+    FILE_EXTENSIONS = (".cal.gax.md",)
+    HAS_GENERIC_DISPATCH = False
+
+    @classmethod
+    def from_id(cls, id_value: str) -> "Event":
+        """Construct from a Calendar event ID."""
+        if re.fullmatch(r"[A-Za-z0-9_-]+", id_value):
+            return cls(url=id_value)
+        raise ValueError(f"Not a Calendar event ID: {id_value}")
 
     def clone(
-        self, url: str, output: Path | None = None, *, calendar: str = "primary", **kw
+        self, output: Path | None = None, *, calendar: str = "primary", **kw
     ) -> Path:
         """Clone a single event to a .cal.gax.md file."""
-        event_id, cal_id = extract_event_id(url)
+        event_id, cal_id = extract_event_id(self.url)
         if calendar != "primary":
             cal_id = calendar
 
@@ -936,9 +959,9 @@ class Event(Resource):
         file_path.write_text(content)
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest event data from API."""
-        content = path.read_text()
+        content = self.path.read_text()
         local_event = yaml_to_event(content)
 
         if not local_event.id:
@@ -957,15 +980,15 @@ class Event(Resource):
             api_event, local_event.calendar, cal_name
         )
         new_content = event_to_yaml(updated_event)
-        path.write_text(new_content)
+        self.path.write_text(new_content)
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local event file and remote.
 
         Returns a human-readable diff string, or None if no changes.
         For new events (no id), returns a summary of what will be created.
         """
-        content = path.read_text()
+        content = self.path.read_text()
         local = yaml_to_event(content)
 
         if not local.id:
@@ -994,9 +1017,9 @@ class Event(Resource):
 
         return "\n".join(lines) if lines else None
 
-    def push(self, path: Path, **kw) -> str:
+    def push(self, **kw) -> str:
         """Push local event changes to API. Returns result URL."""
-        content = path.read_text()
+        content = self.path.read_text()
         local_event = yaml_to_event(content)
 
         if local_event.id:
@@ -1015,18 +1038,22 @@ class Event(Resource):
             )
 
             new_content = event_to_yaml(local_event)
-            path.write_text(new_content)
+            self.path.write_text(new_content)
 
             return result.get("htmlLink", "")
 
-    def delete(self, path: Path) -> str:
+    def delete(self) -> str:
         """Delete event from calendar and local file. Returns event title."""
-        content = path.read_text()
+        content = self.path.read_text()
         local_event = yaml_to_event(content)
 
         if not local_event.id:
             raise ValueError("Event has no ID (not on calendar)")
 
         delete_event(local_event.id, local_event.calendar)
-        path.unlink()
+        self.path.unlink()
         return local_event.title
+
+
+Resource.register(Cal)
+Resource.register(Event)

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from gax.mail import (
+from gax.mail.shared import (
     MailSection,
     pull_thread,
     format_multipart,
@@ -305,7 +305,7 @@ class TestThreadClone:
         sections = [_make_section()]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
 
-        path = Thread().clone(THREAD_ID, output=tmp_path / "test.mail.gax.md")
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
 
         assert path.exists()
         content = path.read_text()
@@ -324,7 +324,7 @@ class TestThreadClone:
         ]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
 
-        path = Thread().clone(THREAD_ID, output=tmp_path / "test.mail.gax.md")
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
         content = path.read_text()
 
         assert "section: 1" in content
@@ -334,7 +334,7 @@ class TestThreadClone:
 
     def test_rejects_search_query(self):
         with pytest.raises(ValueError, match="not a valid"):
-            Thread().clone("from:alice subject:hello")
+            Thread(url="from:alice subject:hello").clone()
 
     def test_existing_file_raises(self, tmp_path, monkeypatch):
         output = tmp_path / "test.mail.gax.md"
@@ -343,14 +343,14 @@ class TestThreadClone:
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
 
         with pytest.raises(ValueError, match="already exists"):
-            Thread().clone(THREAD_ID, output=output)
+            Thread(url=THREAD_ID).clone(output=output)
 
     def test_default_filename(self, tmp_path, monkeypatch):
         sections = [_make_section(subject="Weekly Sync")]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
         monkeypatch.chdir(tmp_path)
 
-        path = Thread().clone(THREAD_ID)
+        path = Thread(url=THREAD_ID).clone()
         assert "Weekly_Sync" in path.name
         assert path.name.endswith(".mail.gax.md")
 
@@ -365,7 +365,7 @@ class TestThreadPull:
         # Clone initial version
         sections = [_make_section(section_num=1, content="Original message")]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
-        path = Thread().clone(THREAD_ID, output=tmp_path / "test.mail.gax.md")
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
 
         # Pull with new reply
         updated = [
@@ -373,7 +373,7 @@ class TestThreadPull:
             _make_section(section_num=2, content="New reply"),
         ]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: updated)
-        Thread().pull(path)
+        Thread(path=path).pull()
 
         content = path.read_text()
         assert "section: 2" in content
@@ -385,10 +385,10 @@ class TestThreadPull:
         s2 = [_make_section(thread_id=THREAD_ID_2, content="Thread two")]
 
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: s1)
-        Thread().clone(THREAD_ID, output=tmp_path / "t1.mail.gax.md")
+        Thread(url=THREAD_ID).clone(output=tmp_path / "t1.mail.gax.md")
 
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: s2)
-        Thread().clone(THREAD_ID_2, output=tmp_path / "t2.mail.gax.md")
+        Thread(url=THREAD_ID_2).clone(output=tmp_path / "t2.mail.gax.md")
 
         # Pull whole directory (both get refreshed)
         def mock_pull(tid):
@@ -401,13 +401,13 @@ class TestThreadPull:
             return s2
 
         monkeypatch.setattr("gax.mail.thread.pull_thread", mock_pull)
-        Thread().pull(tmp_path)
+        Thread(path=tmp_path).pull()
 
         assert "T1 reply" in (tmp_path / "t1.mail.gax.md").read_text()
 
     def test_pull_no_files_raises(self, tmp_path):
         with pytest.raises(ValueError, match="No .mail.gax.md files"):
-            Thread().pull(tmp_path)
+            Thread(path=tmp_path).pull()
 
 
 # =============================================================================
@@ -419,16 +419,16 @@ class TestThreadDiff:
     def test_no_changes(self, tmp_path, monkeypatch):
         sections = [_make_section(content="Hello there.")]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
-        path = Thread().clone(THREAD_ID, output=tmp_path / "test.mail.gax.md")
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
 
         # Same sections on remote
-        result = Thread().diff(path)
+        result = Thread(path=path).diff()
         assert result is None
 
     def test_new_messages(self, tmp_path, monkeypatch):
         sections = [_make_section(section_num=1)]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
-        path = Thread().clone(THREAD_ID, output=tmp_path / "test.mail.gax.md")
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
 
         # Remote now has a second message
         updated = sections + [
@@ -441,7 +441,7 @@ class TestThreadDiff:
         ]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: updated)
 
-        result = Thread().diff(path)
+        result = Thread(path=path).diff()
         assert result is not None
         assert "1 -> 2" in result
         assert "Bob" in result
@@ -450,7 +450,7 @@ class TestThreadDiff:
     def test_multiple_new_messages(self, tmp_path, monkeypatch):
         sections = [_make_section(section_num=1)]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
-        path = Thread().clone(THREAD_ID, output=tmp_path / "test.mail.gax.md")
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
 
         updated = sections + [
             _make_section(section_num=2, from_addr="Bob <bob@test.com>"),
@@ -458,7 +458,7 @@ class TestThreadDiff:
         ]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: updated)
 
-        result = Thread().diff(path)
+        result = Thread(path=path).diff()
         assert "1 -> 3" in result
         assert "Bob" in result
         assert "Carol" in result
@@ -466,26 +466,26 @@ class TestThreadDiff:
     def test_content_changed(self, tmp_path, monkeypatch):
         sections = [_make_section(content="Original text.")]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
-        path = Thread().clone(THREAD_ID, output=tmp_path / "test.mail.gax.md")
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
 
         # Same count but different content
         changed = [_make_section(content="Edited text.")]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: changed)
 
-        result = Thread().diff(path)
+        result = Thread(path=path).diff()
         assert result is not None
         assert "content changed" in result
 
     def test_long_preview_truncated(self, tmp_path, monkeypatch):
         sections = [_make_section(section_num=1)]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
-        path = Thread().clone(THREAD_ID, output=tmp_path / "test.mail.gax.md")
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
 
         long_body = "x" * 300
         updated = sections + [_make_section(section_num=2, content=long_body)]
         monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: updated)
 
-        result = Thread().diff(path)
+        result = Thread(path=path).diff()
         assert "..." in result
         assert len(result) < 400
 
@@ -493,4 +493,4 @@ class TestThreadDiff:
         file = tmp_path / "bad.mail.gax.md"
         file.write_text("---\ntype: gax/mail\n---\nno thread id here\n")
         with pytest.raises(ValueError, match="No thread_id"):
-            Thread().diff(file)
+            Thread(path=file).diff()

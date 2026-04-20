@@ -39,8 +39,9 @@ from typing import Any
 import yaml
 from googleapiclient.discovery import build
 
-from .auth import get_authenticated_credentials
-from .resource import Resource
+from ..gaxfile import GaxFile, format_single
+from ..auth import get_authenticated_credentials
+from ..resource import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -72,19 +73,8 @@ def parse_form_file(file_path: Path) -> tuple[FormHeader, str]:
     Returns:
         Tuple of (FormHeader, body_content)
     """
-    content = file_path.read_text(encoding="utf-8")
-
-    if not content.startswith("---"):
-        raise ValueError("Invalid .form.gax.md file: missing YAML header")
-
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        raise ValueError("Invalid .form.gax.md file: malformed header")
-
-    header_yaml = parts[1].strip()
-    body_content = parts[2].strip()
-
-    h = yaml.safe_load(header_yaml)
+    gf = GaxFile.from_path(file_path, multipart=False)
+    h = gf.headers
 
     header = FormHeader(
         id=h.get("id", ""),
@@ -94,7 +84,7 @@ def parse_form_file(file_path: Path) -> tuple[FormHeader, str]:
         content_type=h.get("content-type", "text/markdown"),
     )
 
-    return header, body_content
+    return header, gf.body.strip()
 
 
 def parse_form_body(body: str) -> dict:
@@ -121,11 +111,7 @@ def format_form_file(header: FormHeader, body_str: str) -> str:
 
     h["content-type"] = header.content_type
 
-    header_yaml = yaml.dump(
-        h, default_flow_style=False, allow_unicode=True, sort_keys=False
-    )
-
-    return f"---\n{header_yaml}---\n{body_str}"
+    return format_single(h, body_str)
 
 
 # =============================================================================
@@ -788,9 +774,16 @@ def _apply_changes(form_id: str, changes: dict, *, service=None) -> None:
 
 
 class Form(Resource):
-    """Google Forms resource."""
+    """Google Forms resource.
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "form"
+    URL_PATTERN = r"docs\.google\.com/forms/d/"
+    FILE_TYPE = "gax/form"
+    FILE_EXTENSIONS = (".form.gax.md",)
 
     def _output_path(self, title: str, output: Path | None) -> Path:
         if output:
@@ -799,11 +792,11 @@ class Form(Resource):
         safe = re.sub(r"\s+", "_", safe)
         return Path(f"{safe}.form.gax.md")
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a Google Form to a local .form.gax.md file."""
-        fmt = kw.get("format", "md")
+        fmt = kw.get("fmt", kw.get("format", "md"))
 
-        form_id = extract_form_id(url)
+        form_id = extract_form_id(self.url)
         source_url = f"https://docs.google.com/forms/d/{form_id}/edit"
 
         logger.info(f"Fetching: {form_id}")
@@ -841,9 +834,9 @@ class Form(Resource):
         logger.info(f"Title: {doc_title}, Questions: {questions}")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Pull latest form definition from Google Forms."""
-        header, _ = parse_form_file(path)
+        header, _ = parse_form_file(self.path)
         form_id = _resolve_form_id(header)
         source_url = header.source or f"https://docs.google.com/forms/d/{form_id}/edit"
 
@@ -867,7 +860,7 @@ class Form(Resource):
         )
 
         content = format_form_file(new_header, body_str)
-        path.write_text(content, encoding="utf-8")
+        self.path.write_text(content, encoding="utf-8")
 
         items = form_data.get("items", [])
         questions = sum(
@@ -875,12 +868,12 @@ class Form(Resource):
         )
         logger.info(f"Questions: {questions}")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Compare local YAML form to remote. Returns plan summary or None.
 
         Only works with content-type: application/yaml files.
         """
-        header, body_content = parse_form_file(path)
+        header, body_content = parse_form_file(self.path)
 
         if header.content_type != "application/yaml":
             raise ValueError(
@@ -896,12 +889,12 @@ class Form(Resource):
         changes = _compute_changes(local_body, remote_form)
         return _format_changes_summary(changes)
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Apply form changes to Google Forms via batchUpdate.
 
         Only works with content-type: application/yaml files.
         """
-        header, body_content = parse_form_file(path)
+        header, body_content = parse_form_file(self.path)
 
         if header.content_type != "application/yaml":
             raise ValueError(
@@ -933,4 +926,7 @@ class Form(Resource):
         _apply_changes(form_id, changes)
 
         # Suggest pulling to sync local file with new IDs
-        logger.info(f"Run 'gax form pull {path}' to sync local file with new IDs")
+        logger.info(f"Run 'gax form pull {self.path}' to sync local file with new IDs")
+
+
+Resource.register(Form)

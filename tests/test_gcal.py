@@ -2,8 +2,8 @@
 
 from unittest.mock import patch
 
-from gax.gcal import (
-    Event,
+from gax.gcal import Event
+from gax.gcal.gcal import (
     CalendarEvent,
     Conference,
     api_event_to_dataclass,
@@ -425,13 +425,13 @@ class TestEventDiff:
         f = tmp_path / "new.cal.gax.md"
         f.write_text(event_to_yaml(event))
 
-        result = Event().diff(f)
+        result = Event(path=f).diff()
         assert result is not None
         assert "New event: Launch party" in result
         assert "2026-04-01T18:00:00Z" in result
 
-    @patch("gax.gcal.get_event")
-    @patch("gax.gcal.api_event_to_dataclass")
+    @patch("gax.gcal.gcal.get_event")
+    @patch("gax.gcal.gcal.api_event_to_dataclass")
     def test_no_changes_returns_none(self, mock_to_dc, mock_get, tmp_path):
         local = self._make_local_event()
         mock_get.return_value = {}
@@ -440,12 +440,12 @@ class TestEventDiff:
         f = tmp_path / "event.cal.gax.md"
         f.write_text(event_to_yaml(local))
 
-        result = Event().diff(f)
+        result = Event(path=f).diff()
         assert result is None
         mock_get.assert_called_once_with("evt123", "primary")
 
-    @patch("gax.gcal.get_event")
-    @patch("gax.gcal.api_event_to_dataclass")
+    @patch("gax.gcal.gcal.get_event")
+    @patch("gax.gcal.gcal.api_event_to_dataclass")
     def test_field_changes(self, mock_to_dc, mock_get, tmp_path):
         local = self._make_local_event(
             title="Renamed standup",
@@ -458,7 +458,7 @@ class TestEventDiff:
         f = tmp_path / "event.cal.gax.md"
         f.write_text(event_to_yaml(local))
 
-        result = Event().diff(f)
+        result = Event(path=f).diff()
         assert result is not None
         assert "title: Team standup -> Renamed standup" in result
         assert "location: Room 42 -> Room 99" in result

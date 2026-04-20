@@ -572,7 +572,7 @@ class TestImageE2E:
 def _check_calendar_access() -> bool:
     """Check if we have calendar API access (scope may need re-auth)."""
     try:
-        from gax.gcal import list_calendars
+        from gax.gcal.gcal import list_calendars
 
         list_calendars()
         return True
@@ -1035,7 +1035,7 @@ class TestContactsE2E:
             assert "format: jsonl" in content
 
             # Count original contacts
-            from gax.contacts import parse_contacts_file, parse_jsonl_body
+            from gax.contacts.contacts import parse_contacts_file, parse_jsonl_body
 
             header, body = parse_contacts_file(contacts_file)
             original_contacts = parse_jsonl_body(body)
@@ -1062,7 +1062,7 @@ class TestContactsE2E:
             original_contacts.append(new_contact)
 
             # Write back with new contact
-            from gax.contacts import format_jsonl, format_contacts_file, ContactsHeader
+            from gax.contacts.contacts import format_jsonl, format_contacts_file, ContactsHeader
 
             new_body = format_jsonl(original_contacts)
             new_header = ContactsHeader(
@@ -1181,7 +1181,7 @@ class TestLabelE2E:
             assert labels_file.exists()
 
             # Read and parse
-            from gax.label import parse_labels_file, format_labels_file
+            from gax.label.label import parse_labels_file, format_labels_file
 
             header, labels = parse_labels_file(labels_file)
             original_count = len(labels)
@@ -1285,7 +1285,7 @@ class TestFilterE2E:
             assert filters_file.exists()
 
             # Read and parse
-            from gax.filter import parse_filters_file, format_filters_file
+            from gax.filter.filter import parse_filters_file, format_filters_file
 
             header, filters = parse_filters_file(filters_file)
             original_count = len(filters)

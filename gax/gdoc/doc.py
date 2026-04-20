@@ -47,7 +47,7 @@ import yaml
 from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
-from .. import multipart
+from .. import gaxfile
 from .native_md import extract_images_to_store, inline_images_from_store
 from ..ui import operation
 from ..resource import Resource
@@ -115,7 +115,7 @@ class CommentReply:
 # =============================================================================
 
 
-def _doc_section_to_multipart(section: DocSection) -> multipart.Section:
+def _doc_section_to_multipart(section: DocSection) -> gaxfile.Section:
     """Convert DocSection to generic multipart Section."""
     headers = {
         "type": "gax/doc",
@@ -126,10 +126,10 @@ def _doc_section_to_multipart(section: DocSection) -> multipart.Section:
     }
     if section.section_type:
         headers["tab_type"] = section.section_type
-    return multipart.Section(headers=headers, content=section.content)
+    return gaxfile.Section(headers=headers, content=section.content)
 
 
-def _multipart_to_doc_section(section: multipart.Section) -> DocSection:
+def _multipart_to_doc_section(section: gaxfile.Section) -> DocSection:
     """Convert generic multipart Section to DocSection."""
     # Support both new (tab) and old (section/section_title) header names
     h = section.headers
@@ -148,18 +148,18 @@ def _multipart_to_doc_section(section: multipart.Section) -> DocSection:
 def format_section(section: DocSection) -> str:
     """Format a single section as YAML header + markdown body."""
     mp_section = _doc_section_to_multipart(section)
-    return multipart.format_section(mp_section.headers, mp_section.content)
+    return gaxfile.format_section(mp_section.headers, mp_section.content)
 
 
 def format_multipart(sections: list[DocSection]) -> str:
     """Assemble sections into multipart markdown string."""
     mp_sections = [_doc_section_to_multipart(s) for s in sections]
-    return multipart.format_multipart(mp_sections)
+    return gaxfile.format_multipart(mp_sections)
 
 
 def parse_multipart(text: str) -> list[DocSection]:
     """Parse multipart markdown into sections."""
-    mp_sections = multipart.parse_multipart(text)
+    mp_sections = gaxfile.parse_multipart(text)
     return [_multipart_to_doc_section(s) for s in mp_sections]
 
 
@@ -970,11 +970,18 @@ def _known_tab_files(path: Path, metadata: dict) -> list[Path]:
 
 
 class Tab(Resource):
-    """A single Google Docs tab (.doc.gax.md or .tab.gax.md file)."""
+    """A single Google Docs tab (.doc.gax.md or .tab.gax.md file).
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "doc-tab"
+    URL_PATTERN = r"docs\.google\.com/document/d/"
+    FILE_TYPE = "gax/doc"
+    FILE_EXTENSIONS = (".doc.gax.md", ".tab.gax.md")
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a single tab to a .doc.gax.md file.
 
         Keyword args:
@@ -985,7 +992,7 @@ class Tab(Resource):
         tab_name = kw.get("tab_name")
         with_comments = kw.get("with_comments", False)
 
-        document_id = extract_doc_id(url)
+        document_id = extract_doc_id(self.url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
         if tab_name:
@@ -1043,11 +1050,11 @@ class Tab(Resource):
         file_path.write_text(content, encoding="utf-8")
         return file_path
 
-    def pull(self, path: Path, **kw) -> None:
+    def pull(self, **kw) -> None:
         """Refresh a tab file from remote."""
         with_comments = kw.get("with_comments", False)
 
-        section = _parse_tab_file(path)
+        section = _parse_tab_file(self.path)
         source_url = section.source
         if not source_url:
             raise ValueError("No source URL found in file")
@@ -1055,7 +1062,7 @@ class Tab(Resource):
         document_id = extract_doc_id(source_url)
 
         # Check if this is a single-tab file or multipart
-        content = path.read_text(encoding="utf-8")
+        content = self.path.read_text(encoding="utf-8")
         sections = parse_multipart(content)
 
         if len(sections) == 1:
@@ -1076,14 +1083,14 @@ class Tab(Resource):
                 new_sections = _add_comments_to_sections(new_sections, document_id)
             new_content = format_multipart(new_sections)
 
-        path.write_text(new_content, encoding="utf-8")
+        self.path.write_text(new_content, encoding="utf-8")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Preview changes between local tab and remote.
 
         Returns unified diff string, or None if no changes.
         """
-        section = _parse_tab_file(path)
+        section = _parse_tab_file(self.path)
         source_url = section.source
         tab_name = section.section_title
 
@@ -1111,7 +1118,7 @@ class Tab(Resource):
 
         return "\n".join(line.rstrip("\n") for line in diff_lines)
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push local tab to remote.
 
         Keyword args:
@@ -1119,7 +1126,7 @@ class Tab(Resource):
         """
         use_patch = kw.get("use_patch", False)
 
-        section = _parse_tab_file(path)
+        section = _parse_tab_file(self.path)
         source_url = section.source
         tab_name = section.section_title
 
@@ -1145,13 +1152,20 @@ class Tab(Resource):
 
 
 class Doc(Resource):
-    """A Google Docs document (.doc.gax.md.d/ folder)."""
+    """A Google Docs document (.doc.gax.md.d/ folder).
+
+    Constructed via from_url(url) or from_file(path).
+    Operations use instance state (self.url, self.path).
+    """
 
     name = "doc"
+    URL_PATTERN = r"docs\.google\.com/document/d/"
+    CHECKOUT_TYPE = "gax/doc-checkout"
+    HAS_GENERIC_DISPATCH = False
 
-    def clone(self, url: str, output: Path | None = None, **kw) -> Path:
+    def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone all tabs into a folder (supports nested tabs)."""
-        document_id = extract_doc_id(url)
+        document_id = extract_doc_id(self.url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
         logger.info(f"Fetching: {document_id}")
@@ -1224,10 +1238,14 @@ class Doc(Resource):
         logger.info(f"Checked out: {created}, Skipped: {skipped}")
         return folder
 
-    def pull(self, path: Path, **kw) -> None:
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Checkout all tabs into a folder."""
+        return self.clone(output=output, **kw)
+
+    def pull(self, **kw) -> None:
         """Pull all tabs in a checkout folder (supports nested tabs)."""
-        metadata = _read_checkout_metadata(path)
-        metadata_path = path / ".gax.yaml"
+        metadata = _read_checkout_metadata(self.path)
+        metadata_path = self.path / ".gax.yaml"
 
         document_id = metadata["document_id"]
         url = metadata["url"]
@@ -1236,7 +1254,7 @@ class Doc(Resource):
         sections = pull_doc(document_id, url)
 
         # Compute filesystem paths based on tab nesting
-        tab_paths = _compute_tab_paths(sections, path)
+        tab_paths = _compute_tab_paths(sections, self.path)
 
         # Build tab tree for metadata
         tab_tree = []
@@ -1247,7 +1265,7 @@ class Doc(Resource):
                 {
                     "id": section.tab_id,
                     "title": section.section_title,
-                    "path": str(fpath.relative_to(path)),
+                    "path": str(fpath.relative_to(self.path)),
                     "depth": section.tab_depth,
                 }
             )
@@ -1275,39 +1293,37 @@ class Doc(Resource):
             file_path.parent.mkdir(parents=True, exist_ok=True)
             content = format_section(section)
             file_path.write_text(content, encoding="utf-8")
-            logger.info(f"Updated: {file_path.relative_to(path)}")
+            logger.info(f"Updated: {file_path.relative_to(self.path)}")
 
-    def diff(self, path: Path, **kw) -> str | None:
+    def diff(self, **kw) -> str | None:
         """Diff all tabs in a checkout folder against remote."""
-        metadata = _read_checkout_metadata(path)
+        metadata = _read_checkout_metadata(self.path)
 
         all_diffs = []
-        tab = Tab()
 
-        for tab_file in _known_tab_files(path, metadata):
-            tab_diff = tab.diff(tab_file)
+        for tab_file in _known_tab_files(self.path, metadata):
+            tab_diff = Tab.from_file(tab_file).diff()
             if tab_diff:
-                all_diffs.append(f"--- {tab_file.relative_to(path)} ---")
+                all_diffs.append(f"--- {tab_file.relative_to(self.path)} ---")
                 all_diffs.append(tab_diff)
 
         return "\n".join(all_diffs) if all_diffs else None
 
-    def push(self, path: Path, **kw) -> None:
+    def push(self, **kw) -> None:
         """Push all changed tabs in a checkout folder."""
-        metadata = _read_checkout_metadata(path)
+        metadata = _read_checkout_metadata(self.path)
 
-        tab = Tab()
-
-        for tab_file in _known_tab_files(path, metadata):
-            if tab.diff(tab_file) is not None:
-                logger.info(f"Pushing: {tab_file.relative_to(path)}")
-                tab.push(tab_file, **kw)
+        for tab_file in _known_tab_files(self.path, metadata):
+            t = Tab.from_file(tab_file)
+            if t.diff() is not None:
+                logger.info(f"Pushing: {tab_file.relative_to(self.path)}")
+                t.push(**kw)
 
     # Non-standard operations
 
-    def tab_list(self, url: str, out) -> None:
+    def tab_list(self, out) -> None:
         """Write tab listing to file descriptor."""
-        document_id = extract_doc_id(url)
+        document_id = extract_doc_id(self.url)
         info = get_tabs_list(document_id)
 
         out.write(f"# {info['title']}\n")
@@ -1316,12 +1332,12 @@ class Doc(Resource):
             indent = "  " * t.depth
             out.write(f"{t.index}\t{t.id}\t{indent}{t.title}\n")
 
-    def tab_import(self, url: str, file: Path, output: Path | None = None) -> Path:
+    def tab_import(self, file: Path, output: Path | None = None) -> Path:
         """Import a markdown file as a new tab in a document.
 
         Returns path to the tracking file created.
         """
-        document_id = extract_doc_id(url)
+        document_id = extract_doc_id(self.url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
         tab_name = file.stem
@@ -1359,3 +1375,7 @@ class Doc(Resource):
         tracking_content = format_section(section)
         tracking_path.write_text(tracking_content, encoding="utf-8")
         return tracking_path
+
+
+Resource.register(Tab)
+Resource.register(Doc)
