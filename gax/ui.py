@@ -45,7 +45,10 @@ _active_task: Optional[tuple] = None
 class ProgressHandler(logging.Handler):
     """Logging handler that feeds into active progress display.
 
-    When inside an operation() context, log messages update the spinner.
+    When inside an operation() context:
+      - INFO/DEBUG: update the spinner status line (ephemeral)
+      - WARNING/ERROR: print permanently above the spinner
+
     When outside, logs are silently ignored (not printed).
     """
 
@@ -53,21 +56,19 @@ class ProgressHandler(logging.Handler):
         global _active_task
 
         if _active_task is None:
-            # No active progress - swallow the log (silent by default)
             return
 
         msg = self.format(record)
         progress, task_id = _active_task
 
-        # Color based on level
-        level_colors = {
-            logging.DEBUG: "dim",
-            logging.INFO: "cyan",
-            logging.WARNING: "yellow",
-            logging.ERROR: "red",
-        }
-        color = level_colors.get(record.levelno, "white")
-        progress.update(task_id, description=f"[{color}]{msg}[/{color}]")
+        if record.levelno >= logging.WARNING:
+            # Warnings and errors print permanently above the spinner
+            color = "red" if record.levelno >= logging.ERROR else "yellow"
+            progress.console.print(f"[{color}]{msg}[/{color}]")
+        else:
+            # Info and debug update the ephemeral spinner line
+            color = "dim" if record.levelno <= logging.DEBUG else "cyan"
+            progress.update(task_id, description=f"[{color}]{msg}[/{color}]")
 
 
 class Operation:
