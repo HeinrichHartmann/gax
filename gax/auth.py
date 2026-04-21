@@ -166,8 +166,20 @@ def logout() -> bool:
     return False
 
 
+_cached_creds: Credentials | None = None
+
+
 def get_authenticated_credentials() -> Credentials:
-    """Get credentials, running login flow if needed."""
+    """Get credentials, running login flow if needed.
+
+    Caches in memory so repeated calls within one process don't
+    reload from disk or re-refresh the token.
+    """
+    global _cached_creds
+
+    if _cached_creds is not None and _cached_creds.valid:
+        return _cached_creds
+
     creds = load_credentials()
 
     if creds is None:
@@ -181,4 +193,5 @@ def get_authenticated_credentials() -> Credentials:
         else:
             creds = login()
 
+    _cached_creds = creds
     return creds
