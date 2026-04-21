@@ -237,6 +237,12 @@ WORKSPACE_MIME_TYPES = {
 }
 
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+# Mime types that cannot be downloaded (no binary content)
+SKIP_MIME_TYPES = {
+    "application/vnd.google-apps.shortcut",
+    "application/vnd.google-apps.map",
+    "application/vnd.google-apps.site",
+}
 
 
 def extract_folder_id(url_or_id: str) -> str:
@@ -450,7 +456,7 @@ class Folder(Resource):
     """Google Drive folder — checkout/pull a folder tree."""
 
     name = "folder"
-    URL_PATTERN = r"drive\.google\.com/(drive/folders/|folders/)"
+    URL_PATTERN = r"drive\.google\.com/(drive/(u/\d+/)?folders/|folders/)"
     CHECKOUT_TYPE = "gax/drive-checkout"
     SCOPES = ("drive.readonly",)
 
@@ -514,8 +520,15 @@ class Folder(Resource):
                 (folder / item["path"]).mkdir(parents=True, exist_ok=True)
                 continue
 
-            local_path = folder / item["path"]
             mime = item["mimeType"]
+
+            # Skip non-downloadable types (shortcuts, maps, sites)
+            if mime in SKIP_MIME_TYPES:
+                logger.info(f"Skipping (unsupported type): {item['path']}")
+                skipped += 1
+                continue
+
+            local_path = folder / item["path"]
 
             # Skip if already exists
             if local_path.exists() or (
@@ -567,9 +580,11 @@ class Folder(Resource):
         recursive = meta.get("recursive", False)
         remote_items = list_folder(folder_id, recursive=recursive)
 
-        # Build set of remote file IDs (non-folders)
+        # Build set of remote file IDs (non-folders, skip unsupported types)
         remote_by_path = {
-            item["path"]: item for item in remote_items if not item["is_folder"]
+            item["path"]: item
+            for item in remote_items
+            if not item["is_folder"] and item["mimeType"] not in SKIP_MIME_TYPES
         }
 
         # Pull existing tracked files
