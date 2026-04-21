@@ -524,7 +524,7 @@ class Folder(Resource):
 
             # Skip non-downloadable types (shortcuts, maps, sites)
             if mime in SKIP_MIME_TYPES:
-                logger.info(f"Skipping (unsupported type): {item['path']}")
+                logger.warning(f"Skipping (unsupported type {mime}): {item['path']}")
                 skipped += 1
                 continue
 
