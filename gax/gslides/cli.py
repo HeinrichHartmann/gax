@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, success
+from ..ui import gax_command, success
 from .. import docs
 from . import Slide, Presentation
 
@@ -32,7 +32,7 @@ def slides():
     show_default=True,
     help="Output format: md (read-only) or json (read-write)",
 )
-@handle_errors
+@gax_command
 def slides_checkout(url: str, output: Path | None, fmt: str):
     """Checkout a Google Slides presentation to a local directory.
 
@@ -55,7 +55,7 @@ def slides_checkout(url: str, output: Path | None, fmt: str):
 
 @slides.command("pull")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def slides_pull(path: Path):
     """Pull latest slides from Google.
 
@@ -76,7 +76,7 @@ def slides_pull(path: Path):
 @slides.command("push")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-@handle_errors
+@gax_command
 def slides_push(path: Path, yes: bool):
     """Push local slides to Google. JSON format only.
 

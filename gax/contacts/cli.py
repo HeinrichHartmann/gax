@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, success
 from .. import docs
 from . import Contacts
 
@@ -30,7 +30,7 @@ def contacts():
     type=click.Path(path_type=Path),
     help="Output file (default: contacts.<format>)",
 )
-@handle_errors
+@gax_command
 def contacts_clone(fmt, output):
     """Clone all contacts to a local file.
 
@@ -45,7 +45,7 @@ def contacts_clone(fmt, output):
 
 @contacts.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def contacts_pull(file):
     """Pull latest contacts from Google.
 
@@ -58,7 +58,7 @@ def contacts_pull(file):
 @contacts.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def contacts_push(file, yes):
     """Push local JSONL contacts to Google.
 
@@ -75,7 +75,7 @@ def contacts_push(file, yes):
     type=click.Path(path_type=Path),
     help="Output folder (default: contacts.contacts.gax.md.d)",
 )
-@handle_errors
+@gax_command
 def contacts_checkout(output):
     """Checkout contacts as individual files into a folder.
 

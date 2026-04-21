@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, success
+from ..ui import gax_command, success
 from .. import docs
 from . import Cal, Event
 
@@ -17,7 +17,7 @@ def cal_group():
 
 
 @cal_group.command(name="calendars")
-@handle_errors
+@gax_command
 def cal_calendars_cmd():
     """List available calendars."""
     Cal().calendars(sys.stdout)
@@ -39,7 +39,7 @@ def cal_calendars_cmd():
     help="Output format (default: md)",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-@handle_errors
+@gax_command
 def cal_list_cmd(
     calendar: str | None,
     days: int | None,
@@ -95,7 +95,7 @@ def cal_list_cmd(
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
 @click.option("-v", "--verbose", is_flag=True, help="Include event descriptions")
-@handle_errors
+@gax_command
 def cal_clone_cmd(
     calendar: str | None,
     output: Path | None,
@@ -128,7 +128,7 @@ def cal_clone_cmd(
 
 @cal_group.command(name="pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def cal_pull_cmd(file: Path):
     """Pull latest events to existing file.
 
@@ -154,7 +154,7 @@ def cal_pull_cmd(file: Path):
 )
 @click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
 @click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
-@handle_errors
+@gax_command
 def cal_checkout_cmd(
     calendar: str | None,
     output: Path,
@@ -201,7 +201,7 @@ def cal_event_group():
     type=click.Path(path_type=Path),
     help="Output file path",
 )
-@handle_errors
+@gax_command
 def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None):
     """Clone an event to a local .cal.gax.md file."""
     file_path = Event.from_url_or_id(id_or_url).clone(calendar=calendar, output=output_path)
@@ -219,7 +219,7 @@ def cal_event_clone_cmd(id_or_url: str, calendar: str, output_path: Path | None)
     type=click.Path(path_type=Path),
     help="Output file path",
 )
-@handle_errors
+@gax_command
 def cal_event_new_cmd(calendar: str, output_path: Path | None):
     """Create a new event file (edit and push to create upstream)."""
     file_path = Event().new(calendar=calendar, output=output_path)
@@ -229,7 +229,7 @@ def cal_event_new_cmd(calendar: str, output_path: Path | None):
 
 @cal_event_group.command(name="pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def cal_event_pull_cmd(file_path: Path):
     """Pull latest event data from API."""
     Event(path=file_path).pull()
@@ -239,7 +239,7 @@ def cal_event_pull_cmd(file_path: Path):
 @cal_event_group.command(name="push")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def cal_event_push_cmd(file_path: Path, yes: bool):
     """Push local changes to API."""
     ev = Event(path=file_path)
@@ -260,7 +260,7 @@ def cal_event_push_cmd(file_path: Path, yes: bool):
 @cal_event_group.command(name="delete")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def cal_event_delete_cmd(file_path: Path, yes: bool):
     """Delete event from calendar."""
     from .gcal import yaml_to_event

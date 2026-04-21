@@ -91,6 +91,9 @@ class Operation:
 def operation(description: str, total: Optional[int] = None):
     """Context manager for operations with integrated progress/logging.
 
+    Supports nesting: inner operations reuse the existing Progress display
+    by adding a new task to it, rather than creating a new spinner.
+
     Args:
         description: Initial status message
         total: Total number of steps (for progress bar)
@@ -106,6 +109,18 @@ def operation(description: str, total: Optional[int] = None):
                 op.advance()
     """
     global _active_task
+
+    if _active_task is not None:
+        # Nested: reuse existing Progress, add a new task
+        progress, outer_task_id = _active_task
+        task_id = progress.add_task(description, total=total)
+        _active_task = (progress, task_id)
+        try:
+            yield Operation(progress, task_id)
+        finally:
+            progress.remove_task(task_id)
+            _active_task = (progress, outer_task_id)
+        return
 
     with Progress(
         SpinnerColumn(),
@@ -170,18 +185,32 @@ def confirm(question: str, default: bool = False) -> bool:
     return Confirm.ask(question, default=default)
 
 
-def handle_errors(fn):
-    """Decorator: catch exceptions, print error, exit 1."""
+def gax_command(fn):
+    """Standard decorator for all gax CLI commands.
+
+    Wraps the command in an operation() context so that:
+      - logger.info() messages show as ephemeral spinner status
+      - logger.warning() messages print permanently above the spinner
+      - Exceptions are caught, printed as errors, and cause exit(1)
+
+    The spinner description is derived from the function name.
+    """
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
+        desc = fn.__name__.replace("_", " ")
         try:
-            return fn(*args, **kwargs)
+            with operation(desc):
+                return fn(*args, **kwargs)
         except Exception as e:
             error(str(e))
             sys.exit(1)
 
     return wrapper
+
+
+# Backwards compatibility
+handle_errors = gax_command
 
 
 def confirm_and_push(resource, *, yes=False, **kw):

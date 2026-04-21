@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, success, operation
+from ..ui import gax_command, success
 from .. import docs
 from . import File
 
@@ -21,7 +21,7 @@ def drive_group():
 @click.option(
     "-o", "--output", type=click.Path(path_type=Path), help="Output file path"
 )
-@handle_errors
+@gax_command
 def file_clone(url_or_id, output):
     """Clone a file from Google Drive.
 
@@ -32,8 +32,7 @@ def file_clone(url_or_id, output):
         gax file clone https://drive.google.com/file/d/abc123/view
         gax file clone abc123 -o report.pdf
     """
-    with operation("Cloning file"):
-        path = File.from_url_or_id(url_or_id).clone(output=output)
+    path = File.from_url_or_id(url_or_id).clone(output=output)
     success(f"Created: {path}")
 
 
@@ -43,7 +42,7 @@ def file_clone(url_or_id, output):
     "-o", "--output", type=click.Path(path_type=Path), help="Output folder path"
 )
 @click.option("--shallow", is_flag=True, help="Don't recurse into subfolders")
-@handle_errors
+@gax_command
 def file_checkout(url_or_id, output, shallow):
     """Checkout a Google Drive folder to a local directory.
 
@@ -59,16 +58,15 @@ def file_checkout(url_or_id, output, shallow):
     """
     from .gdrive import Folder
 
-    with operation("Checking out folder"):
-        path = Folder.from_url_or_id(url_or_id).checkout(
-            output=output, recursive=not shallow
-        )
+    path = Folder.from_url_or_id(url_or_id).checkout(
+        output=output, recursive=not shallow
+    )
     success(f"Checked out: {path}")
 
 
 @drive_group.command("pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def file_pull(file_path):
     """Pull latest version of a file from Google Drive.
 
@@ -78,8 +76,7 @@ def file_pull(file_path):
 
         gax file pull report.pdf
     """
-    with operation("Pulling file"):
-        File(path=file_path).pull()
+    File(path=file_path).pull()
     success(f"Updated: {file_path}")
 
 
@@ -87,7 +84,7 @@ def file_pull(file_path):
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--public", is_flag=True, help="Make file publicly accessible")
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def file_push(file_path, public, yes):
     """Push local file to Google Drive.
 

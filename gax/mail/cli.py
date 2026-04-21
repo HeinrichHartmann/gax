@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, confirm_and_push, success, error
+from ..ui import gax_command, confirm_and_push, success, error
 from .. import docs
 from . import Thread, Mailbox, Draft
 
@@ -29,7 +29,7 @@ def mail_group():
     type=click.Path(path_type=Path),
     help="Output file",
 )
-@handle_errors
+@gax_command
 def mail_clone(thread_id_or_url, output):
     """Clone a single email thread to a local .mail.gax.md file.
 
@@ -45,7 +45,7 @@ def mail_clone(thread_id_or_url, output):
 
 @mail_group.command("pull")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def mail_pull(path):
     """Pull latest messages for .mail.gax.md file(s).
 
@@ -69,7 +69,7 @@ def mail_pull(path):
     type=click.Path(path_type=Path),
     help="Output file (default: Re_<subject>.draft.gax.md)",
 )
-@handle_errors
+@gax_command
 def mail_reply(file_or_url, output):
     """Create a reply draft from a thread.
 
@@ -101,7 +101,7 @@ def mail_reply(file_or_url, output):
 )
 @click.option("--limit", default=20, help="Maximum results (default: 20)")
 @click.pass_context
-@handle_errors
+@gax_command
 def mailbox_group(ctx, query, limit):
     """Search/list Gmail threads and bulk label operations.
 
@@ -129,7 +129,7 @@ def mailbox_group(ctx, query, limit):
     "-q", "--query", default="in:inbox", help="Search query (default: in:inbox)"
 )
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
-@handle_errors
+@gax_command
 def mailbox_fetch(output, query, limit):
     """Fetch full threads matching query into a folder."""
     cloned, skipped = Mailbox().fetch(query=query, limit=limit, output=output)
@@ -147,7 +147,7 @@ def mailbox_fetch(output, query, limit):
     "-q", "--query", default="in:inbox", help="Search query (default: in:inbox)"
 )
 @click.option("--limit", default=50, help="Maximum threads (default: 50)")
-@handle_errors
+@gax_command
 def mailbox_clone_cmd(output, query, limit):
     """Clone threads from Gmail for bulk labeling."""
     file_path = Mailbox().clone(query=query, limit=limit, output=Path(output))
@@ -156,7 +156,7 @@ def mailbox_clone_cmd(output, query, limit):
 
 @mailbox_group.command("pull")
 @click.argument("file", type=click.Path(exists=True))
-@handle_errors
+@gax_command
 def mailbox_pull(file):
     """Update a .gax.md file by re-fetching from Gmail."""
     Mailbox(path=Path(file)).pull()
@@ -171,7 +171,7 @@ def mailbox_pull(file):
     default="mailbox.plan.yaml",
     help="Output file (default: mailbox.plan.yaml)",
 )
-@handle_errors
+@gax_command
 def mailbox_plan_cmd(file, output):
     """Generate plan from edited list file."""
     import yaml
@@ -212,7 +212,7 @@ def mailbox_plan_cmd(file, output):
 @mailbox_group.command("apply")
 @click.argument("plan_file", type=click.Path(exists=True))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def mailbox_apply(plan_file, yes):
     """Apply label changes from plan."""
     import yaml
@@ -282,7 +282,7 @@ def draft():
 )
 @click.option("--to", "to_addr", default="", help="Recipient email address")
 @click.option("--subject", default="", help="Email subject")
-@handle_errors
+@gax_command
 def draft_new(output, to_addr, subject):
     """Create a new local draft file.
 
@@ -312,7 +312,7 @@ def draft_new(output, to_addr, subject):
     type=click.Path(path_type=Path),
     help="Output file (default: <subject>.draft.gax.md)",
 )
-@handle_errors
+@gax_command
 def draft_clone(draft_id_or_url, output):
     """Clone an existing draft from Gmail.
 
@@ -328,7 +328,7 @@ def draft_clone(draft_id_or_url, output):
 
 @draft.command("list")
 @click.option("--limit", default=100, help="Maximum results (default: 100)")
-@handle_errors
+@gax_command
 def draft_list(limit):
     """List Gmail drafts (TSV output).
 
@@ -340,7 +340,7 @@ def draft_list(limit):
 @draft.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-@handle_errors
+@gax_command
 def draft_push(file, yes):
     """Push local draft to Gmail.
 
@@ -357,7 +357,7 @@ def draft_push(file, yes):
 
 @draft.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def draft_pull(file):
     """Pull latest content from Gmail draft.
 

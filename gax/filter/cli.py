@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, success
 from .. import docs
 from . import Filter
 
@@ -21,7 +21,7 @@ def mail_filter():
 
 
 @mail_filter.command("list")
-@handle_errors
+@gax_command
 def filter_list():
     """List Gmail filters (TSV output)."""
     Filter().list(sys.stdout)
@@ -34,7 +34,7 @@ def filter_list():
     type=click.Path(path_type=Path),
     help="Output file (default: filters.mail.gax.md)",
 )
-@handle_errors
+@gax_command
 def filter_clone(output):
     """Clone Gmail filters to a .gax.md file."""
     file_path = Filter().clone(output=output)
@@ -43,7 +43,7 @@ def filter_clone(output):
 
 @mail_filter.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def filter_pull(file):
     """Pull latest filters to existing file."""
     Filter.from_file(file).pull()
@@ -52,7 +52,7 @@ def filter_pull(file):
 
 @mail_filter.command("plan")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def filter_plan(file):
     """Preview filter changes (diff)."""
     diff_text = Filter.from_file(file).diff()
@@ -65,7 +65,7 @@ def filter_plan(file):
 @mail_filter.command("apply")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def filter_apply(file, yes):
     """Apply filter changes to Gmail."""
     confirm_and_push(Filter.from_file(file), yes=yes)

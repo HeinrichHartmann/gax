@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, success
+from ..ui import gax_command, success
 from .. import docs
 from . import TaskList, Task as TaskResource
 
@@ -17,7 +17,7 @@ def task_group():
 
 
 @task_group.command(name="lists")
-@handle_errors
+@gax_command
 def task_lists_cmd():
     """List available task lists."""
     TaskList().lists(sys.stdout)
@@ -34,7 +34,7 @@ def task_lists_cmd():
     default="md",
     help="Output format (default: md)",
 )
-@handle_errors
+@gax_command
 def task_list_cmd(tasklist: str | None, show_all: bool, fmt: str):
     """View tasks from a task list."""
     TaskList().list(sys.stdout, tasklist=tasklist, show_all=show_all, fmt=fmt)
@@ -57,7 +57,7 @@ def task_list_cmd(tasklist: str | None, show_all: bool, fmt: str):
     default="md",
     help="Output format (default: md)",
 )
-@handle_errors
+@gax_command
 def task_clone_cmd(tasklist: str | None, output: Path | None, show_all: bool, fmt: str):
     """Clone a task list to a single file."""
     path = TaskList().clone(
@@ -75,7 +75,7 @@ def task_clone_cmd(tasklist: str | None, output: Path | None, show_all: bool, fm
     help="Output folder path",
 )
 @click.option("--all", "show_all", is_flag=True, help="Include completed tasks")
-@handle_errors
+@gax_command
 def task_checkout_cmd(tasklist: str | None, output: Path | None, show_all: bool):
     """Checkout a task list as a folder of individual task files."""
     cloned, skipped = TaskList().checkout(
@@ -86,7 +86,7 @@ def task_checkout_cmd(tasklist: str | None, output: Path | None, show_all: bool)
 
 @task_group.command(name="pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def task_pull_cmd(file_path: Path):
     """Pull latest task data from API."""
     name = file_path.name
@@ -109,7 +109,7 @@ def task_pull_cmd(file_path: Path):
     type=click.Path(path_type=Path),
     help="Output file path",
 )
-@handle_errors
+@gax_command
 def task_new_cmd(title: str, tasklist: str | None, output: Path | None):
     """Create a new task on Google."""
     path = TaskResource().new(title, tasklist=tasklist, output=output)
@@ -118,7 +118,7 @@ def task_new_cmd(title: str, tasklist: str | None, output: Path | None):
 
 @task_group.command(name="diff")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def task_diff_cmd(file_path: Path):
     """Show differences between local task and remote."""
     diff_text = TaskResource.from_file(file_path).diff()
@@ -131,7 +131,7 @@ def task_diff_cmd(file_path: Path):
 @task_group.command(name="push")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def task_push_cmd(file_path: Path, yes: bool):
     """Push local task changes to API."""
     t = TaskResource.from_file(file_path)
@@ -151,7 +151,7 @@ def task_push_cmd(file_path: Path, yes: bool):
 @task_group.command(name="done")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def task_done_cmd(file_path: Path, yes: bool):
     """Mark a task as completed and push."""
     if not yes:
@@ -165,7 +165,7 @@ def task_done_cmd(file_path: Path, yes: bool):
 @task_group.command(name="delete")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def task_delete_cmd(file_path: Path, yes: bool):
     """Delete a task from Google and local file."""
     if not yes:

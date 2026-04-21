@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, success
+from ..ui import gax_command, success
 from .. import docs
 from . import Tab, Doc
 
@@ -24,7 +24,7 @@ def doc_tab():
 
 @doc_tab.command("list")
 @click.argument("url")
-@handle_errors
+@gax_command
 def doc_tab_list(url: str):
     """List tabs in a document (TSV output)."""
     Doc.from_url(url).tab_list(sys.stdout)
@@ -39,7 +39,7 @@ def doc_tab_list(url: str):
     type=click.Path(path_type=Path),
     help="Output tracking file (default: <filename>.tab.gax.md)",
 )
-@handle_errors
+@gax_command
 def doc_tab_import(url: str, file: Path, output: Path | None):
     """Import a markdown file as a new tab in a document."""
     tracking_path = Doc.from_url(url).tab_import(file, output=output)
@@ -55,7 +55,7 @@ def doc_tab_import(url: str, file: Path, output: Path | None):
     type=click.Path(path_type=Path),
     help="Output file (default: <tab>.tab.gax.md)",
 )
-@handle_errors
+@gax_command
 def doc_tab_clone(url: str, tab_name: str, output: Path | None):
     """Clone a single tab to a .tab.gax.md file."""
     file_path = Tab.from_url(url).clone(output=output, tab_name=tab_name)
@@ -64,7 +64,7 @@ def doc_tab_clone(url: str, tab_name: str, output: Path | None):
 
 @doc_tab.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def doc_tab_pull(file: Path):
     """Pull latest content for a single tab."""
     Tab.from_file(file).pull()
@@ -73,7 +73,7 @@ def doc_tab_pull(file: Path):
 
 @doc_tab.command("diff")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def doc_tab_diff(file: Path):
     """Show diff between local file and remote tab."""
     diff_text = Tab.from_file(file).diff()
@@ -92,7 +92,7 @@ def doc_tab_diff(file: Path):
     is_flag=True,
     help="Incremental push: apply only changed elements (experimental)",
 )
-@handle_errors
+@gax_command
 def doc_tab_push(file: Path, yes: bool, use_patch: bool):
     """Push local changes to a single tab (with confirmation).
 
@@ -196,7 +196,7 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
     is_flag=True,
     help="Suppress multi-tab status message",
 )
-@handle_errors
+@gax_command
 def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
     """Clone a Google Doc to a local .doc.gax.md file.
 
@@ -225,7 +225,7 @@ def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
     is_flag=True,
     help="Include document comments as separate sections",
 )
-@handle_errors
+@gax_command
 def doc_pull(file: Path, with_comments: bool):
     """Pull latest content from Google Docs to local file."""
     Tab.from_file(file).pull(with_comments=with_comments)
@@ -240,7 +240,7 @@ def doc_pull(file: Path, with_comments: bool):
     type=click.Path(path_type=Path),
     help="Output folder (default: <title>.doc.gax.md.d)",
 )
-@handle_errors
+@gax_command
 def doc_checkout(url: str, output: Path | None):
     """Checkout all tabs to individual files in a folder.
 

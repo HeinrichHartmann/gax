@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, success
 from .. import docs
 from . import Label
 
@@ -17,7 +17,7 @@ def mail_label():
 
 
 @mail_label.command("list")
-@handle_errors
+@gax_command
 def label_list():
     """List Gmail labels (TSV output)."""
     Label().list(sys.stdout)
@@ -31,7 +31,7 @@ def label_list():
     help="Output file (default: labels.mail.gax.md)",
 )
 @click.option("--all", "include_all", is_flag=True, help="Include system labels")
-@handle_errors
+@gax_command
 def label_clone(output, include_all):
     """Clone Gmail labels to a .gax.md file."""
     file_path = Label().clone(output=output, include_all=include_all)
@@ -41,7 +41,7 @@ def label_clone(output, include_all):
 @mail_label.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("--all", "include_all", is_flag=True, help="Include system labels")
-@handle_errors
+@gax_command
 def label_pull(file, include_all):
     """Pull latest labels to existing file."""
     Label.from_file(file).pull(include_all=include_all)
@@ -58,7 +58,7 @@ def label_pull(file, include_all):
     help="Output plan file",
 )
 @click.option("--delete", "allow_delete", is_flag=True, help="Include deletions")
-@handle_errors
+@gax_command
 def label_plan(file, output, allow_delete):
     """Preview label changes (diff)."""
     diff_text = Label.from_file(file).diff(allow_delete=allow_delete)
@@ -72,7 +72,7 @@ def label_plan(file, output, allow_delete):
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 @click.option("--delete", "allow_delete", is_flag=True, help="Include deletions")
-@handle_errors
+@gax_command
 def label_apply(file, yes, allow_delete):
     """Apply label changes to Gmail."""
     confirm_and_push(Label.from_file(file), yes=yes, allow_delete=allow_delete)

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import auth
 from . import docs
-from .ui import handle_errors, confirm_and_push  # noqa: F401
+from .ui import gax_command, confirm_and_push  # noqa: F401
 from .resource import Resource
 
 # Import resource CLI groups — triggers Resource.__init_subclass__ registration
@@ -234,7 +234,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
     default="md",
     help="Output format (for forms)",
 )
-@handle_errors
+@gax_command
 def clone(url: str, output: Path | None, fmt: str):
     """Clone a Google resource from URL.
 
@@ -251,7 +251,7 @@ def clone(url: str, output: Path | None, fmt: str):
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output folder")
 @click.option("-f", "--format", "fmt", default="md", help="Output format (for sheets)")
-@handle_errors
+@gax_command
 def checkout(url: str, output: Path | None, fmt: str):
     """Checkout a Google resource from URL into a folder of individual files.
 
@@ -331,7 +331,7 @@ main.add_command(auth_cmd, name="auth")
     help="Comma-separated scopes to request (e.g. gmail.readonly,calendar). "
     "Omit for all scopes. Use 'gax auth scopes' to list available scopes.",
 )
-@handle_errors
+@gax_command
 def login(scopes):
     """Authenticate with Google (opens browser)."""
     if not auth.credentials_exist():

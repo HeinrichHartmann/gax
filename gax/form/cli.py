@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, success
 from .. import docs
 from . import Form
 
@@ -32,7 +32,7 @@ def form():
     default="md",
     help="Content format: md (readable, default) or yaml (round-trip safe)",
 )
-@handle_errors
+@gax_command
 def form_clone(url, output, fmt):
     """Clone a Google Form to a local .form.gax.md file.
 
@@ -47,7 +47,7 @@ def form_clone(url, output, fmt):
 
 @form.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def form_pull(file):
     """Pull latest form definition from Google Forms."""
     Form.from_file(file).pull()
@@ -63,7 +63,7 @@ def form_pull(file):
     default="form.plan.yaml",
     help="Output plan file",
 )
-@handle_errors
+@gax_command
 def form_plan(file, output):
     """Preview form changes (diff)."""
     diff_text = Form.from_file(file).diff()
@@ -76,7 +76,7 @@ def form_plan(file, output):
 @form.command("apply")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def form_apply(file, yes):
     """Apply form changes to Google Forms."""
     confirm_and_push(Form.from_file(file), yes=yes)

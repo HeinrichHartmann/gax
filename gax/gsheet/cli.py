@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import handle_errors, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, success
 from .. import docs
 from . import Sheet, SheetTab
 from .sheet import pull_all, _extract_spreadsheet_id
@@ -50,7 +50,7 @@ def sheet():
     is_flag=True,
     help="Suppress multi-tab status message",
 )
-@handle_errors
+@gax_command
 def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
     """Clone first tab from a spreadsheet to a .sheet.gax.md file.
 
@@ -72,7 +72,7 @@ def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
 
 @sheet.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def sheet_pull(file: Path):
     """Pull latest data for all tabs in a multipart file or checkout folder."""
     if file.is_dir():
@@ -98,7 +98,7 @@ def sheet_pull(file: Path):
     default="md",
     help="Output format: md, csv, tsv, psv, json, jsonl",
 )
-@handle_errors
+@gax_command
 def sheet_checkout(url: str, output: Path | None, fmt: str):
     """Checkout all tabs to individual files in a folder.
 
@@ -121,7 +121,7 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
     "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-@handle_errors
+@gax_command
 def sheet_push(folder: Path, with_formulas: bool, yes: bool):
     """Push all tabs in a checkout folder to Google Sheets.
 
@@ -138,7 +138,7 @@ def sheet_push(folder: Path, with_formulas: bool, yes: bool):
 
 @sheet.command("plan")
 @click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
-@handle_errors
+@gax_command
 def sheet_plan(folder):
     """Show what changes would be pushed to Google Sheets.
 
@@ -169,7 +169,7 @@ def sheet_plan(folder):
     "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
-@handle_errors
+@gax_command
 def sheet_apply(folder, with_formulas: bool, yes: bool):
     """Apply planned changes by pushing to Google Sheets.
 
@@ -196,7 +196,7 @@ def tab():
 
 @tab.command("list")
 @click.argument("url")
-@handle_errors
+@gax_command
 def tab_list(url: str):
     """List tabs in a spreadsheet (TSV output)."""
     Sheet.from_url(url).tab_list(sys.stdout)
@@ -218,7 +218,7 @@ def tab_list(url: str):
     default="md",
     help="Output format: md, csv, tsv, psv, json, jsonl",
 )
-@handle_errors
+@gax_command
 def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
     """Clone a single tab to a .sheet.gax.md file."""
     path = SheetTab.from_url(url).clone(output=output, tab_name=tab_name, fmt=fmt)
@@ -227,7 +227,7 @@ def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
 
 @tab.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@handle_errors
+@gax_command
 def tab_pull(file: Path):
     """Pull latest data for a single tab."""
     SheetTab(path=file).pull()
@@ -240,7 +240,7 @@ def tab_pull(file: Path):
     "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-@handle_errors
+@gax_command
 def tab_push(file: Path, with_formulas: bool, yes: bool):
     """Push local data to a single tab."""
     from .frontmatter import parse_file
