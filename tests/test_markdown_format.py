@@ -107,6 +107,65 @@ class TestMarkdownFormat:
         assert list(df.columns) == list(df2.columns)
         assert list(df.iloc[0]) == list(df2.iloc[0])
 
+    def test_multiline_cell_roundtrip(self):
+        """Test that cells with newlines survive write -> read roundtrip via <br>."""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {
+                "company": ["Dash0", "OllyGarden"],
+                "contacts": ["Mirko Novakovic\nSonja Bata", "Juraci Kröhling"],
+                "amount": ["10000", "5000"],
+            }
+        )
+
+        fmt = MarkdownFormat()
+        content = fmt.write(df)
+
+        # Written form should use <br>, not literal newlines in cells
+        assert "<br>" in content
+        assert "Mirko Novakovic<br>Sonja Bata" in content
+
+        # Read back should restore newlines
+        df2 = fmt.read(content)
+        assert df2.shape == df.shape
+        assert df2.iloc[0]["contacts"] == "Mirko Novakovic\nSonja Bata"
+        assert df2.iloc[1]["contacts"] == "Juraci Kröhling"
+
+    def test_corrupted_multiline_raises(self):
+        """Test that unencoded newlines in cells are detected as corruption."""
+        import pytest
+
+        # Simulate what happens when a cell has a literal newline:
+        # the row splits into two lines with different column counts
+        content = (
+            "| company | contacts | amount |\n"
+            "| --- | --- | --- |\n"
+            "| Dash0 | Mirko\n"
+            "Sonja | 10000 |\n"
+            "| OllyGarden | Juraci | 5000 |\n"
+        )
+
+        fmt = MarkdownFormat()
+        with pytest.raises(ValueError, match="inconsistent column counts"):
+            fmt.read(content)
+
+    def test_literal_br_in_source_raises(self):
+        """Test that literal <br> in source data raises an error."""
+        import pandas as pd
+        import pytest
+
+        df = pd.DataFrame(
+            {
+                "name": ["Alice"],
+                "notes": ["some<br>thing"],
+            }
+        )
+
+        fmt = MarkdownFormat()
+        with pytest.raises(ValueError, match="literal '<br>'"):
+            fmt.write(df)
+
     def test_empty_content(self):
         """Test handling empty content."""
         fmt = MarkdownFormat()

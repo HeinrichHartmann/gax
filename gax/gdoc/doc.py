@@ -1314,17 +1314,39 @@ class Doc(Resource):
             )
 
         # Write tab files
+        remote_files = set()
         for section, file_path in zip(sections, tab_paths):
             if section.section_type == "comments":
                 continue
 
+            remote_files.add(file_path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
             content = format_section(section)
             file_path.write_text(content, encoding="utf-8")
             logger.info(f"Updated: {file_path.relative_to(self.path)}")
 
+        # Clean up local files that no longer have a matching remote tab
+        for stale in sorted(self.path.rglob("*")):
+            if stale.is_dir():
+                continue
+            if stale.name == ".gax.yaml":
+                continue
+            if stale in remote_files:
+                continue
+            logger.warning(f"Removing (no matching remote tab): {stale.relative_to(self.path)}")
+            stale.unlink()
+
+        # Remove empty subdirectories left after cleanup
+        for d in sorted(self.path.rglob("*"), reverse=True):
+            if d.is_dir() and not any(d.iterdir()):
+                logger.warning(f"Removing empty directory: {d.relative_to(self.path)}")
+                d.rmdir()
+
     def diff(self, **kw) -> str | None:
-        """Diff all tabs in a checkout folder against remote."""
+        """Diff all tabs in a checkout folder against remote.
+
+        Also reports stale local files that would be removed on pull.
+        """
         metadata = _read_checkout_metadata(self.path)
 
         all_diffs = []
@@ -1334,6 +1356,20 @@ class Doc(Resource):
             if tab_diff:
                 all_diffs.append(f"--- {tab_file.relative_to(self.path)} ---")
                 all_diffs.append(tab_diff)
+
+        # Check for stale local files
+        known = set(_known_tab_files(self.path, metadata))
+        stale = []
+        for f in sorted(self.path.rglob("*")):
+            if f.is_dir() or f.name == ".gax.yaml":
+                continue
+            if f not in known:
+                stale.append(f)
+        if stale:
+            lines = ["Stale local files (would be removed on pull):"]
+            for f in stale:
+                lines.append(f"  - {f.relative_to(self.path)}")
+            all_diffs.append("\n".join(lines))
 
         return "\n".join(all_diffs) if all_diffs else None
 

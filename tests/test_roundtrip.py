@@ -22,7 +22,7 @@ import pytest
 from googleapiclient.discovery import build
 
 from gax.auth import get_authenticated_credentials, is_authenticated
-from gax.gdoc.doc import create_tab_with_content, pull_single_tab
+from gax.gdoc.doc import create_tab_with_content, pull_single_tab, update_tab_content
 
 
 # =============================================================================
@@ -399,3 +399,202 @@ class TestIdentityRoundTrip:
                 )
             )
             assert False, f"Identity failed (M != M1):\n{d}"
+
+
+# =============================================================================
+# Test 3: Push edits and verify they are reflected
+# =============================================================================
+
+
+def _apply_fixture_edits(md: str) -> str:
+    """Apply three complex edits to the fixture markdown.
+
+    Edit 1 – Simple Table: rename Alpha→**Gamma** (adds bold), change value
+              100→999, append new row Delta|300.
+    Edit 2 – Table With Bold: append row with ***Testing***|3 (bold+italic cell).
+    Edit 3 – Mixed Structures paragraph: rewrite with inline **bold**.
+    """
+    # Edit 1: Simple Table – content, formatting, and structure change
+    md = md.replace(
+        "| Alpha | 100 |\n| Beta | 200 |",
+        "| **Gamma** | 999 |\n| Beta | 200 |\n| Delta | 300 |",
+    )
+    # Edit 2: Table With Bold – add bold+italic row
+    md = md.replace(
+        "| **Deploy** | 4 |",
+        "| **Deploy** | 4 |\n| ***Testing*** | 3 |",
+    )
+    # Edit 3: paragraph near tables – rewrite with bold formatting
+    md = md.replace(
+        "Text before a list.",
+        "Edited paragraph with **bold** before a list.",
+    )
+    return md
+
+
+@pytest.mark.e2e
+class TestPushEdits:
+    """Push fixture, apply complex edits, push again, verify via API + round-trip.
+
+    All edits are pushed in a single update_tab_content call to minimise
+    API usage.  Assertions are split into small test methods that share
+    a single API read (class-scoped doc_structure fixture).
+    """
+
+    @pytest.fixture(scope="class")
+    def edited_tab(self, doc_id, services):
+        """Create tab with fixture, push edited version, return state."""
+        md = FIXTURE_PATH.read_text()
+        tab_name = _unique("rt_edit")
+
+        # Step 1: create tab with original fixture
+        tab_id, _ = create_tab_with_content(
+            doc_id,
+            tab_name,
+            md,
+            service=services["docs"],
+            num_retries=NUM_RETRIES,
+        )
+
+        # Step 2: apply edits and push
+        edited_md = _apply_fixture_edits(md)
+        update_tab_content(
+            doc_id,
+            tab_name,
+            edited_md,
+            service=services["docs"],
+        )
+
+        return tab_name, tab_id, edited_md
+
+    @pytest.fixture(scope="class")
+    def doc_structure(self, doc_id, services, edited_tab):
+        """Read pushed document structure once for all assertions."""
+        _, tab_id, _ = edited_tab
+        doc = (
+            services["docs"]
+            .documents()
+            .get(documentId=doc_id, includeTabsContent=True)
+            .execute(num_retries=NUM_RETRIES)
+        )
+        body = _get_tab_body(doc, tab_id)
+        return {
+            "paragraphs": _collect_paragraphs(body),
+            "tables": _collect_tables(body),
+        }
+
+    # --- Edit 1: Simple Table ---
+
+    def test_simple_table_row_added(self, doc_structure):
+        """Simple table grew from 3 to 4 rows (header + Alpha→Gamma, Beta, Delta)."""
+        tables = doc_structure["tables"]
+        t = _find_table(tables, "Name")
+        assert t["num_rows"] == 4
+        assert t["num_cols"] == 2
+
+    def test_simple_table_gamma_bold(self, doc_structure):
+        """Alpha was replaced by Gamma with bold formatting."""
+        tables = doc_structure["tables"]
+        t = _find_table(tables, "Name")
+        cell = _find_cell(t, "Gamma")
+        assert any(
+            r["bold"] for r in cell["runs"]
+        ), "Gamma should be bold"
+
+    def test_simple_table_new_values(self, doc_structure):
+        """Value column has 999 (changed) and 300 (new row)."""
+        tables = doc_structure["tables"]
+        t = _find_table(tables, "Name")
+        all_text = {c["text"] for row in t["rows"] for c in row}
+        assert "999" in all_text, "Value 999 missing"
+        assert "300" in all_text, "Value 300 (Delta row) missing"
+        assert "100" not in all_text, "Old value 100 should be gone"
+
+    # --- Edit 2: Table With Bold ---
+
+    def test_bold_table_row_added(self, doc_structure):
+        """Bold table grew from 3 to 4 rows."""
+        tables = doc_structure["tables"]
+        t = _find_table(tables, "Category")
+        assert t["num_rows"] == 4
+
+    def test_bold_table_testing_bold_italic(self, doc_structure):
+        """New Testing cell has both bold and italic."""
+        tables = doc_structure["tables"]
+        t = _find_table(tables, "Category")
+        cell = _find_cell(t, "Testing")
+        assert any(
+            r["bold"] and r["italic"] for r in cell["runs"]
+        ), "Testing cell should be bold+italic"
+
+    # --- Edit 3: Paragraph near tables ---
+
+    def test_paragraph_text_changed(self, doc_structure):
+        """Paragraph rewritten with new text and bold span."""
+        paras = doc_structure["paragraphs"]
+        edited = [p for p in paras if "Edited paragraph" in p["text"]]
+        assert len(edited) == 1, "Edited paragraph not found"
+        bold_runs = [r for r in edited[0]["runs"] if r.get("bold")]
+        assert any("bold" in r["text"] for r in bold_runs), (
+            "Bold formatting missing in edited paragraph"
+        )
+
+    def test_original_text_gone(self, doc_structure):
+        """Original paragraph text should not appear."""
+        paras = doc_structure["paragraphs"]
+        assert not any(
+            "Text before a list." == p["text"] for p in paras
+        ), "Original paragraph should have been replaced"
+
+    # --- Round-trip identity ---
+
+    def test_roundtrip_identity(self, doc_id, services, edited_tab):
+        """Edited markdown survives push→pull round-trip unchanged."""
+        tab_name, _, edited_md = edited_tab
+
+        section = pull_single_tab(
+            doc_id,
+            tab_name,
+            f"https://docs.google.com/document/d/{doc_id}/edit",
+            docs_service=services["docs"],
+            num_retries=NUM_RETRIES,
+        )
+        pulled = section.content
+
+        if edited_md != pulled:
+            d = "".join(
+                difflib.unified_diff(
+                    edited_md.splitlines(keepends=True),
+                    pulled.splitlines(keepends=True),
+                    fromfile="edited",
+                    tofile="pulled",
+                )
+            )
+            assert False, f"Push-edit round-trip failed:\n{d}"
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+
+def _find_table(tables, header_text):
+    """Find a table whose first row contains a cell matching *header_text*."""
+    for t in tables:
+        if t["rows"] and any(c["text"] == header_text for c in t["rows"][0]):
+            return t
+    raise AssertionError(
+        f"Table with header {header_text!r} not found among "
+        f"{len(tables)} tables"
+    )
+
+
+def _find_cell(table, cell_text):
+    """Find a cell by its stripped text content."""
+    for row in table["rows"]:
+        for cell in row:
+            if cell["text"] == cell_text:
+                return cell
+    raise AssertionError(
+        f"Cell {cell_text!r} not found in table"
+    )

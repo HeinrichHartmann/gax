@@ -671,10 +671,14 @@ class Sheet(Resource):
                 sort_keys=False,
             )
 
+        # Track which files belong to remote tabs
+        remote_tab_files = set()
+
         with operation("Pulling tabs", total=len(info["tabs"])) as op:
             for tab_info in info["tabs"]:
                 tab_name = tab_info["title"]
                 file_path = self.path / f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
+                remote_tab_files.add(file_path.name)
 
                 logger.info(f"Pulling tab: {tab_name}")
                 df = client.read(spreadsheet_id, tab_name)
@@ -694,15 +698,73 @@ class Sheet(Resource):
 
                 op.advance()
 
+        # Clean up local files that no longer have a matching remote tab
+        for stale in sorted(self.path.iterdir()):
+            if stale.name == ".gax.yaml":
+                continue
+            if stale.name in remote_tab_files:
+                continue
+            logger.warning(f"Removing (no matching remote tab): {stale.name}")
+            stale.unlink()
+
+    def stale_files(self) -> list[Path]:
+        """Find local files that have no matching remote tab.
+
+        Compares local files against remote tab list without pulling data.
+        """
+        metadata_path = self.path / ".gax.yaml"
+        if not metadata_path.exists():
+            return []
+
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+
+        spreadsheet_id = metadata.get("spreadsheet_id")
+        if not spreadsheet_id:
+            return []
+
+        client = GSheetClient()
+        info = client.get_spreadsheet_info(spreadsheet_id)
+
+        remote_tab_files = set()
+        for tab_info in info["tabs"]:
+            tab_name = tab_info["title"]
+            remote_tab_files.add(
+                f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
+            )
+
+        stale = []
+        for f in sorted(self.path.iterdir()):
+            if f.name == ".gax.yaml":
+                continue
+            if f.name in remote_tab_files:
+                continue
+            stale.append(f)
+
+        return stale
+
     def diff(self, **kw) -> str | None:
         """Preview changes between local folder and remote.
 
         Returns a human-readable summary, or None if no changes.
+        Includes stale local files that would be removed on pull.
         """
         plan = create_push_plan(self.path)
-        if not plan.has_changes:
+        stale = self.stale_files()
+
+        if not plan.has_changes and not stale:
             return None
-        return plan.format_summary()
+
+        parts = []
+        if plan.has_changes:
+            parts.append(plan.format_summary())
+        if stale:
+            lines = ["Stale local files (would be removed on pull):"]
+            for f in stale:
+                lines.append(f"  - {f.name}")
+            parts.append("\n".join(lines))
+
+        return "\n\n".join(parts)
 
     def push(self, **kw) -> None:
         """Push all changed tabs in a checkout folder.

@@ -481,3 +481,125 @@ class TestPullAll:
         assert "100" in content
         assert "200" in content
         assert "300" in content
+
+
+class TestSheetFolderPull:
+    """Tests for Sheet.pull() — checkout folder sync."""
+
+    def _make_checkout_folder(self, tmp_path, tabs_data, extra_files=None):
+        """Create a checkout folder with .gax.yaml and tab files."""
+        import yaml
+        from gax.gsheet.frontmatter import SheetConfig, format_content
+        from gax.formats import get_format
+
+        folder = tmp_path / "Test.sheet.gax.md.d"
+        folder.mkdir()
+
+        metadata = {
+            "type": "gax/sheet-checkout",
+            "spreadsheet_id": "test-id",
+            "url": "https://docs.google.com/spreadsheets/d/test-id/edit",
+            "title": "Test",
+            "format": "md",
+        }
+        (folder / ".gax.yaml").write_text(
+            yaml.dump(metadata, default_flow_style=False)
+        )
+
+        # Create tab files
+        for tab_name, rows in tabs_data.items():
+            from gax.gsheet.sheet import _safe_filename
+
+            df = pd.DataFrame(rows[1:], columns=rows[0])
+            fmt = get_format("md")
+            data = fmt.write(df)
+            config = SheetConfig(
+                spreadsheet_id="test-id",
+                tab=tab_name,
+                format="md",
+                url="https://docs.google.com/spreadsheets/d/test-id/edit",
+            )
+            file_path = folder / f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
+            file_path.write_text(format_content(config, data))
+
+        # Create extra files if requested
+        if extra_files:
+            for name, content in extra_files.items():
+                (folder / name).write_text(content)
+
+        return folder
+
+    def test_pull_removes_stale_tab_files(self, tmp_path):
+        """Test that pull deletes local tab files for tabs deleted upstream."""
+        # Local has 3 tabs
+        local_tabs = {
+            "Revenue": [["Month", "Amount"], ["Jan", "100"]],
+            "Expenses": [["Month", "Amount"], ["Jan", "50"]],
+            "OldTab": [["Key", "Value"], ["A", "1"]],
+        }
+        folder = self._make_checkout_folder(tmp_path, local_tabs)
+
+        # Remote only has 2 tabs (OldTab was deleted upstream)
+        remote_tabs = {
+            "Revenue": [["Month", "Amount"], ["Jan", "200"]],
+            "Expenses": [["Month", "Amount"], ["Jan", "80"]],
+        }
+        gc, _ = make_mock_gc_multi_tab("Test", remote_tabs)
+        client = GSheetClient(gc=gc)
+
+        from gax.gsheet.sheet import Sheet
+
+        sheet = Sheet(
+            url="https://docs.google.com/spreadsheets/d/test-id/edit",
+            path=folder,
+        )
+        # Monkey-patch to use our mock client
+        import gax.gsheet.sheet as sheet_mod
+
+        _orig = sheet_mod.GSheetClient
+        sheet_mod.GSheetClient = lambda: client
+        try:
+            sheet.pull()
+        finally:
+            sheet_mod.GSheetClient = _orig
+
+        # OldTab file should be gone
+        remaining = sorted(f.name for f in folder.iterdir() if f.name != ".gax.yaml")
+        assert "OldTab.tab.sheet.gax.md" not in remaining
+        assert "Revenue.tab.sheet.gax.md" in remaining
+        assert "Expenses.tab.sheet.gax.md" in remaining
+        assert len(remaining) == 2
+
+    def test_pull_removes_stray_non_tab_files(self, tmp_path):
+        """Test that pull removes stray files (e.g. old .gax format)."""
+        local_tabs = {
+            "Revenue": [["Month", "Amount"], ["Jan", "100"]],
+        }
+        extra = {
+            "Revenue.tab.sheet.gax": "stale old format file",
+            "notes.txt": "some random file",
+        }
+        folder = self._make_checkout_folder(tmp_path, local_tabs, extra_files=extra)
+
+        remote_tabs = {
+            "Revenue": [["Month", "Amount"], ["Jan", "200"]],
+        }
+        gc, _ = make_mock_gc_multi_tab("Test", remote_tabs)
+        client = GSheetClient(gc=gc)
+
+        from gax.gsheet.sheet import Sheet
+        import gax.gsheet.sheet as sheet_mod
+
+        sheet = Sheet(
+            url="https://docs.google.com/spreadsheets/d/test-id/edit",
+            path=folder,
+        )
+        _orig = sheet_mod.GSheetClient
+        sheet_mod.GSheetClient = lambda: client
+        try:
+            sheet.pull()
+        finally:
+            sheet_mod.GSheetClient = _orig
+
+        remaining = sorted(f.name for f in folder.iterdir() if f.name != ".gax.yaml")
+        assert remaining == ["Revenue.tab.sheet.gax.md"]
