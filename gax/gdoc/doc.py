@@ -938,6 +938,35 @@ def _walk_tab_files(folder: Path) -> list[Path]:
     return sorted(folder.rglob("*.doc.gax.md"))
 
 
+def _write_tab_file(
+    section: DocSection,
+    path: Path,
+    *,
+    comments: list[Comment] | None = None,
+) -> None:
+    """Serialize a DocSection to a .doc.gax.md file.
+
+    If comments are provided, they are appended as a multipart comments section.
+    Used by both Tab.clone() and Doc.clone() for consistent serialization.
+    """
+    if comments:
+        sections = [
+            section,
+            format_comments_section(
+                comments=comments,
+                title=section.title,
+                source=section.source,
+                time_str=section.time,
+                section_num=section.section,
+                section_title=section.section_title,
+            ),
+        ]
+        content = format_multipart(sections)
+    else:
+        content = format_section(section)
+    path.write_text(content, encoding="utf-8")
+
+
 def _read_checkout_metadata(path: Path) -> dict:
     """Read and validate .gax.yaml metadata from a checkout folder."""
     metadata_path = path / ".gax.yaml"
@@ -1032,12 +1061,6 @@ class Tab(Resource):
                     "Use 'gax doc checkout' for full structure."
                 )
 
-        if with_comments:
-            sections = _add_comments_to_sections([section], document_id)
-            content = format_multipart(sections)
-        else:
-            content = format_section(section)
-
         if output:
             file_path = output
         else:
@@ -1048,7 +1071,8 @@ class Tab(Resource):
         if file_path.exists():
             raise ValueError(f"File already exists: {file_path}")
 
-        file_path.write_text(content, encoding="utf-8")
+        comments = fetch_comments(document_id) if with_comments else None
+        _write_tab_file(section, file_path, comments=comments)
         return file_path
 
     def pull(self, **kw) -> None:
@@ -1166,7 +1190,12 @@ class Doc(Resource):
     SCOPES = ("documents", "drive.readonly")
 
     def clone(self, output: Path | None = None, **kw) -> Path:
-        """Clone all tabs into a folder (supports nested tabs)."""
+        """Clone all tabs into a folder (supports nested tabs).
+
+        Keyword args:
+            with_comments: include document comments
+        """
+        with_comments = kw.get("with_comments", False)
         document_id = extract_doc_id(self.url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
@@ -1176,6 +1205,7 @@ class Doc(Resource):
         if not sections:
             raise ValueError("No sections found in document")
 
+        comments = fetch_comments(document_id) if with_comments else None
         title = sections[0].title
 
         if output:
@@ -1191,8 +1221,6 @@ class Doc(Resource):
         # Build tab tree for .gax.yaml metadata
         tab_tree = []
         for section, fpath in zip(sections, tab_paths):
-            if section.section_type == "comments":
-                continue
             tab_tree.append(
                 {
                     "id": section.tab_id,
@@ -1223,17 +1251,15 @@ class Doc(Resource):
         created = 0
         skipped = 0
 
-        for section, file_path in zip(sections, tab_paths):
-            if section.section_type == "comments":
-                continue
-
+        for i, (section, file_path) in enumerate(zip(sections, tab_paths)):
             if file_path.exists():
                 skipped += 1
                 continue
 
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            content = format_section(section)
-            file_path.write_text(content, encoding="utf-8")
+            # Attach comments to the first tab file only
+            tab_comments = comments if i == 0 else None
+            _write_tab_file(section, file_path, comments=tab_comments)
             logger.info(f"Created: {file_path.relative_to(folder)}")
             created += 1
 

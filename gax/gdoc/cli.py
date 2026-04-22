@@ -240,11 +240,16 @@ def doc_pull(file: Path, with_comments: bool):
     type=click.Path(path_type=Path),
     help="Output folder (default: <title>.doc.gax.md.d)",
 )
+@click.option(
+    "--with-comments",
+    is_flag=True,
+    help="Include document comments as a separate file",
+)
 @gax_command
-def doc_checkout(url: str, output: Path | None):
+def doc_checkout(url: str, output: Path | None, with_comments: bool):
     """Checkout all tabs to individual files in a folder.
 
     Creates a folder with individual .doc.gax.md files for each tab.
     """
-    folder = Doc.from_url(url).checkout(output=output)
+    folder = Doc.from_url(url).checkout(output=output, with_comments=with_comments)
     success(f"Checked out to: {folder}")
