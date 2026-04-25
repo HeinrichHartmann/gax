@@ -301,6 +301,25 @@ def _extract_list_items(list_tok: dict, depth: int = 0) -> list[ListItem]:
     return items
 
 
+def _decode_br_in_spans(spans: list[Span]) -> list[Span]:
+    """Decode <br> tags back to newlines in span text."""
+    result = []
+    for span in spans:
+        if "<br>" in span.text:
+            result.append(
+                Span(
+                    span.text.replace("<br>", "\n"),
+                    bold=span.bold,
+                    italic=span.italic,
+                    strikethrough=span.strikethrough,
+                    url=span.url,
+                )
+            )
+        else:
+            result.append(span)
+    return result
+
+
 def _table_to_rows(tok: dict) -> list[list[list[Span]]]:
     """Convert mistune table token to list of rows of parsed cells."""
     rows: list[list[list[Span]]] = []
@@ -311,7 +330,8 @@ def _table_to_rows(tok: dict) -> list[list[list[Span]]]:
                 cells = []
                 for cell_tok in section_children:
                     if cell_tok["type"] == "table_cell":
-                        cells.append(_flatten_inline(cell_tok.get("children", [])))
+                        spans = _flatten_inline(cell_tok.get("children", []))
+                        cells.append(_decode_br_in_spans(spans))
                 if cells:
                     rows.append(cells)
             else:
@@ -322,7 +342,8 @@ def _table_to_rows(tok: dict) -> list[list[list[Span]]]:
                     for cell_tok in row_tok.get("children", []):
                         if cell_tok["type"] != "table_cell":
                             continue
-                        cells.append(_flatten_inline(cell_tok.get("children", [])))
+                        spans = _flatten_inline(cell_tok.get("children", []))
+                        cells.append(_decode_br_in_spans(spans))
                     rows.append(cells)
     return rows
 
@@ -710,7 +731,8 @@ def _render_table(renderer, token, state):
     head_cells = []
     aligns = []
     for cell in head["children"]:
-        head_cells.append(renderer.render_children(cell, state).strip())
+        text = renderer.render_children(cell, state).strip()
+        head_cells.append(text.replace("\n", "<br>"))
         aligns.append(cell.get("attrs", {}).get("align"))
 
     lines = ["| " + " | ".join(head_cells) + " |"]
@@ -729,9 +751,10 @@ def _render_table(renderer, token, state):
 
     if body:
         for row in body["children"]:
-            cells = [
-                renderer.render_children(c, state).strip() for c in row["children"]
-            ]
+            cells = []
+            for c in row["children"]:
+                text = renderer.render_children(c, state).strip()
+                cells.append(text.replace("\n", "<br>"))
             lines.append("| " + " | ".join(cells) + " |")
 
     return "\n".join(lines) + "\n\n"
