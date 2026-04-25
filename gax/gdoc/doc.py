@@ -197,7 +197,8 @@ def _tab_content_to_markdown(doc: dict, tab: dict) -> str:
     doc_tab = tab.get("documentTab", {})
     body = doc_tab.get("body", {}).get("content", [])
     lists = doc_tab.get("lists") or doc.get("lists")
-    blocks = ir.from_doc_json(body, lists=lists)
+    inline_objects = doc_tab.get("inlineObjects")
+    blocks = ir.from_doc_json(body, lists=lists, inline_objects=inline_objects)
     md = ir.render_markdown(blocks)
     # Post-process: extract base64 images to blob store
     md = extract_images_to_store(md)

@@ -689,15 +689,16 @@ class TestInlineElements:
 
         md = section.content
 
-        # The image should either appear as ![image](...) in markdown
-        # or be logged as a skipped inlineObjectElement
-        has_image_md = "![" in md
-        has_skip_warning = any("inlineObjectElement" in w for w in warnings)
-
-        assert has_image_md or has_skip_warning, (
-            f"Expected inline image in markdown or skip warning.\n"
+        # Image should appear as ![...](url) in markdown
+        assert "![" in md, (
+            f"Expected inline image in markdown.\n"
             f"Markdown:\n{md}\n"
             f"Warnings: {warnings}"
+        )
+
+        # No inlineObjectElement should be skipped
+        assert not any("inlineObjectElement" in w for w in warnings), (
+            f"inlineObjectElement should not be skipped: {warnings}"
         )
 
         # Verify the rest of the content is intact

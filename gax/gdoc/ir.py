@@ -408,7 +408,9 @@ HEADING_STYLE_MAP = {v: k for k, v in HEADING_STYLES.items()}
 
 
 def _spans_from_textruns(
-    elements: list[dict], skipped: dict[str, int] | None = None
+    elements: list[dict],
+    skipped: dict[str, int] | None = None,
+    inline_objects: dict | None = None,
 ) -> list[Span]:
     """Convert Google Docs textRun elements to Span list.
 
@@ -417,11 +419,24 @@ def _spans_from_textruns(
     are preserved.
 
     If *skipped* dict is passed, non-textRun element types are counted into it.
+    If *inline_objects* is passed, inlineObjectElement refs are resolved to images.
     """
     spans: list[Span] = []
     for idx, elem in enumerate(elements):
         tr = elem.get("textRun")
         if not tr:
+            # Handle inline images
+            ioe = elem.get("inlineObjectElement")
+            if ioe and inline_objects:
+                obj_id = ioe.get("inlineObjectId", "")
+                obj = inline_objects.get(obj_id, {})
+                embedded = obj.get("inlineObjectProperties", {}).get("embeddedObject", {})
+                content_uri = embedded.get("imageProperties", {}).get("contentUri", "")
+                if content_uri:
+                    title = embedded.get("title", "image")
+                    spans.append(Span(text=f"![{title}]({content_uri})"))
+                    continue
+
             # Track skipped element types
             elem_type = next(
                 (k for k in elem if k not in ("startIndex", "endIndex")), "unknown"
@@ -454,13 +469,16 @@ def _spans_from_textruns(
 
 
 def from_doc_json(
-    body_content: list[dict], lists: Optional[dict] = None
+    body_content: list[dict],
+    lists: Optional[dict] = None,
+    inline_objects: Optional[dict] = None,
 ) -> list[Block]:
     """Walk Google Docs body content and produce Block list with doc_range.
 
     Args:
         body_content: The body.content array from documents().get()
         lists: The document's lists dict (for determining ordered vs unordered)
+        inline_objects: The document's inlineObjects dict (for resolving images)
     """
     blocks: list[Block] = []
     skipped: dict[str, int] = {}
@@ -484,6 +502,7 @@ def from_doc_json(
                                 _spans_from_textruns(
                                     ce["paragraph"].get("elements", []),
                                     skipped=skipped,
+                                    inline_objects=inline_objects,
                                 )
                             )
                     cells.append(cell_spans)
@@ -496,7 +515,7 @@ def from_doc_json(
 
         para = elem["paragraph"]
         elements = para.get("elements", [])
-        spans = _spans_from_textruns(elements, skipped=skipped)
+        spans = _spans_from_textruns(elements, skipped=skipped, inline_objects=inline_objects)
 
         # Skip empty paragraphs
         if not spans:
