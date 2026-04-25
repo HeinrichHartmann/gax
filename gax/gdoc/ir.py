@@ -407,17 +407,28 @@ HEADING_STYLES = {
 HEADING_STYLE_MAP = {v: k for k, v in HEADING_STYLES.items()}
 
 
-def _spans_from_textruns(elements: list[dict]) -> list[Span]:
+def _spans_from_textruns(
+    elements: list[dict], skipped: dict[str, int] | None = None
+) -> list[Span]:
     """Convert Google Docs textRun elements to Span list.
 
     The last element's trailing newline is the paragraph boundary and is
     stripped.  Interior standalone newline runs are hard line breaks and
     are preserved.
+
+    If *skipped* dict is passed, non-textRun element types are counted into it.
     """
     spans: list[Span] = []
     for idx, elem in enumerate(elements):
         tr = elem.get("textRun")
         if not tr:
+            # Track skipped element types
+            elem_type = next(
+                (k for k in elem if k not in ("startIndex", "endIndex")), "unknown"
+            )
+            if skipped is not None:
+                skipped[elem_type] = skipped.get(elem_type, 0) + 1
+            logger.debug("Skipped %s element at index %s", elem_type, elem.get("startIndex", "?"))
             continue
         text = tr["content"]
         is_last = idx == len(elements) - 1
@@ -452,6 +463,7 @@ def from_doc_json(
         lists: The document's lists dict (for determining ordered vs unordered)
     """
     blocks: list[Block] = []
+    skipped: dict[str, int] = {}
 
     for elem in body_content:
         start = elem.get("startIndex", 0)
@@ -470,7 +482,8 @@ def from_doc_json(
                         if "paragraph" in ce:
                             cell_spans.extend(
                                 _spans_from_textruns(
-                                    ce["paragraph"].get("elements", [])
+                                    ce["paragraph"].get("elements", []),
+                                    skipped=skipped,
                                 )
                             )
                     cells.append(cell_spans)
@@ -483,7 +496,7 @@ def from_doc_json(
 
         para = elem["paragraph"]
         elements = para.get("elements", [])
-        spans = _spans_from_textruns(elements)
+        spans = _spans_from_textruns(elements, skipped=skipped)
 
         # Skip empty paragraphs
         if not spans:
@@ -524,6 +537,10 @@ def from_doc_json(
 
         # Regular paragraph
         blocks.append(Paragraph(doc_range=doc_range, spans=spans))
+
+    if skipped:
+        parts = ", ".join(f"{count} {typ}" for typ, count in sorted(skipped.items()))
+        logger.warning(f"Skipped unsupported elements: {parts}")
 
     return blocks
 

@@ -598,3 +598,109 @@ def _find_cell(table, cell_text):
     raise AssertionError(
         f"Cell {cell_text!r} not found in table"
     )
+
+
+# =============================================================================
+# Test 4: Inline images and unsupported elements
+# =============================================================================
+
+# A small 1x1 red PNG for testing (publicly accessible)
+TEST_IMAGE_URL = "https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png"
+
+
+@pytest.mark.e2e
+class TestInlineElements:
+    """Insert inline images via API, pull, verify they appear in markdown."""
+
+    @pytest.fixture(scope="class")
+    def tab_with_image(self, doc_id, services):
+        """Create a tab, insert text + inline image via API."""
+        tab_name = _unique("rt_img")
+        docs = services["docs"]
+
+        # Step 1: Create tab with initial text
+        tab_id, _ = create_tab_with_content(
+            doc_id,
+            tab_name,
+            "# Image Test\n\nBefore image.\n\nAfter image.\n",
+            service=docs,
+            num_retries=NUM_RETRIES,
+        )
+
+        # Step 2: Re-read to find insertion point (after "Before image.\n")
+        doc = docs.documents().get(
+            documentId=doc_id, includeTabsContent=True
+        ).execute(num_retries=NUM_RETRIES)
+
+        body = _get_tab_body(doc, tab_id)
+        insert_index = None
+        for elem in body:
+            if "paragraph" in elem:
+                for e in elem["paragraph"].get("elements", []):
+                    tr = e.get("textRun", {})
+                    if "Before image." in tr.get("content", ""):
+                        insert_index = e["endIndex"]
+
+        assert insert_index is not None, "Could not find insertion point"
+
+        # Step 3: Insert inline image
+        docs.documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "insertInlineImage": {
+                            "uri": TEST_IMAGE_URL,
+                            "location": {
+                                "index": insert_index,
+                                "tabId": tab_id,
+                            },
+                            "objectSize": {
+                                "width": {"magnitude": 100, "unit": "PT"},
+                                "height": {"magnitude": 34, "unit": "PT"},
+                            },
+                        }
+                    }
+                ]
+            },
+        ).execute(num_retries=NUM_RETRIES)
+
+        return tab_name, tab_id
+
+    def test_pull_contains_image_or_warning(self, doc_id, tab_with_image):
+        """Pull tab with inline image — should either render it or warn."""
+        import logging
+
+        tab_name, tab_id = tab_with_image
+
+        # Capture warnings from the pull
+        warnings = []
+        handler = logging.Handler()
+        handler.emit = lambda record: warnings.append(record.getMessage())
+        handler.setLevel(logging.WARNING)
+        ir_logger = logging.getLogger("gax.gdoc.ir")
+        ir_logger.addHandler(handler)
+
+        try:
+            source_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+            section = pull_single_tab(doc_id, tab_name, source_url)
+        finally:
+            ir_logger.removeHandler(handler)
+
+        md = section.content
+
+        # The image should either appear as ![image](...) in markdown
+        # or be logged as a skipped inlineObjectElement
+        has_image_md = "![" in md
+        has_skip_warning = any("inlineObjectElement" in w for w in warnings)
+
+        assert has_image_md or has_skip_warning, (
+            f"Expected inline image in markdown or skip warning.\n"
+            f"Markdown:\n{md}\n"
+            f"Warnings: {warnings}"
+        )
+
+        # Verify the rest of the content is intact
+        assert "Image Test" in md
+        assert "Before image." in md
+        assert "After image." in md
