@@ -301,6 +301,25 @@ def _extract_list_items(list_tok: dict, depth: int = 0) -> list[ListItem]:
     return items
 
 
+def _decode_br_in_spans(spans: list[Span]) -> list[Span]:
+    """Decode <br> tags back to newlines in span text."""
+    result = []
+    for span in spans:
+        if "<br>" in span.text:
+            result.append(
+                Span(
+                    span.text.replace("<br>", "\n"),
+                    bold=span.bold,
+                    italic=span.italic,
+                    strikethrough=span.strikethrough,
+                    url=span.url,
+                )
+            )
+        else:
+            result.append(span)
+    return result
+
+
 def _table_to_rows(tok: dict) -> list[list[list[Span]]]:
     """Convert mistune table token to list of rows of parsed cells."""
     rows: list[list[list[Span]]] = []
@@ -311,7 +330,8 @@ def _table_to_rows(tok: dict) -> list[list[list[Span]]]:
                 cells = []
                 for cell_tok in section_children:
                     if cell_tok["type"] == "table_cell":
-                        cells.append(_flatten_inline(cell_tok.get("children", [])))
+                        spans = _flatten_inline(cell_tok.get("children", []))
+                        cells.append(_decode_br_in_spans(spans))
                 if cells:
                     rows.append(cells)
             else:
@@ -322,7 +342,8 @@ def _table_to_rows(tok: dict) -> list[list[list[Span]]]:
                     for cell_tok in row_tok.get("children", []):
                         if cell_tok["type"] != "table_cell":
                             continue
-                        cells.append(_flatten_inline(cell_tok.get("children", [])))
+                        spans = _flatten_inline(cell_tok.get("children", []))
+                        cells.append(_decode_br_in_spans(spans))
                     rows.append(cells)
     return rows
 
@@ -386,17 +407,28 @@ HEADING_STYLES = {
 HEADING_STYLE_MAP = {v: k for k, v in HEADING_STYLES.items()}
 
 
-def _spans_from_textruns(elements: list[dict]) -> list[Span]:
+def _spans_from_textruns(
+    elements: list[dict], skipped: dict[str, int] | None = None
+) -> list[Span]:
     """Convert Google Docs textRun elements to Span list.
 
     The last element's trailing newline is the paragraph boundary and is
     stripped.  Interior standalone newline runs are hard line breaks and
     are preserved.
+
+    If *skipped* dict is passed, non-textRun element types are counted into it.
     """
     spans: list[Span] = []
     for idx, elem in enumerate(elements):
         tr = elem.get("textRun")
         if not tr:
+            # Track skipped element types
+            elem_type = next(
+                (k for k in elem if k not in ("startIndex", "endIndex")), "unknown"
+            )
+            if skipped is not None:
+                skipped[elem_type] = skipped.get(elem_type, 0) + 1
+            logger.debug("Skipped %s element at index %s", elem_type, elem.get("startIndex", "?"))
             continue
         text = tr["content"]
         is_last = idx == len(elements) - 1
@@ -431,6 +463,7 @@ def from_doc_json(
         lists: The document's lists dict (for determining ordered vs unordered)
     """
     blocks: list[Block] = []
+    skipped: dict[str, int] = {}
 
     for elem in body_content:
         start = elem.get("startIndex", 0)
@@ -449,7 +482,8 @@ def from_doc_json(
                         if "paragraph" in ce:
                             cell_spans.extend(
                                 _spans_from_textruns(
-                                    ce["paragraph"].get("elements", [])
+                                    ce["paragraph"].get("elements", []),
+                                    skipped=skipped,
                                 )
                             )
                     cells.append(cell_spans)
@@ -462,7 +496,7 @@ def from_doc_json(
 
         para = elem["paragraph"]
         elements = para.get("elements", [])
-        spans = _spans_from_textruns(elements)
+        spans = _spans_from_textruns(elements, skipped=skipped)
 
         # Skip empty paragraphs
         if not spans:
@@ -503,6 +537,10 @@ def from_doc_json(
 
         # Regular paragraph
         blocks.append(Paragraph(doc_range=doc_range, spans=spans))
+
+    if skipped:
+        parts = ", ".join(f"{count} {typ}" for typ, count in sorted(skipped.items()))
+        logger.warning(f"Skipped unsupported elements: {parts}")
 
     return blocks
 
@@ -710,7 +748,8 @@ def _render_table(renderer, token, state):
     head_cells = []
     aligns = []
     for cell in head["children"]:
-        head_cells.append(renderer.render_children(cell, state).strip())
+        text = renderer.render_children(cell, state).strip()
+        head_cells.append(text.replace("\n", "<br>"))
         aligns.append(cell.get("attrs", {}).get("align"))
 
     lines = ["| " + " | ".join(head_cells) + " |"]
@@ -729,9 +768,10 @@ def _render_table(renderer, token, state):
 
     if body:
         for row in body["children"]:
-            cells = [
-                renderer.render_children(c, state).strip() for c in row["children"]
-            ]
+            cells = []
+            for c in row["children"]:
+                text = renderer.render_children(c, state).strip()
+                cells.append(text.replace("\n", "<br>"))
             lines.append("| " + " | ".join(cells) + " |")
 
     return "\n".join(lines) + "\n\n"

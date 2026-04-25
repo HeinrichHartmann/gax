@@ -99,6 +99,13 @@ def _extract_slide_markdown(slide: dict) -> str:
     body_parts = []
 
     for element in slide.get("pageElements", []):
+        # Handle images
+        if "image" in element:
+            url = element["image"].get("contentUrl", "")
+            if url:
+                body_parts.append(f"![image]({url})")
+            continue
+
         shape = element.get("shape")
         if not shape:
             continue
