@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import gax_command, success
+from ..ui import gax_command, confirm_and_pull, success
 from .. import docs
 from . import Tab, Doc
 
@@ -64,11 +64,11 @@ def doc_tab_clone(url: str, tab_name: str, output: Path | None):
 
 @doc_tab.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def doc_tab_pull(file: Path):
+def doc_tab_pull(file: Path, yes: bool):
     """Pull latest content for a single tab."""
-    Tab.from_file(file).pull()
-    success(f"Updated: {file}")
+    confirm_and_pull(Tab.from_file(file), yes=yes)
 
 
 @doc_tab.command("diff")
@@ -225,11 +225,11 @@ def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
     is_flag=True,
     help="Include document comments as separate sections",
 )
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def doc_pull(file: Path, with_comments: bool):
+def doc_pull(file: Path, with_comments: bool, yes: bool):
     """Pull latest content from Google Docs to local file."""
-    Tab.from_file(file).pull(with_comments=with_comments)
-    success(f"Updated: {file}")
+    confirm_and_pull(Tab.from_file(file), yes=yes, with_comments=with_comments)
 
 
 @doc.command("checkout")

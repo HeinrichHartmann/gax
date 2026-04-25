@@ -45,10 +45,12 @@ def main():
 @docs.section("main")
 @main.command("pull")
 @click.argument("files", nargs=-1, required=True)
-def unified_pull(files: tuple[str, ...]):
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
+def unified_pull(files: tuple[str, ...], yes: bool):
     """Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
 
-    Automatically detects file type and calls the appropriate pull command.
+    Shows a diff and asks for confirmation before overwriting local files.
+    Use -y to skip confirmation and overwrite directly.
 
     \b
     Examples:
@@ -56,7 +58,10 @@ def unified_pull(files: tuple[str, ...]):
         gax pull *.gax.md                   # Pull all .gax.md files
         gax pull inbox.gax.md notes.doc.gax.md # Pull multiple files
         gax pull folder.doc.gax.md.d/       # Pull a checkout folder
+        gax pull -y .                        # Force-pull everything
     """
+    from .ui import confirm_and_pull
+
     # Expand globs and '.'
     all_paths: list[Path] = []
     for pattern in files:
@@ -74,51 +79,37 @@ def unified_pull(files: tuple[str, ...]):
         click.echo("No .gax.md files or .gax.md.d folders found.", err=True)
         sys.exit(1)
 
-    import logging
-    from .ui import operation, success as ui_success, error as ui_error
-
-    logger = logging.getLogger(__name__)
+    from .ui import success as ui_success, error as ui_error
 
     results = []  # (path, ok, message)
 
-    with operation("Pulling", total=len(all_paths)) as op:
-        for path in all_paths:
-            if not path.exists():
-                results.append((path, False, "not found"))
-                op.advance()
+    for path in all_paths:
+        if not path.exists():
+            results.append((path, False, "not found"))
+            continue
+
+        # Check if it's a folder
+        if path.is_dir():
+            if not path.name.endswith(".gax.md.d"):
+                results.append((path, False, "not a .gax.md.d folder"))
                 continue
 
-            # Check if it's a folder
-            if path.is_dir():
-                if not path.name.endswith(".gax.md.d"):
-                    results.append((path, False, "not a .gax.md.d folder"))
-                    op.advance()
-                    continue
-
-                logger.info(f"Pulling {path}/")
-            else:
-                logger.info(f"Pulling {path}")
-
-            try:
-                Resource.from_file(path).pull()
-                results.append((path, True, "updated"))
-            except Exception as e:
-                results.append((path, False, str(e)))
-
-            op.advance()
+        try:
+            resource = Resource.from_file(path)
+            confirm_and_pull(resource, yes=yes)
+            results.append((path, True, "updated"))
+        except Exception as e:
+            results.append((path, False, str(e)))
 
     # Print results after spinner is done
     success_count = 0
     fail_count = 0
     for path, ok, message in results:
-        if ok:
-            if message != "cancelled":
-                ui_success(f"{path}: {message}")
-            success_count += 1
-        else:
-            if message != "cancelled":
-                ui_error(f"{path}: {message}")
+        if not ok:
+            ui_error(f"{path}: {message}")
             fail_count += 1
+        else:
+            success_count += 1
 
     if len(all_paths) > 1:
         summary = f"Done: {success_count}/{len(all_paths)} updated"

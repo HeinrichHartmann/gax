@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import gax_command, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, confirm_and_pull, success
 from .. import docs
 from . import Sheet, SheetTab
 from .sheet import pull_all, _extract_spreadsheet_id
@@ -72,12 +72,12 @@ def sheet_clone(url: str, output: Path | None, fmt: str, quiet: bool):
 
 @sheet.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def sheet_pull(file: Path):
+def sheet_pull(file: Path, yes: bool):
     """Pull latest data for all tabs in a multipart file or checkout folder."""
     if file.is_dir():
-        Sheet(path=file).pull()
-        success(f"Pulled: {file}")
+        confirm_and_pull(Sheet(path=file), yes=yes)
     else:
         rows = pull_all(file)
         success(f"Pulled {rows} rows to {file}")
