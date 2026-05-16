@@ -603,6 +603,20 @@ class Sheet(Resource):
                 sort_keys=False,
             )
 
+        # Determine which tabs need fetching
+        tabs_to_fetch = []
+        for tab_info in tabs:
+            tab_name = tab_info["title"]
+            file_path = folder / f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
+            if not file_path.exists():
+                tabs_to_fetch.append(tab_name)
+
+        # Fetch all needed tabs in parallel
+        if tabs_to_fetch:
+            all_data = client.read_all(spreadsheet_id, tabs_to_fetch)
+        else:
+            all_data = {}
+
         created = 0
         skipped = 0
 
@@ -611,13 +625,13 @@ class Sheet(Resource):
                 tab_name = tab_info["title"]
                 file_path = folder / f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
 
-                if file_path.exists():
+                if tab_name not in all_data:
                     skipped += 1
                     op.advance()
                     continue
 
-                logger.info(f"Fetching tab: {tab_name}")
-                df = client.read(spreadsheet_id, tab_name)
+                logger.info(f"Writing tab: {tab_name}")
+                df = all_data[tab_name]
 
                 formatter = get_format(fmt)
                 data = formatter.write(df)
@@ -674,6 +688,10 @@ class Sheet(Resource):
                 sort_keys=False,
             )
 
+        # Fetch all tabs in parallel
+        tab_names = [t["title"] for t in info["tabs"]]
+        all_data = client.read_all(spreadsheet_id, tab_names)
+
         # Track which files belong to remote tabs
         remote_tab_files = set()
 
@@ -683,8 +701,8 @@ class Sheet(Resource):
                 file_path = self.path / f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
                 remote_tab_files.add(file_path.name)
 
-                logger.info(f"Pulling tab: {tab_name}")
-                df = client.read(spreadsheet_id, tab_name)
+                logger.info(f"Writing tab: {tab_name}")
+                df = all_data[tab_name]
 
                 formatter = get_format(fmt)
                 data = formatter.write(df)

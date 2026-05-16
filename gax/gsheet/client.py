@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import gspread
 import pandas as pd
@@ -100,6 +101,29 @@ class GSheetClient:
             headers = data[0]
             rows = data[1:] if len(data) > 1 else []
             return pd.DataFrame(rows, columns=headers)
+
+    def read_all(
+        self, spreadsheet_id: str, tab_names: list[str]
+    ) -> dict[str, pd.DataFrame]:
+        """Read multiple tabs concurrently. Returns {tab_name: DataFrame}.
+
+        Requires get_spreadsheet_info() to have been called first
+        (to pre-populate the worksheet cache).
+        """
+        t0 = time.perf_counter()
+
+        def _fetch(tab: str) -> tuple[str, pd.DataFrame]:
+            ws = self._get_worksheet(spreadsheet_id, tab)
+            data = ws.get_all_values()
+            if not data:
+                return tab, pd.DataFrame()
+            return tab, pd.DataFrame(data[1:], columns=data[0])
+
+        with ThreadPoolExecutor(max_workers=len(tab_names)) as pool:
+            results = dict(pool.map(_fetch, tab_names))
+
+        _tlog(f"read_all ({len(tab_names)} tabs): {time.perf_counter() - t0:.3f}s")
+        return results
 
     def write(
         self,
