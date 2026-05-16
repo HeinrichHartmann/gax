@@ -14,14 +14,24 @@ logger = logging.getLogger(__name__)
 BR_TAG = "<br>"
 
 
-def _count_columns(line: str) -> int:
-    """Count pipe-delimited columns in a markdown table row."""
-    cells = [c.strip() for c in line.split("|")]
+def _split_row(line: str) -> list[str]:
+    """Split a markdown table row on unescaped pipes, unescape cell values."""
+    # Split on | that is NOT preceded by backslash
+    cells = re.split(r"(?<!\\)\|", line)
+    cells = [c.strip() for c in cells]
+    # Remove empty strings from leading/trailing pipes
     if cells and cells[0] == "":
         cells = cells[1:]
     if cells and cells[-1] == "":
         cells = cells[:-1]
-    return len(cells)
+    # Unescape \| → | and \\\| → \|
+    cells = [c.replace("\\|", "|").replace("\\\\|", "\\|") for c in cells]
+    return cells
+
+
+def _count_columns(line: str) -> int:
+    """Count pipe-delimited columns in a markdown table row."""
+    return len(_split_row(line))
 
 
 class MarkdownFormat(Format):
@@ -89,12 +99,7 @@ class MarkdownFormat(Format):
             if re.match(r"^\|?[\s\-:|]+\|?$", line):
                 continue
 
-            cells = [c.strip() for c in line.split("|")]
-            # Remove empty strings from leading/trailing pipes
-            if cells and cells[0] == "":
-                cells = cells[1:]
-            if cells and cells[-1] == "":
-                cells = cells[:-1]
+            cells = _split_row(line)
 
             if cells:  # Only add non-empty rows
                 all_rows.append(cells)
@@ -135,10 +140,12 @@ class MarkdownFormat(Format):
 
     def write(self, df: pd.DataFrame) -> str:
         # Check for literal <br> in source data — would be ambiguous after encoding
-        for col in df.columns:
-            if df[col].astype(str).str.contains(BR_TAG, regex=False).any():
+        # Use iloc to handle duplicate column names safely
+        for i in range(len(df.columns)):
+            col_data = df.iloc[:, i].astype(str)
+            if col_data.str.contains(BR_TAG, regex=False).any():
                 raise ValueError(
-                    f"Cell in column '{col}' contains a literal '<br>' which "
+                    f"Cell in column '{df.columns[i]}' contains a literal '<br>' which "
                     "conflicts with the newline encoding used by markdown format. "
                     "Use a different format (csv, tsv, json) for this data."
                 )
@@ -146,11 +153,11 @@ class MarkdownFormat(Format):
         # Encode newlines as <br>
         has_newlines = False
         encoded = df.copy()
-        for col in encoded.columns:
-            col_str = encoded[col].astype(str)
+        for i in range(len(encoded.columns)):
+            col_str = encoded.iloc[:, i].astype(str)
             if col_str.str.contains("\n", regex=False).any():
                 has_newlines = True
-                encoded[col] = col_str.str.replace("\n", BR_TAG, regex=False)
+                encoded.iloc[:, i] = col_str.str.replace("\n", BR_TAG, regex=False)
 
         if has_newlines:
             logger.warning(
@@ -159,8 +166,11 @@ class MarkdownFormat(Format):
 
         lines = []
 
+        def _escape_pipe(s: str) -> str:
+            return s.replace("\\|", "\\\\|").replace("|", "\\|")
+
         # Header row
-        headers = [str(c) for c in encoded.columns]
+        headers = [_escape_pipe(str(c)) for c in encoded.columns]
         lines.append("| " + " | ".join(headers) + " |")
 
         # Separator row
@@ -168,7 +178,7 @@ class MarkdownFormat(Format):
 
         # Data rows
         for _, row in encoded.iterrows():
-            cells = [str(v) for v in row.values]
+            cells = [_escape_pipe(str(v)) for v in row.values]
             lines.append("| " + " | ".join(cells) + " |")
 
         return "\n".join(lines) + "\n"

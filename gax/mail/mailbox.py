@@ -32,10 +32,9 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
-from googleapiclient.discovery import build
 
 from ..gaxfile import GaxFile
-from ..auth import get_authenticated_credentials
+from ..auth import get_service
 from ..resource import Resource
 
 from .shared import (
@@ -438,8 +437,7 @@ class Mailbox(Resource):
 
     def list(self, out, *, query: str = "in:inbox", limit: int = 20) -> None:
         """List threads matching query as TSV to file descriptor."""
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
         threads = []
         page_token = None
@@ -496,8 +494,7 @@ class Mailbox(Resource):
         if output_path.exists():
             raise ValueError(f"{output_path} already exists. Use 'pull' to update.")
 
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
         label_id_to_name, _ = _get_label_mappings(service)
         thread_data = _relabel_fetch_threads(service, query, limit, label_id_to_name)
@@ -513,8 +510,7 @@ class Mailbox(Resource):
         if not header["query"]:
             raise ValueError(f"No query found in {path} header")
 
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
         label_id_to_name, _ = _get_label_mappings(service)
         thread_data = _relabel_fetch_threads(
@@ -531,8 +527,7 @@ class Mailbox(Resource):
         Raises ValueError on parsing errors or API failures.
         """
         path = self.path
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
         label_id_to_name, _ = _get_label_mappings(service)
 
@@ -693,8 +688,7 @@ class Mailbox(Resource):
         if not changes:
             return 0, 0
 
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
         labels_result = service.users().labels().list(userId="me").execute()
         label_map = {
@@ -794,8 +788,7 @@ class Mailbox(Resource):
         """
         output_path = output or Path("mailbox.gax.md.d")
 
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
         logger.info(f"Searching: {query}")
         threads = []

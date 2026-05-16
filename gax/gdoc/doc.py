@@ -29,7 +29,7 @@ Additional notes specific to Google Docs:
   the same .doc.gax.md file format.
 
   Tab.push supports two modes: full-replace (default) and incremental
-  patch (use_patch=True, experimental — see ADR 027).
+  patch (patch=True, experimental — see ADR 027).
 
   Doc and Tab share all the helper functions in this module. They live
   in the same file because they are tightly coupled.
@@ -44,9 +44,8 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from googleapiclient.discovery import build
 
-from ..auth import get_authenticated_credentials
+from ..auth import get_service
 from .. import gaxfile
 from .native_md import extract_images_to_store, inline_images_from_store
 from ..ui import operation
@@ -181,8 +180,7 @@ def extract_doc_id(url: str) -> str:
 def _fetch_doc(document_id: str, *, docs_service=None, num_retries: int = 0) -> dict:
     """Fetch full document JSON with tab content."""
     if docs_service is None:
-        creds = get_authenticated_credentials()
-        docs_service = build("docs", "v1", credentials=creds)
+        docs_service = get_service("docs", "v1")
     return (
         docs_service.documents()
         .get(documentId=document_id, includeTabsContent=True)
@@ -349,8 +347,7 @@ def get_tabs_list(document_id: str, *, service=None) -> dict:
         Dict with 'title' and 'tabs' (list of TabInfo)
     """
     if service is None:
-        creds = get_authenticated_credentials()
-        service = build("docs", "v1", credentials=creds)
+        service = get_service("docs", "v1")
 
     document = (
         service.documents()
@@ -389,8 +386,7 @@ def create_tab_with_content(
     from .ir import from_markdown, to_docs_requests
 
     if service is None:
-        creds = get_authenticated_credentials()
-        service = build("docs", "v1", credentials=creds)
+        service = get_service("docs", "v1")
 
     # Step 1: Create the tab
     create_response = (
@@ -632,8 +628,7 @@ def update_tab_content(
     from .ir import from_markdown, to_docs_requests
 
     if service is None:
-        creds = get_authenticated_credentials()
-        service = build("docs", "v1", credentials=creds)
+        service = get_service("docs", "v1")
 
     # Get tab ID by name
     doc = (
@@ -704,8 +699,7 @@ def update_tab_content(
 
 def fetch_comments(document_id: str) -> list[Comment]:
     """Fetch comments from Google Drive API."""
-    creds = get_authenticated_credentials()
-    service = build("drive", "v3", credentials=creds)
+    service = get_service("drive", "v3")
 
     comments = []
     page_token = None
@@ -1076,6 +1070,14 @@ class Tab(Resource):
         _write_tab_file(section, file_path, comments=comments)
         return file_path
 
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Checkout all tabs from this document URL into a folder.
+
+        Delegates to Doc.checkout() — Tab URLs and Doc URLs are interchangeable
+        for checkout purposes.
+        """
+        return Doc(url=self.url).checkout(output=output, **kw)
+
     def pull(self, **kw) -> None:
         """Refresh a tab file from remote."""
         with_comments = kw.get("with_comments", False)
@@ -1148,9 +1150,9 @@ class Tab(Resource):
         """Push local tab to remote.
 
         Keyword args:
-            use_patch: use incremental AST-level push (experimental)
+            patch: use incremental AST-level push (experimental)
         """
-        use_patch = kw.get("use_patch", False)
+        use_patch = kw.get("patch", False)
 
         section = _parse_tab_file(self.path)
         source_url = section.source
@@ -1272,7 +1274,17 @@ class Doc(Resource):
         return self.clone(output=output, **kw)
 
     def pull(self, **kw) -> None:
-        """Pull all tabs in a checkout folder (supports nested tabs)."""
+        """Pull all tabs in a checkout folder (supports nested tabs).
+
+        With patch=True, broadcasts pull to each individual tab file
+        instead of doing a single bulk fetch.
+        """
+        if kw.get("patch"):
+            metadata = _read_checkout_metadata(self.path)
+            for tab_file in _known_tab_files(self.path, metadata):
+                Tab.from_file(tab_file).pull(**kw)
+            return
+
         metadata = _read_checkout_metadata(self.path)
         metadata_path = self.path / ".gax.yaml"
 
@@ -1422,8 +1434,7 @@ class Doc(Resource):
         logger.info(f"Created tab: {tab_id}")
 
         # Get document title for tracking file
-        creds = get_authenticated_credentials()
-        service = build("docs", "v1", credentials=creds)
+        service = get_service("docs", "v1")
         doc = service.documents().get(documentId=document_id).execute()
         doc_title = doc.get("title", "Untitled")
 

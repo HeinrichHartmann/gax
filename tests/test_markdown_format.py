@@ -173,3 +173,66 @@ class TestMarkdownFormat:
 
         assert len(df) == 0
         assert len(df.columns) == 0
+
+    def test_duplicate_column_names(self):
+        """Test that duplicate column names survive write -> read roundtrip."""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [["a", "b", "c"], ["d", "e", "f"]],
+            columns=["Name", "Value", "Name"],
+        )
+
+        fmt = MarkdownFormat()
+        content = fmt.write(df)
+        df2 = fmt.read(content)
+
+        assert df2.shape == (2, 3)
+        assert list(df2.columns) == ["Name", "Value", "Name"]
+        assert list(df2.iloc[0]) == ["a", "b", "c"]
+
+    def test_pipe_in_cell_values(self):
+        """Test that pipe characters in cells are escaped on write and unescaped on read."""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {"cmd": ["yes | head"], "result": ["ok"]},
+        )
+
+        fmt = MarkdownFormat()
+        content = fmt.write(df)
+
+        # Pipe should be escaped in output
+        assert "\\|" in content
+        # Should NOT produce an extra column
+        assert content.count("|") - content.count("\\|") == 3 * 3  # 3 rows × 3 structural pipes
+
+        # Roundtrip
+        df2 = fmt.read(content)
+        assert df2.shape == (1, 2)
+        assert df2.iloc[0]["cmd"] == "yes | head"
+
+    def test_pipe_in_column_names(self):
+        """Test that pipe characters in column names are escaped."""
+        import pandas as pd
+
+        df = pd.DataFrame({"A|B": ["x"], "C": ["y"]})
+
+        fmt = MarkdownFormat()
+        content = fmt.write(df)
+        df2 = fmt.read(content)
+
+        assert list(df2.columns) == ["A|B", "C"]
+        assert df2.iloc[0].iloc[0] == "x"
+
+    def test_backslash_pipe_roundtrip(self):
+        r"""Test that literal \| in source data survives roundtrip."""
+        import pandas as pd
+
+        df = pd.DataFrame({"val": [r"a\|b"]})
+
+        fmt = MarkdownFormat()
+        content = fmt.write(df)
+        df2 = fmt.read(content)
+
+        assert df2.iloc[0]["val"] == r"a\|b"

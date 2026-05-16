@@ -9,9 +9,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from googleapiclient.discovery import build
-
-from ..auth import get_authenticated_credentials
+from ..auth import get_service
 from ..store import store_blob
 from .. import gaxfile
 
@@ -220,8 +218,7 @@ def _extract_attachments(payload: dict, message_id: str, service) -> list[Attach
 def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
     """Fetch thread from Gmail API and return list of sections."""
     if service is None:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
     thread = (
         service.users()

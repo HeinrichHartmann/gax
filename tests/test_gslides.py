@@ -355,12 +355,9 @@ class TestSlidePush:
 
         slide_file = sorted(output.glob("*.slides.gax.md"))[0]
 
-        with (
-            patch("gax.gslides.gslides.get_authenticated_credentials"),
-            patch("gax.gslides.gslides.build") as mock_build,
-        ):
+        with patch("gax.gslides.gslides.get_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_build.return_value = mock_service
+            mock_get_service.return_value = mock_service
 
             Slide(path=slide_file).push()
 

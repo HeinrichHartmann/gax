@@ -1,30 +1,79 @@
 """Google Sheets API client using gspread"""
 
+import logging
+import os
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 import gspread
 import pandas as pd
 from ..auth import get_authenticated_credentials
+
+logger = logging.getLogger(__name__)
+
+_PROFILE = os.environ.get("GAX_PROFILE", "")
+
+
+def _tlog(msg: str) -> None:
+    """Print a timestamped profiling line to stderr when GAX_PROFILE=1."""
+    if _PROFILE:
+        print(f"[profile] {time.perf_counter():.3f}  {msg}", file=sys.stderr)
 
 
 class GSheetClient:
     def __init__(self, gc: gspread.Client | None = None):
         """Initialize client with optional gspread client for testing."""
         self._gc = gc
+        self._spreadsheet_cache: dict[str, gspread.Spreadsheet] = {}
+        self._worksheet_cache: dict[tuple[str, str], gspread.Worksheet] = {}
 
     @property
     def gc(self) -> gspread.Client:
         if self._gc is None:
+            t0 = time.perf_counter()
             creds = get_authenticated_credentials()
+            _tlog(f"get_authenticated_credentials: {time.perf_counter() - t0:.3f}s")
+            t0 = time.perf_counter()
             self._gc = gspread.authorize(creds)
+            _tlog(f"gspread.authorize: {time.perf_counter() - t0:.3f}s")
         return self._gc
 
+    def _open(self, spreadsheet_id: str) -> gspread.Spreadsheet:
+        """Open a spreadsheet by ID, returning cached object if available."""
+        if spreadsheet_id not in self._spreadsheet_cache:
+            t0 = time.perf_counter()
+            self._spreadsheet_cache[spreadsheet_id] = self.gc.open_by_key(spreadsheet_id)
+            _tlog(f"open_by_key '{spreadsheet_id}': {time.perf_counter() - t0:.3f}s")
+        return self._spreadsheet_cache[spreadsheet_id]
+
+    def _get_worksheet(self, spreadsheet_id: str, tab: str) -> gspread.Worksheet:
+        """Get a worksheet by title, using cache if available."""
+        key = (spreadsheet_id, tab)
+        if key not in self._worksheet_cache:
+            sh = self._open(spreadsheet_id)
+            t0 = time.perf_counter()
+            self._worksheet_cache[key] = sh.worksheet(tab)
+            _tlog(f"worksheet('{tab}'): {time.perf_counter() - t0:.3f}s")
+        return self._worksheet_cache[key]
+
     def get_spreadsheet_info(self, spreadsheet_id: str) -> dict:
-        """Get spreadsheet title and tab list."""
-        sh = self.gc.open_by_key(spreadsheet_id)
+        """Get spreadsheet title and tab list.
+
+        Also pre-populates the worksheet cache to avoid redundant API calls.
+        """
+        sh = self._open(spreadsheet_id)
+        t0 = time.perf_counter()
+        worksheets = sh.worksheets()
+        _tlog(f"worksheets(): {time.perf_counter() - t0:.3f}s")
+        # Pre-populate worksheet cache
+        for ws in worksheets:
+            self._worksheet_cache[(spreadsheet_id, ws.title)] = ws
         return {
             "title": sh.title,
             "tabs": [
                 {"id": ws.id, "title": ws.title, "index": ws.index}
-                for ws in sh.worksheets()
+                for ws in worksheets
             ],
         }
 
@@ -32,11 +81,12 @@ class GSheetClient:
         self, spreadsheet_id: str, tab: str, range: str | None = None
     ) -> pd.DataFrame:
         """Read data from a Google Sheet tab into a DataFrame."""
-        sh = self.gc.open_by_key(spreadsheet_id)
-        ws = sh.worksheet(tab)
+        ws = self._get_worksheet(spreadsheet_id, tab)
 
+        t0 = time.perf_counter()
         if range:
             data = ws.get(range)
+            _tlog(f"ws.get(range) '{tab}': {time.perf_counter() - t0:.3f}s")
             if not data:
                 return pd.DataFrame()
             headers = data[0]
@@ -45,11 +95,35 @@ class GSheetClient:
         else:
             # Use get_all_values to handle empty/duplicate headers
             data = ws.get_all_values()
+            _tlog(f"get_all_values '{tab}': {time.perf_counter() - t0:.3f}s")
             if not data:
                 return pd.DataFrame()
             headers = data[0]
             rows = data[1:] if len(data) > 1 else []
             return pd.DataFrame(rows, columns=headers)
+
+    def read_all(
+        self, spreadsheet_id: str, tab_names: list[str]
+    ) -> dict[str, pd.DataFrame]:
+        """Read multiple tabs concurrently. Returns {tab_name: DataFrame}.
+
+        Requires get_spreadsheet_info() to have been called first
+        (to pre-populate the worksheet cache).
+        """
+        t0 = time.perf_counter()
+
+        def _fetch(tab: str) -> tuple[str, pd.DataFrame]:
+            ws = self._get_worksheet(spreadsheet_id, tab)
+            data = ws.get_all_values()
+            if not data:
+                return tab, pd.DataFrame()
+            return tab, pd.DataFrame(data[1:], columns=data[0])
+
+        with ThreadPoolExecutor(max_workers=len(tab_names)) as pool:
+            results = dict(pool.map(_fetch, tab_names))
+
+        _tlog(f"read_all ({len(tab_names)} tabs): {time.perf_counter() - t0:.3f}s")
+        return results
 
     def write(
         self,
@@ -73,15 +147,16 @@ class GSheetClient:
         Returns:
             Number of rows written
         """
-        sh = self.gc.open_by_key(spreadsheet_id)
+        sh = self._open(spreadsheet_id)
 
         # Try to get worksheet, create if missing and requested
         try:
-            ws = sh.worksheet(tab)
+            ws = self._get_worksheet(spreadsheet_id, tab)
         except gspread.exceptions.WorksheetNotFound:
             if create_if_missing:
                 # Create new worksheet with 1000 rows, 26 columns
                 ws = sh.add_worksheet(title=tab, rows=1000, cols=26)
+                self._worksheet_cache[(spreadsheet_id, tab)] = ws
             else:
                 raise
 
@@ -106,6 +181,8 @@ class GSheetClient:
             spreadsheet_id: The spreadsheet ID
             tab: Tab name to delete
         """
-        sh = self.gc.open_by_key(spreadsheet_id)
-        ws = sh.worksheet(tab)
+        sh = self._open(spreadsheet_id)
+        ws = self._get_worksheet(spreadsheet_id, tab)
         sh.del_worksheet(ws)
+        # Invalidate cache for this worksheet
+        self._worksheet_cache.pop((spreadsheet_id, tab), None)

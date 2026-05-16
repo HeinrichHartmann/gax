@@ -30,9 +30,8 @@ from difflib import unified_diff
 from pathlib import Path
 
 import yaml
-from googleapiclient.discovery import build
 
-from ..auth import get_authenticated_credentials
+from ..auth import get_service
 from ..gaxfile import Section, format_section, parse_multipart
 from ..resource import Resource
 
@@ -60,8 +59,7 @@ def extract_presentation_id(url_or_id: str) -> str:
 def _get_presentation(presentation_id: str, *, service=None) -> dict:
     """Fetch full presentation JSON from Slides API."""
     if service is None:
-        creds = get_authenticated_credentials()
-        service = build("slides", "v1", credentials=creds)
+        service = get_service("slides", "v1")
     return service.presentations().get(presentationId=presentation_id).execute()
 
 
@@ -351,8 +349,7 @@ class Slide(Resource):
                 )
 
         if requests:
-            creds = get_authenticated_credentials()
-            service = build("slides", "v1", credentials=creds)
+            service = get_service("slides", "v1")
             service.presentations().batchUpdate(
                 presentationId=presentation_id,
                 body={"requests": requests},
