@@ -195,3 +195,20 @@ def get_authenticated_credentials() -> Credentials:
 
     _cached_creds = creds
     return creds
+
+
+_service_cache: dict[tuple[str, str], object] = {}
+
+
+def get_service(api: str, version: str):
+    """Get a Google API service, cached per (api, version) pair.
+
+    Avoids repeated build() calls within a single process.
+    """
+    key = (api, version)
+    if key not in _service_cache:
+        from googleapiclient.discovery import build
+
+        creds = get_authenticated_credentials()
+        _service_cache[key] = build(api, version, credentials=creds)
+    return _service_cache[key]

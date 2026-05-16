@@ -39,10 +39,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
-from ..auth import get_authenticated_credentials
+from ..auth import get_service
 from ..resource import Resource
 
 logger = logging.getLogger(__name__)
@@ -116,8 +115,7 @@ def extract_file_id(url_or_id: str) -> str:
 
 def download_file(file_id: str, output_path: Path) -> dict:
     """Download a file from Google Drive. Returns metadata dict."""
-    creds = get_authenticated_credentials()
-    service = build("drive", "v3", credentials=creds)
+    service = get_service("drive", "v3")
 
     file_metadata = (
         service.files()
@@ -143,8 +141,7 @@ def upload_file(
     public: bool = False,
 ) -> dict:
     """Upload a file to Google Drive. Returns file metadata dict."""
-    creds = get_authenticated_credentials()
-    service = build("drive", "v3", credentials=creds)
+    service = get_service("drive", "v3")
 
     file_name = name or file_path.name
 
@@ -179,8 +176,7 @@ def upload_file(
 
 def update_file(file_id: str, file_path: Path, public: bool | None = None) -> dict:
     """Update an existing file on Google Drive. Returns updated metadata dict."""
-    creds = get_authenticated_credentials()
-    service = build("drive", "v3", credentials=creds)
+    service = get_service("drive", "v3")
 
     media = MediaFileUpload(str(file_path), resumable=True)
     file = (
@@ -209,8 +205,7 @@ def update_file(file_id: str, file_path: Path, public: bool | None = None) -> di
 
 def set_public(file_id: str, public: bool = True):
     """Make a file public or private."""
-    creds = get_authenticated_credentials()
-    service = build("drive", "v3", credentials=creds)
+    service = get_service("drive", "v3")
 
     if public:
         permission = {"type": "anyone", "role": "reader"}
@@ -261,8 +256,7 @@ def extract_folder_id(url_or_id: str) -> str:
 def get_folder_metadata(folder_id: str, *, service=None) -> dict:
     """Get folder name and metadata. Returns dict with id, name."""
     if service is None:
-        creds = get_authenticated_credentials()
-        service = build("drive", "v3", credentials=creds)
+        service = get_service("drive", "v3")
     return service.files().get(fileId=folder_id, fields="id,name").execute()
 
 
@@ -275,8 +269,7 @@ def list_folder(folder_id: str, *, recursive: bool = False, service=None) -> lis
     Handles pagination. With recursive=True, traverses subfolders.
     """
     if service is None:
-        creds = get_authenticated_credentials()
-        service = build("drive", "v3", credentials=creds)
+        service = get_service("drive", "v3")
 
     def _list_one(parent_id: str, prefix: str) -> list[dict]:
         items = []
@@ -372,8 +365,7 @@ class File(Resource):
         file_id = extract_file_id(self.url)
         logger.info(f"Fetching file: {file_id}")
 
-        creds = get_authenticated_credentials()
-        service = build("drive", "v3", credentials=creds)
+        service = get_service("drive", "v3")
         metadata = (
             service.files()
             .get(

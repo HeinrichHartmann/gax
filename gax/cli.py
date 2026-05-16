@@ -42,8 +42,32 @@ def main():
 # =============================================================================
 
 
+def _split_flags_and_files(
+    args: tuple[str, ...],
+) -> tuple[dict[str, bool], list[str]]:
+    """Separate ``--flag`` items from file paths in a combined argument tuple.
+
+    With ``nargs=-1`` and ``ignore_unknown_options``, Click puts unknown
+    flags into the argument tuple alongside file paths.  This splits them
+    back out, mapping ``--flag-name`` → ``flag_name=True``.
+
+    Returns (extra_kwargs, file_args).
+    """
+    kw: dict[str, bool] = {}
+    files: list[str] = []
+    for arg in args:
+        if arg.startswith("--"):
+            kw[arg.lstrip("-").replace("-", "_")] = True
+        else:
+            files.append(arg)
+    return kw, files
+
+
 @docs.section("main")
-@main.command("pull")
+@main.command(
+    "pull",
+    context_settings=dict(ignore_unknown_options=True),
+)
 @click.argument("files", nargs=-1, required=True)
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 def unified_pull(files: tuple[str, ...], yes: bool):
@@ -51,6 +75,8 @@ def unified_pull(files: tuple[str, ...], yes: bool):
 
     Shows a diff and asks for confirmation before overwriting local files.
     Use -y to skip confirmation and overwrite directly.
+    Extra flags (e.g. --patch, --with-comments) are forwarded to the
+    resource-specific pull method.
 
     \b
     Examples:
@@ -59,12 +85,17 @@ def unified_pull(files: tuple[str, ...], yes: bool):
         gax pull inbox.gax.md notes.doc.gax.md # Pull multiple files
         gax pull folder.doc.gax.md.d/       # Pull a checkout folder
         gax pull -y .                        # Force-pull everything
+        gax pull --patch folder.doc.gax.md.d/ # Broadcast pull to individual files
     """
     from .ui import confirm_and_pull
 
+    # Separate flags from file paths — nargs=-1 consumes everything,
+    # so unknown flags like --patch end up in the files tuple.
+    extra_kw, file_args = _split_flags_and_files(files)
+
     # Expand globs and '.'
     all_paths: list[Path] = []
-    for pattern in files:
+    for pattern in file_args:
         if pattern == ".":
             # Current directory - find all .gax.md files and .gax.md.d folders
             all_paths.extend(Path(".").glob("*.gax.md"))
@@ -96,7 +127,7 @@ def unified_pull(files: tuple[str, ...], yes: bool):
 
         try:
             resource = Resource.from_file(path)
-            confirm_and_pull(resource, yes=yes)
+            confirm_and_pull(resource, yes=yes, **extra_kw)
             results.append((path, True, "updated"))
         except Exception as e:
             results.append((path, False, str(e)))

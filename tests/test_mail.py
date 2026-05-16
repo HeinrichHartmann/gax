@@ -634,8 +634,7 @@ class TestDraftAttachments:
             "id": "draft-123",
             "message": {"id": "msg-456"},
         }
-        monkeypatch.setattr("gax.mail.draft.get_authenticated_credentials", lambda: None)
-        monkeypatch.setattr("gax.mail.draft.build", lambda *a, **kw: mock_service)
+        monkeypatch.setattr("gax.mail.draft.get_service", lambda *a, **kw: mock_service)
 
         Draft(path=draft_file).push()
 
@@ -666,8 +665,7 @@ class TestDraftAttachments:
             "id": "draft-abs",
             "message": {"id": "msg-abs"},
         }
-        monkeypatch.setattr("gax.mail.draft.get_authenticated_credentials", lambda: None)
-        monkeypatch.setattr("gax.mail.draft.build", lambda *a, **kw: mock_service)
+        monkeypatch.setattr("gax.mail.draft.get_service", lambda *a, **kw: mock_service)
 
         Draft(path=draft_file).push()
         updated = draft_file.read_text()

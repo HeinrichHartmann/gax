@@ -38,6 +38,7 @@ Same conventions as draft.py (see its docstring for full rationale).
 import difflib
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -50,7 +51,7 @@ from ..resource import Resource
 from ..formats import get_format
 from ..gaxfile import Section, format_multipart, parse_multipart
 from ..ui import operation
-from .client import GSheetClient
+from .client import GSheetClient, _tlog
 from .frontmatter import SheetConfig, parse_file, parse_content, write_file, format_content
 
 logger = logging.getLogger(__name__)
@@ -567,6 +568,7 @@ class Sheet(Resource):
         Keyword args:
             fmt: output format (default: "md")
         """
+        t_total = time.perf_counter()
         fmt = kw.get("fmt", "md")
 
         spreadsheet_id = _extract_spreadsheet_id(self.url)
@@ -634,6 +636,7 @@ class Sheet(Resource):
                 op.advance()
 
         logger.info(f"Checked out: {created}, Skipped: {skipped}")
+        _tlog(f"clone total: {time.perf_counter() - t_total:.3f}s")
         return folder
 
     def checkout(self, output: Path | None = None, **kw) -> Path:

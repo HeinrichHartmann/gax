@@ -67,9 +67,8 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
-from googleapiclient.discovery import build
 
-from ..auth import get_authenticated_credentials
+from ..auth import get_service
 from .. import gaxfile
 from ..resource import Resource
 
@@ -275,8 +274,7 @@ def extract_body(payload: dict) -> str:
 def fetch_draft(draft_id: str, *, service=None) -> tuple[DraftHeader, str]:
     """Fetch a draft from Gmail. Returns (DraftHeader, body)."""
     if service is None:
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
     result = (
         service.users().drafts().get(userId="me", id=draft_id, format="full").execute()
@@ -354,8 +352,7 @@ class Draft(Resource):
 
     def list(self, out, *, limit: int = 100) -> None:
         """List Gmail drafts as TSV to file descriptor."""
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
 
         # Fetch draft ID list
         drafts = []
@@ -517,8 +514,7 @@ class Draft(Resource):
                 resolved_atts.append((path.name, mime_type, data))
                 logger.info(f"Attaching: {path.name} ({len(data)} bytes)")
 
-        creds = get_authenticated_credentials()
-        service = build("gmail", "v1", credentials=creds)
+        service = get_service("gmail", "v1")
         message = build_message(header, body, resolved_atts)
 
         if not header.draft_id:

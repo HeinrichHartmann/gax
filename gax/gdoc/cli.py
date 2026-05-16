@@ -141,7 +141,7 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
                 click.echo("Aborted.")
                 return
 
-        t.push(use_patch=True)
+        t.push(patch=True)
         success("Patched successfully.")
     else:
         diff_text = t.diff()

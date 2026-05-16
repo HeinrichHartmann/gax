@@ -400,6 +400,135 @@ class TestSheetE2E:
 
         assert values["values"][1][0] == "modified"
 
+    def test_pull_challenging_data(self, check_auth, test_sheet, temp_dir):
+        """API → clone: verify local file matches data created via API.
+
+        Covers duplicate column names, pipes, newlines, empty cells.
+        """
+        uid = uuid.uuid4().hex[:8]
+        creds = get_authenticated_credentials()
+        service = build("sheets", "v4", credentials=creds)
+        sheet_id = test_sheet["id"]
+
+        tab_name = f"{E2E_PREFIX}_pull_tricky_{uid}"
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+        ).execute()
+
+        source_data = [
+            ["Name", "Cmd", "Name", "Notes"],
+            ["Alice", "yes | head", "Smith", "line1\nline2"],
+            ["Bob", "cat foo", "", "ok"],
+        ]
+        service.spreadsheets().values().update(
+            spreadsheetId=sheet_id,
+            range=f"{tab_name}!A1:D3",
+            valueInputOption="RAW",
+            body={"values": source_data},
+        ).execute()
+
+        # Clone
+        output_file = temp_dir / f"{tab_name}.sheet.gax.md"
+        result = _run_gax(
+            "sheet", "tab", "clone",
+            test_sheet["url"], tab_name,
+            "-o", str(output_file),
+        )
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        # Parse the local file back into a DataFrame
+        from gax.formats.markdown import MarkdownFormat
+
+        content = output_file.read_text()
+        table_start = content.index("| Name")
+        df = MarkdownFormat().read(content[table_start:])
+
+        # Assert against the API source data
+        assert df.shape == (2, 4), f"Expected (2, 4), got {df.shape}"
+        assert list(df.columns) == source_data[0]
+        for row_idx, api_row in enumerate(source_data[1:]):
+            for col_idx, expected in enumerate(api_row):
+                actual = df.iloc[row_idx].iloc[col_idx]
+                assert actual == expected, (
+                    f"Mismatch at [{row_idx},{col_idx}]: "
+                    f"expected {expected!r}, got {actual!r}"
+                )
+
+    def test_push_challenging_data(self, check_auth, test_sheet, temp_dir):
+        """Clone → modify locally → push: verify API matches pushed content.
+
+        Covers pipes, newlines, and empty cells injected locally.
+        """
+        uid = uuid.uuid4().hex[:8]
+        creds = get_authenticated_credentials()
+        service = build("sheets", "v4", credentials=creds)
+        sheet_id = test_sheet["id"]
+
+        tab_name = f"{E2E_PREFIX}_push_tricky_{uid}"
+
+        # Create sheet with simple seed data
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+        ).execute()
+        service.spreadsheets().values().update(
+            spreadsheetId=sheet_id,
+            range=f"{tab_name}!A1:C2",
+            valueInputOption="RAW",
+            body={"values": [["key", "value", "note"], ["a", "b", "c"]]},
+        ).execute()
+
+        # Clone
+        output_file = temp_dir / f"{tab_name}.sheet.gax.md"
+        result = _run_gax(
+            "sheet", "tab", "clone",
+            test_sheet["url"], tab_name,
+            "-o", str(output_file),
+        )
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        # Rewrite the local file with challenging data
+        from gax.formats.markdown import MarkdownFormat
+
+        content = output_file.read_text()
+        table_start = content.index("| key")
+        header = content[:table_start]
+
+        import pandas as pd
+
+        pushed_data = [
+            ["key", "value", "note"],
+            ["cmd", "yes | head -5", "line1\nline2"],
+            ["empty", "", "ok"],
+        ]
+        df = pd.DataFrame(pushed_data[1:], columns=pushed_data[0])
+        new_table = MarkdownFormat().write(df)
+        output_file.write_text(header + new_table)
+
+        # Push
+        result = _run_gax("sheet", "tab", "push", str(output_file), "-y")
+        assert result.returncode == 0, f"Push failed: {result.stderr}"
+
+        # Read back via API and assert
+        values = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=f"{tab_name}!A1:C3")
+            .execute()
+            .get("values", [])
+        )
+
+        assert values[0] == pushed_data[0], f"Headers mismatch: {values[0]}"
+        assert values[1][0] == "cmd"
+        assert values[1][1] == "yes | head -5", f"Pipe lost: {values[1][1]!r}"
+        assert values[1][2] == "line1\nline2", f"Newline lost: {values[1][2]!r}"
+        assert values[2][0] == "empty"
+        # Sheets API omits trailing empty cells, so values[2] may have len < 3
+        pushed_note = values[2][2] if len(values[2]) > 2 else ""
+        assert pushed_note == "ok"
+
 
 # =============================================================================
 # Combined workflow tests
