@@ -300,6 +300,68 @@ class TestCrossCuttingConsistency:
             missing_help
         )
 
+    def test_pull_flags_forwardable_by_unified_pull(self):
+        """All extra flags on resource pull commands must be forwardable
+        through 'gax pull' (unified_pull).
+
+        unified_pull uses _split_flags_and_files which converts --flag-name
+        to flag_name=True and passes it as **kwargs.  This only works if:
+          1. The option is a boolean flag (is_flag=True)
+          2. There's no Click parameter rename (e.g. --all -> include_all)
+             because _split_flags_and_files doesn't know about renames
+
+        If this test fails, either:
+          - Fix the option to not use a rename, OR
+          - Add the flag as an explicit option on unified_pull
+        """
+        # Options that unified_pull handles itself (not forwarded)
+        HANDLED_BY_UNIFIED = {"yes", "files"}
+
+        violations = []
+
+        def check_pull_cmd(cmd, path: str):
+            for param in cmd.params:
+                if not isinstance(param, click.Option):
+                    continue
+                if param.name in HANDLED_BY_UNIFIED:
+                    continue
+
+                # (1) Must be a boolean flag
+                if not param.is_flag:
+                    violations.append(
+                        f"{path}: --{param.name} is not a boolean flag "
+                        f"(cannot be forwarded by _split_flags_and_files)"
+                    )
+                    continue
+
+                # (2) The CLI flag name must produce the same kwarg name
+                # as _split_flags_and_files would generate
+                long_opts = [o for o in param.opts if o.startswith("--")]
+                if not long_opts:
+                    continue
+                cli_flag = max(long_opts, key=len)  # e.g. "--with-comments"
+                forwarded_name = cli_flag.lstrip("-").replace("-", "_")
+                if forwarded_name != param.name:
+                    violations.append(
+                        f"{path}: {cli_flag} maps to Click param "
+                        f"'{param.name}', but _split_flags_and_files "
+                        f"produces '{forwarded_name}'"
+                    )
+
+        def walk(cmd, path=""):
+            if isinstance(cmd, click.Group):
+                for name, subcmd in cmd.commands.items():
+                    walk(subcmd, f"{path}/{name}" if path else name)
+            elif cmd.name == "pull":
+                check_pull_cmd(cmd, path)
+
+        walk(cli)
+
+        assert not violations, (
+            "Pull flags not forwardable by unified_pull:\n"
+            + "\n".join(violations)
+        )
+
     def test_all_format_options_use_same_flags(self):
         """All format options should use -f/--format consistently."""
         format_violations = []

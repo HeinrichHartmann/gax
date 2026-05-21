@@ -130,7 +130,7 @@ class GSheetClient:
         spreadsheet_id: str,
         tab: str,
         df: pd.DataFrame,
-        with_formulas: bool = False,
+        values: bool = False,
         create_if_missing: bool = False,
     ) -> int:
         """Write DataFrame to a Google Sheet tab. Returns number of rows written.
@@ -141,7 +141,9 @@ class GSheetClient:
             spreadsheet_id: The spreadsheet ID
             tab: Tab name
             df: DataFrame to write
-            with_formulas: Whether to interpret formulas
+            values: If True, write as literal strings (RAW mode, no formula
+                 interpretation). Default False uses USER_ENTERED which
+                 interprets formulas and preserves number formatting.
             create_if_missing: Create the tab if it doesn't exist
 
         Returns:
@@ -165,12 +167,12 @@ class GSheetClient:
 
         # Fill NaN with empty string and convert to list of lists
         df = df.fillna("")
-        values = [df.columns.tolist()] + df.astype(str).values.tolist()
+        rows = [df.columns.tolist()] + df.astype(str).values.tolist()
 
         # Update starting from A1
-        # USER_ENTERED interprets formulas, RAW writes literals
-        value_input_option = "USER_ENTERED" if with_formulas else "RAW"
-        ws.update(range_name="A1", values=values, value_input_option=value_input_option)
+        # USER_ENTERED interprets formulas and numbers, RAW writes literals
+        value_input_option = "RAW" if values else "USER_ENTERED"
+        ws.update(range_name="A1", values=rows, value_input_option=value_input_option)
 
         return len(df)
 

@@ -157,8 +157,8 @@ def unified_pull(files: tuple[str, ...], yes: bool):
 @main.command("push")
 @click.argument("files", nargs=-1, required=True)
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
-@click.option("--with-formulas", is_flag=True, help="Interpret formulas (sheets only)")
-def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
+@click.option("--values", is_flag=True, help="Write as literal strings, no formula interpretation (sheets only)")
+def unified_push(files: tuple[str, ...], yes: bool, values: bool):
     """Push local .gax.md file(s) or .gax.md.d folder(s) to their sources.
 
     Automatically detects file type from YAML header and calls
@@ -234,7 +234,7 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
                 continue
 
         try:
-            r.push(with_formulas=with_formulas)
+            r.push(values=values)
             click.echo("  pushed")
             success_count += 1
         except Exception as e:

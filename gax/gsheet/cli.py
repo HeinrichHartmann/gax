@@ -118,22 +118,23 @@ def sheet_checkout(url: str, output: Path | None, fmt: str):
 @sheet.command("push")
 @click.argument("folder", type=click.Path(exists=True, path_type=Path))
 @click.option(
-    "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
+    "--values", is_flag=True, help="Write as literal strings (no formula interpretation)"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
 @gax_command
-def sheet_push(folder: Path, with_formulas: bool, yes: bool):
+def sheet_push(folder: Path, values: bool, yes: bool):
     """Push all tabs in a checkout folder to Google Sheets.
 
-    Shows a diff preview of changes and prompts for confirmation before pushing.
+    By default, formulas (e.g. =SUM(A1:A10)) are interpreted. Use --values
+    to write everything as literal strings.
 
     \b
     Examples:
         gax sheet push Budget.sheet.gax.md.d
         gax sheet push Budget.sheet.gax.md.d -y
-        gax sheet push Budget.sheet.gax.md.d --with-formulas
+        gax sheet push Budget.sheet.gax.md.d --values
     """
-    confirm_and_push(Sheet(path=folder), yes=yes, with_formulas=with_formulas)
+    confirm_and_push(Sheet(path=folder), yes=yes, values=values)
 
 
 @sheet.command("plan")
@@ -166,11 +167,11 @@ def sheet_plan(folder):
 @sheet.command("apply")
 @click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option(
-    "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
+    "--values", is_flag=True, help="Write as literal strings (no formula interpretation)"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 @gax_command
-def sheet_apply(folder, with_formulas: bool, yes: bool):
+def sheet_apply(folder, values: bool, yes: bool):
     """Apply planned changes by pushing to Google Sheets.
 
     Similar to 'terraform apply' - shows plan and applies changes with confirmation.
@@ -180,12 +181,12 @@ def sheet_apply(folder, with_formulas: bool, yes: bool):
     Examples:
         gax sheet apply
         gax sheet apply Budget.sheet.gax.md.d
-        gax sheet apply Budget.sheet.gax.md.d --with-formulas
+        gax sheet apply Budget.sheet.gax.md.d --values
     """
     if folder is None:
         folder = _find_sheet_folder()
 
-    confirm_and_push(Sheet(path=folder), yes=yes, with_formulas=with_formulas)
+    confirm_and_push(Sheet(path=folder), yes=yes, values=values)
 
 
 @sheet.group()
@@ -237,11 +238,11 @@ def tab_pull(file: Path, yes: bool):
 @tab.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option(
-    "--with-formulas", is_flag=True, help="Interpret formulas (e.g. =SUM(A1:A10))"
+    "--values", is_flag=True, help="Write as literal strings (no formula interpretation)"
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
 @gax_command
-def tab_push(file: Path, with_formulas: bool, yes: bool):
+def tab_push(file: Path, values: bool, yes: bool):
     """Push local data to a single tab."""
     from .frontmatter import parse_file
     from ..formats import get_format as get_fmt
@@ -256,5 +257,5 @@ def tab_push(file: Path, with_formulas: bool, yes: bool):
         click.echo("Aborted.")
         return
 
-    SheetTab(path=file).push(with_formulas=with_formulas)
+    SheetTab(path=file).push(values=values)
     click.echo(f"Pushed {row_count} rows")

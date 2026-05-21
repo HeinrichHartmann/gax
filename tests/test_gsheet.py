@@ -160,7 +160,7 @@ class TestGSheetClientWrite:
         worksheet.update.assert_called_once()
         call_kwargs = worksheet.update.call_args[1]
         assert call_kwargs["range_name"] == "A1"
-        assert call_kwargs["value_input_option"] == "RAW"
+        assert call_kwargs["value_input_option"] == "USER_ENTERED"
 
         # Check the values passed
         values = call_kwargs["values"]
@@ -168,8 +168,8 @@ class TestGSheetClientWrite:
         assert values[1] == ["Alice", "100"]
         assert values[2] == ["Bob", "95"]
 
-    def test_write_with_formulas(self):
-        """Test writing with formula interpretation enabled."""
+    def test_write_default_interprets_formulas(self):
+        """Test that default write uses USER_ENTERED (interprets formulas)."""
         gc, worksheet = make_mock_gc([])
 
         df = pd.DataFrame(
@@ -180,10 +180,22 @@ class TestGSheetClientWrite:
         )
 
         client = GSheetClient(gc=gc)
-        client.write("spreadsheet-123", "Sheet1", df, with_formulas=True)
+        client.write("spreadsheet-123", "Sheet1", df)
 
         call_kwargs = worksheet.update.call_args[1]
         assert call_kwargs["value_input_option"] == "USER_ENTERED"
+
+    def test_write_values_mode_uses_raw(self):
+        """Test that values=True uses RAW (literal strings)."""
+        gc, worksheet = make_mock_gc([])
+
+        df = pd.DataFrame({"A": ["=SUM(B1:B2)"]})
+
+        client = GSheetClient(gc=gc)
+        client.write("spreadsheet-123", "Sheet1", df, values=True)
+
+        call_kwargs = worksheet.update.call_args[1]
+        assert call_kwargs["value_input_option"] == "RAW"
 
 
 class TestPullPush:

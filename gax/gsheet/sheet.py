@@ -183,7 +183,7 @@ def pull_single_tab(file_path: Path, client: GSheetClient | None = None) -> int:
 
 
 def push_single_tab(
-    file_path: Path, client: GSheetClient | None = None, with_formulas: bool = False
+    file_path: Path, client: GSheetClient | None = None, values: bool = False
 ) -> int:
     """Push data from a single-tab file to Google Sheets.
 
@@ -196,9 +196,7 @@ def push_single_tab(
     fmt = get_format(config.format)
     df = fmt.read(data)
 
-    rows = client.write(
-        config.spreadsheet_id, config.tab, df, with_formulas=with_formulas
-    )
+    rows = client.write(config.spreadsheet_id, config.tab, df, values=values)
     return rows
 
 
@@ -381,7 +379,7 @@ def create_push_plan(
 def apply_push_plan(
     plan: PushPlan,
     client: Optional[GSheetClient] = None,
-    with_formulas: bool = False,
+    values: bool = False,
 ) -> int:
     """Apply a push plan. Returns total number of rows pushed."""
     if client is None:
@@ -409,7 +407,7 @@ def apply_push_plan(
                     config.spreadsheet_id,
                     config.tab,
                     local_df,
-                    with_formulas=with_formulas,
+                    values=values,
                     create_if_missing=change.is_new,
                 )
                 total_rows += rows
@@ -537,11 +535,11 @@ class SheetTab(Resource):
         """Push a single-tab file to remote.
 
         Keyword args:
-            with_formulas: interpret formulas (default: False)
+            values: write as literal strings, no formula interpretation
         """
-        with_formulas = kw.get("with_formulas", False)
+        values = kw.get("values", False)
         logger.info(f"Pushing: {self.path.name}")
-        push_single_tab(self.path, with_formulas=with_formulas)
+        push_single_tab(self.path, values=values)
 
 
 # =============================================================================
@@ -791,12 +789,12 @@ class Sheet(Resource):
         """Push all changed tabs in a checkout folder.
 
         Keyword args:
-            with_formulas: interpret formulas (default: False)
+            values: write as literal strings, no formula interpretation
         """
-        with_formulas = kw.get("with_formulas", False)
+        values = kw.get("values", False)
         plan = create_push_plan(self.path)
         if plan.has_changes:
-            apply_push_plan(plan, with_formulas=with_formulas)
+            apply_push_plan(plan, values=values)
 
     def tab_list(self, out) -> None:
         """Write tab listing to file descriptor."""
