@@ -726,64 +726,66 @@ class Sheet(Resource):
             logger.warning(f"Removing (no matching remote tab): {stale.name}")
             stale.unlink()
 
-    def stale_files(self) -> list[Path]:
-        """Find local files that have no matching remote tab.
+    def diff(self, **kw) -> str | None:
+        """Preview differences between local folder and remote.
 
-        Compares local files against remote tab list without pulling data.
+        Direction-neutral: labels tabs as "local only" or "remote only"
+        so the output is accurate for both push and pull contexts.
+        Uses a single client and API call.
         """
         metadata_path = self.path / ".gax.yaml"
         if not metadata_path.exists():
-            return []
+            raise ValueError(f"No .gax.yaml found in {self.path}")
 
         with open(metadata_path) as f:
             metadata = yaml.safe_load(f)
 
         spreadsheet_id = metadata.get("spreadsheet_id")
         if not spreadsheet_id:
-            return []
+            raise ValueError("No spreadsheet_id in .gax.yaml")
 
         client = GSheetClient()
         info = client.get_spreadsheet_info(spreadsheet_id)
+        remote_tab_names = {t["title"] for t in info["tabs"]}
 
-        remote_tab_files = set()
-        for tab_info in info["tabs"]:
-            tab_name = tab_info["title"]
-            remote_tab_files.add(
-                f"{_safe_filename(tab_name)}.tab.sheet.gax.md"
+        # Read local tab files
+        tab_files = sorted(self.path.glob("*.tab.sheet.gax.md"))
+        local_tabs: dict[str, pd.DataFrame] = {}
+        for tab_file in tab_files:
+            config, data = parse_file(tab_file)
+            fmt = get_format(config.format)
+            local_tabs[config.tab] = fmt.read(data)
+
+        # Fetch remote data for tabs that exist both locally and remotely
+        common = sorted(set(local_tabs) & remote_tab_names)
+        remote_data = client.read_all(spreadsheet_id, common) if common else {}
+
+        lines = []
+
+        # Modified tabs
+        for tab_name in common:
+            added, removed = _compare_dataframes(
+                local_tabs[tab_name], remote_data[tab_name]
+            )
+            if added > 0 or removed > 0:
+                lines.append(
+                    f"  ~ {tab_name} (+{added}/-{removed} lines)"
+                )
+
+        # Remote-only tabs
+        for tab_name in sorted(remote_tab_names - set(local_tabs)):
+            lines.append(f"  + {tab_name} (remote only)")
+
+        # Local-only tabs
+        for tab_name in sorted(set(local_tabs) - remote_tab_names):
+            lines.append(
+                f"  - {tab_name} ({len(local_tabs[tab_name])} rows, local only)"
             )
 
-        stale = []
-        for f in sorted(self.path.iterdir()):
-            if f.name == ".gax.yaml":
-                continue
-            if f.name in remote_tab_files:
-                continue
-            stale.append(f)
-
-        return stale
-
-    def diff(self, **kw) -> str | None:
-        """Preview changes between local folder and remote.
-
-        Returns a human-readable summary, or None if no changes.
-        Includes stale local files that would be removed on pull.
-        """
-        plan = create_push_plan(self.path)
-        stale = self.stale_files()
-
-        if not plan.has_changes and not stale:
+        if not lines:
             return None
 
-        parts = []
-        if plan.has_changes:
-            parts.append(plan.format_summary())
-        if stale:
-            lines = ["Stale local files (would be removed on pull):"]
-            for f in stale:
-                lines.append(f"  - {f.name}")
-            parts.append("\n".join(lines))
-
-        return "\n\n".join(parts)
+        return f"Differences in {self.path.name}:\n" + "\n".join(lines)
 
     def push(self, **kw) -> None:
         """Push all changed tabs in a checkout folder.
