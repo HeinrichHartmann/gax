@@ -1078,6 +1078,25 @@ class Tab(Resource):
         """
         return Doc(url=self.url).checkout(output=output, **kw)
 
+    def get(self, **kw) -> str:
+        """Fetch current remote content for this tab. Read-only."""
+        section = _parse_tab_file(self.path)
+        source_url = section.source
+        if not source_url:
+            raise ValueError("No source URL found in file")
+
+        document_id = extract_doc_id(source_url)
+        content = self.path.read_text(encoding="utf-8")
+        sections = parse_multipart(content)
+
+        if len(sections) == 1:
+            tab_name = section.section_title
+            remote = pull_single_tab(document_id, tab_name, source_url)
+            return remote.content
+        else:
+            remote_sections = pull_doc(document_id, source_url)
+            return "\n\n".join(s.content for s in remote_sections)
+
     def pull(self, **kw) -> None:
         """Refresh a tab file from remote."""
         with_comments = kw.get("with_comments", False)
@@ -1296,6 +1315,31 @@ class Doc(Resource):
     def checkout(self, output: Path | None = None, **kw) -> Path:
         """Checkout all tabs into a folder."""
         return self.clone(output=output, **kw)
+
+    def get(self, **kw) -> str:
+        """Fetch all remote tabs and return content. Read-only."""
+        metadata = _read_checkout_metadata(self.path)
+        document_id = metadata["document_id"]
+        url = metadata["url"]
+
+        sections = pull_doc(document_id, url)
+
+        tab_filter = kw.get("tab")
+        if tab_filter:
+            matches = [s for s in sections if s.section_title == tab_filter]
+            if not matches:
+                available = [s.section_title for s in sections]
+                raise ValueError(
+                    f"Tab '{tab_filter}' not found. Available: {', '.join(available)}"
+                )
+            sections = matches
+
+        parts = []
+        for section in sections:
+            if len(sections) > 1:
+                parts.append(f"# {section.section_title}\n")
+            parts.append(section.content)
+        return "\n\n".join(parts)
 
     def pull(self, **kw) -> None:
         """Pull all tabs in a checkout folder (supports nested tabs).

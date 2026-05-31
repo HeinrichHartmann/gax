@@ -516,6 +516,14 @@ class SheetTab(Resource):
         file_path.write_text(content, encoding="utf-8")
         return file_path
 
+    def get(self, **kw) -> str:
+        """Fetch current remote content for this tab."""
+        config, _ = parse_file(self.path)
+        client = GSheetClient()
+        df = client.read(config.spreadsheet_id, config.tab, config.range)
+        fmt = get_format(config.format)
+        return fmt.write(df)
+
     def pull(self, **kw) -> None:
         """Refresh a single-tab file from remote."""
         logger.info(f"Pulling: {self.path.name}")
@@ -786,6 +794,44 @@ class Sheet(Resource):
             return None
 
         return f"Differences in {self.path.name}:\n" + "\n".join(lines)
+
+    def get(self, **kw) -> str:
+        """Fetch all remote tabs and return formatted content."""
+        metadata_path = self.path / ".gax.yaml"
+        if not metadata_path.exists():
+            raise ValueError(f"No .gax.yaml found in {self.path}")
+
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+
+        spreadsheet_id = metadata.get("spreadsheet_id")
+        fmt_name = metadata.get("format", "md")
+        if not spreadsheet_id:
+            raise ValueError("No spreadsheet_id in .gax.yaml")
+
+        client = GSheetClient()
+        info = client.get_spreadsheet_info(spreadsheet_id)
+        tab_names = [t["title"] for t in info["tabs"]]
+
+        tab_filter = kw.get("tab")
+        if tab_filter:
+            if tab_filter not in tab_names:
+                raise ValueError(
+                    f"Tab '{tab_filter}' not found. Available: {', '.join(tab_names)}"
+                )
+            tab_names = [tab_filter]
+
+        all_data = client.read_all(spreadsheet_id, tab_names)
+        formatter = get_format(fmt_name)
+
+        parts = []
+        for tab_name in tab_names:
+            df = all_data[tab_name]
+            if len(tab_names) > 1:
+                parts.append(f"# {tab_name}\n")
+            parts.append(formatter.write(df))
+
+        return "\n".join(parts)
 
     def push(self, **kw) -> None:
         """Push all changed tabs in a checkout folder.

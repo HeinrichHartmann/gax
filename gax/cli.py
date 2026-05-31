@@ -64,6 +64,54 @@ def _split_flags_and_files(
 
 
 @docs.section("main")
+@main.command("get")
+@click.argument("target")
+@click.option("--tab", help="Specific tab (for multi-tab resources)")
+def unified_get(target: str, tab: str | None):
+    """Fetch remote content to stdout. Read-only, no local changes.
+
+    Reads the source URL from the file's metadata, fetches current remote
+    content, and prints to stdout. Does not modify local files.
+
+    \b
+    Examples:
+        gax get report.doc.gax.md           # Print remote doc content
+        gax get Budget.sheet.gax.md.d/      # Print all remote tabs
+        gax get Budget.sheet.gax.md.d/ --tab Revenue  # Single tab
+        gax get tab.sheet.gax.md            # Print remote tab data
+    """
+    from .ui import error as ui_error
+
+    path = Path(target)
+    if not path.exists():
+        # Try as URL
+        try:
+            resource = Resource.from_url(target)
+        except ValueError:
+            ui_error(f"Not found: {target}")
+            sys.exit(1)
+    else:
+        try:
+            resource = Resource.from_file(path)
+        except ValueError:
+            ui_error(f"Unsupported file: {target}")
+            sys.exit(1)
+
+    try:
+        kw = {}
+        if tab:
+            kw["tab"] = tab
+        content = resource.get(**kw)
+        click.echo(content, nl=False)
+    except NotImplementedError:
+        ui_error(f"get not supported for: {target}")
+        sys.exit(1)
+    except Exception as e:
+        ui_error(str(e))
+        sys.exit(1)
+
+
+@docs.section("main")
 @main.command(
     "pull",
     context_settings=dict(ignore_unknown_options=True),

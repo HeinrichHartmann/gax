@@ -223,6 +223,10 @@ class Resource:
         """
         raise NotImplementedError(f"{self.name} does not support diff")
 
+    def get(self, **kw) -> str:
+        """Fetch remote content and return as string. Read-only, no side effects."""
+        raise NotImplementedError(f"{self.name} does not support get")
+
     def push(self, **kw) -> None:
         """Push local to remote. Unconditional — caller handles confirmation."""
         raise NotImplementedError(f"{self.name} does not support push")
