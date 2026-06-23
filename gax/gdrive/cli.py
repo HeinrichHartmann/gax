@@ -6,6 +6,7 @@ from pathlib import Path
 from ..ui import gax_command, success
 from .. import docs
 from . import File
+from ..search.search import search_drive, format_table, format_json, format_jsonl
 
 
 @docs.section("resource")
@@ -122,3 +123,40 @@ def file_push(file_path, public, yes):
 
     File(path=file_path).push(public=public)
     success("Pushed successfully.")
+
+
+@drive_group.command("search")
+@click.argument("query")
+@click.option("--limit", default=50, show_default=True, help="Max results to return")
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(["table", "json", "jsonl"]),
+    default="table",
+    show_default=True,
+    help="Output format",
+)
+@gax_command
+def drive_search(query, limit, fmt):
+    """Search Google Drive files.
+
+    QUERY uses the Drive query syntax, e.g.:
+
+    \b
+        fullText contains 'budget'
+        name contains 'report'
+        mimeType = 'application/vnd.google-apps.document'
+        modifiedTime > '2024-01-01T00:00:00Z'
+
+    \b
+    Examples:
+        gax drive search "fullText contains 'budget'"
+        gax drive search "name contains 'report'" --format json
+        gax drive search "mimeType = 'application/vnd.google-apps.spreadsheet'" --limit 10
+    """
+    results = search_drive(query, limit=limit)
+    if fmt == "json":
+        click.echo(format_json(results))
+    elif fmt == "jsonl":
+        click.echo(format_jsonl(results))
+    else:
+        click.echo(format_table(results))
