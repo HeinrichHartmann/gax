@@ -1117,7 +1117,11 @@ class Tab(Resource):
         """Preview changes between local tab and remote.
 
         Returns unified diff string, or None if no changes.
+        Accepts ``body`` kwarg (Path) to use an external file as the local content
+        instead of the tracking file's content.
         """
+        body: Path | None = kw.get("body", None)
+
         section = _parse_tab_file(self.path)
         source_url = section.source
         tab_name = section.section_title
@@ -1128,7 +1132,8 @@ class Tab(Resource):
         document_id = extract_doc_id(source_url)
         remote_section = pull_single_tab(document_id, tab_name, source_url)
 
-        local_lines = section.content.splitlines(keepends=True)
+        local_content = body.read_text(encoding="utf-8") if body else section.content
+        local_lines = local_content.splitlines(keepends=True)
         remote_lines = remote_section.content.splitlines(keepends=True)
 
         diff_lines = list(
@@ -1151,8 +1156,12 @@ class Tab(Resource):
 
         Keyword args:
             patch: use incremental AST-level push (experimental)
+            body: Path — push this external file's content instead of the
+                  tracking file's content; also updates the tracking file so
+                  subsequent pull round-trips are consistent.
         """
         use_patch = kw.get("patch", False)
+        body: Path | None = kw.get("body", None)
 
         section = _parse_tab_file(self.path)
         source_url = section.source
@@ -1162,7 +1171,19 @@ class Tab(Resource):
             raise ValueError("No source URL found in file")
 
         document_id = extract_doc_id(source_url)
-        content_to_push = inline_images_from_store(section.content)
+
+        if body is not None:
+            raw_content = body.read_text(encoding="utf-8")
+            content_to_push = inline_images_from_store(raw_content)
+            # Update the tracking file so the tracking file stays in sync
+            new_section = DocSection(
+                content=raw_content,
+                source=source_url,
+                section_title=tab_name,
+            )
+            self.path.write_text(format_section(new_section), encoding="utf-8")
+        else:
+            content_to_push = inline_images_from_store(section.content)
 
         if use_patch:
             from .diff_push import diff_push as _diff_push

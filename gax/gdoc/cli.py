@@ -92,8 +92,14 @@ def doc_tab_diff(file: Path):
     is_flag=True,
     help="Incremental push: apply only changed elements (experimental)",
 )
+@click.option(
+    "--body",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Push content from this external markdown file instead of the tracking file.",
+)
 @gax_command
-def doc_tab_push(file: Path, yes: bool, use_patch: bool):
+def doc_tab_push(file: Path, yes: bool, use_patch: bool, body: Path | None):
     """Push local changes to a single tab (with confirmation).
 
     The default push path is full-replace (see ADR 023). The ``--patch`` flag
@@ -101,6 +107,9 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
     local markdown against the live document and applies only the changed
     elements. The ``--patch`` path is under evaluation and may fail on
     structural changes; when in doubt, omit the flag.
+
+    Use ``--body`` to push content from an external markdown file. The tracking
+    file is updated in place so subsequent ``pull`` round-trips stay consistent.
     """
     from .doc import parse_multipart, extract_doc_id
     from ..ui import error
@@ -144,7 +153,7 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
         t.push(patch=True)
         success("Patched successfully.")
     else:
-        diff_text = t.diff()
+        diff_text = t.diff(body=body)
         if diff_text is None:
             click.echo("No differences to push.")
             return
@@ -156,8 +165,10 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
 
         from .ir import from_markdown, check_unsupported
 
-        section = parse_multipart(file.read_text(encoding="utf-8"))[0]
-        push_warnings = check_unsupported(from_markdown(section.content))
+        content_for_warnings = body.read_text(encoding="utf-8") if body else (
+            parse_multipart(file.read_text(encoding="utf-8"))[0].content
+        )
+        push_warnings = check_unsupported(from_markdown(content_for_warnings))
         for w in push_warnings:
             click.echo(f"  Warning: {w.feature}: {w.detail}")
 
@@ -173,7 +184,7 @@ def doc_tab_push(file: Path, yes: bool, use_patch: bool):
                 click.echo("Aborted.")
                 return
 
-        t.push()
+        t.push(body=body)
         success("Pushed successfully.")
 
 

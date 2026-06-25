@@ -371,6 +371,69 @@ class TestDocE2E:
             except Exception as e:
                 print(f"Warning: Could not delete tab {tab_id}: {e}")
 
+    def test_tab_push_with_body(self, check_auth, test_doc, temp_dir):
+        """Test: clone tab -> push external --body file -> pull -> verify body content."""
+        uid = uuid.uuid4().hex[:8]
+        doc_id = test_doc["id"]
+
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+
+        # Create a fresh tab via the API
+        tab_name = f"{E2E_PREFIX}_body_{uid}"
+        resp = service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [{"addDocumentTab": {"tabProperties": {"title": tab_name}}}]},
+        ).execute()
+        tab_id = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
+
+        try:
+            # Clone the tab to get a tracking file
+            tracking_file = temp_dir / f"{tab_name}.doc.gax.md"
+            result = _run_gax(
+                "doc", "tab", "clone", test_doc["url"], tab_name,
+                "-o", str(tracking_file),
+            )
+            assert result.returncode == 0, f"Clone failed: {result.stderr}"
+            assert tracking_file.exists()
+
+            # Write an external body file with distinct content
+            body_file = temp_dir / "external_body.md"
+            body_content = f"# External Body {uid}\n\nContent pushed via --body flag.\n"
+            body_file.write_text(body_content)
+
+            # Push with --body pointing to the external file
+            result = _run_gax(
+                "doc", "tab", "push", str(tracking_file),
+                "--body", str(body_file),
+                "-y",
+            )
+            assert result.returncode == 0, f"Push with --body failed: {result.stderr}"
+            assert "Pushed" in result.stdout
+
+            # The tracking file should now contain the body content
+            tracking_text = tracking_file.read_text()
+            assert f"External Body {uid}" in tracking_text, (
+                "Tracking file not updated with body content"
+            )
+
+            # Pull and verify the remote tab now has the body content
+            result = _run_gax("doc", "tab", "pull", str(tracking_file), "-y")
+            assert result.returncode == 0, f"Pull failed: {result.stderr}"
+            pulled_text = tracking_file.read_text()
+            assert f"External Body {uid}" in pulled_text, (
+                "Remote tab does not contain body content after push"
+            )
+
+        finally:
+            try:
+                service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={"requests": [{"deleteTab": {"tabId": tab_id}}]},
+                ).execute()
+            except Exception as e:
+                print(f"Warning: Could not delete tab {tab_id}: {e}")
+
     # NOTE: table_push_pull_cycle and rich_formatting_round_trip tests
     # moved to test_roundtrip.py (TestPushVerify + TestIdentityRoundTrip)
 
