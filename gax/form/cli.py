@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import gax_command, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, confirm_and_pull, success
 from .. import docs
 from . import Form
 
@@ -47,11 +47,11 @@ def form_clone(url, output, fmt):
 
 @form.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def form_pull(file):
+def form_pull(file, yes: bool):
     """Pull latest form definition from Google Forms."""
-    Form.from_file(file).pull()
-    success(f"Updated: {file}")
+    confirm_and_pull(Form.from_file(file), yes=yes)
 
 
 @form.command("plan")

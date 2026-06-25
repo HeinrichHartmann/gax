@@ -227,11 +227,11 @@ def tab_clone(url: str, tab_name: str, output: Path | None, fmt: str):
 
 @tab.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def tab_pull(file: Path):
+def tab_pull(file: Path, yes: bool):
     """Pull latest data for a single tab."""
-    SheetTab(path=file).pull()
-    success(f"Updated: {file}")
+    confirm_and_pull(SheetTab(path=file), yes=yes)
 
 
 @tab.command("push")

@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import gax_command, success
+from ..ui import gax_command, confirm_and_pull, success
 from .. import docs
 from . import Slide, Presentation
 
@@ -55,8 +55,9 @@ def slides_checkout(url: str, output: Path | None, fmt: str):
 
 @slides.command("pull")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def slides_pull(path: Path):
+def slides_pull(path: Path, yes: bool):
     """Pull latest slides from Google.
 
     Works with both single .slides.gax.md files and .slides.gax.md.d/ folders.
@@ -67,10 +68,9 @@ def slides_pull(path: Path):
         gax slides pull 00_Welcome.slides.gax.md
     """
     if path.is_dir():
-        Presentation.from_file(path).pull()
+        confirm_and_pull(Presentation.from_file(path), yes=yes)
     else:
-        Slide.from_file(path).pull()
-    success(f"Updated: {path}")
+        confirm_and_pull(Slide.from_file(path), yes=yes)
 
 
 @slides.command("push")

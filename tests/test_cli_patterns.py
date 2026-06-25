@@ -323,6 +323,32 @@ class TestCrossCuttingConsistency:
             "Format option flag inconsistencies:\n" + "\n".join(format_violations)
         )
 
+    def test_pull_commands_have_yes_flag(self):
+        """All pull commands must have -y/--yes flag to skip confirmation."""
+        violations = []
+
+        def check_command(cmd, path=""):
+            if cmd.name == "pull" and not isinstance(cmd, click.Group):
+                yes_param = next((p for p in cmd.params if p.name == "yes"), None)
+                if yes_param is None:
+                    violations.append(f"{path}: pull command missing -y/--yes flag")
+                elif set(getattr(yes_param, "opts", [])) != {"-y", "--yes"}:
+                    violations.append(
+                        f"{path}: yes flag should be -y/--yes, got {yes_param.opts}"
+                    )
+                elif not getattr(yes_param, "is_flag", False):
+                    violations.append(f"{path}: yes option should be a boolean flag")
+
+            if isinstance(cmd, click.Group):
+                for name, subcmd in cmd.commands.items():
+                    check_command(subcmd, f"{path}/{name}" if path else name)
+
+        check_command(cli)
+
+        assert not violations, (
+            "Pull commands missing -y/--yes flag:\n" + "\n".join(violations)
+        )
+
     def test_apply_commands_have_yes_flag(self):
         """Apply commands must have -y/--yes flag to skip confirmation for automation."""
         apply_violations = []

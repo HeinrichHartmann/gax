@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import gax_command, confirm_and_push, success, error
+from ..ui import gax_command, confirm_and_push, confirm_and_pull, success, error
 from .. import docs
 from . import Thread, Mailbox, Draft
 
@@ -45,8 +45,9 @@ def mail_clone(thread_id_or_url, output):
 
 @mail_group.command("pull")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def mail_pull(path):
+def mail_pull(path, yes: bool):
     """Pull latest messages for .mail.gax.md file(s).
 
     Single file:
@@ -57,8 +58,7 @@ def mail_pull(path):
 
         gax mail pull Inbox/
     """
-    Thread(path=path).pull()
-    success(f"Updated: {path}")
+    confirm_and_pull(Thread(path=path), yes=yes)
 
 
 @mail_group.command("reply")
@@ -156,11 +156,11 @@ def mailbox_clone_cmd(output, query, limit):
 
 @mailbox_group.command("pull")
 @click.argument("file", type=click.Path(exists=True))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def mailbox_pull(file):
+def mailbox_pull(file, yes: bool):
     """Update a .gax.md file by re-fetching from Gmail."""
-    Mailbox(path=Path(file)).pull()
-    success(f"Updated: {file}")
+    confirm_and_pull(Mailbox(path=Path(file)), yes=yes)
 
 
 @mailbox_group.command("plan")
@@ -357,8 +357,9 @@ def draft_push(file, yes):
 
 @draft.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def draft_pull(file):
+def draft_pull(file, yes: bool):
     """Pull latest content from Gmail draft.
 
     Updates the local .draft.gax.md file with the remote draft content.
@@ -367,5 +368,4 @@ def draft_pull(file):
 
         gax draft pull my_draft.draft.gax.md
     """
-    Draft.from_file(file).pull()
-    success(f"Updated: {file}")
+    confirm_and_pull(Draft.from_file(file), yes=yes)

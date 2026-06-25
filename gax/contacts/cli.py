@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import gax_command, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, confirm_and_pull, success
 from .. import docs
 from . import Contacts
 
@@ -45,14 +45,14 @@ def contacts_clone(fmt, output):
 
 @contacts.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def contacts_pull(file):
+def contacts_pull(file, yes: bool):
     """Pull latest contacts from Google.
 
     Updates the file with current contact data, preserving format.
     """
-    Contacts(path=file).pull()
-    success(f"Updated: {file}")
+    confirm_and_pull(Contacts(path=file), yes=yes)
 
 
 @contacts.command("push")

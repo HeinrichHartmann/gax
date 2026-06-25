@@ -232,6 +232,43 @@ def doc_pull(file: Path, with_comments: bool, yes: bool):
     confirm_and_pull(Tab.from_file(file), yes=yes, with_comments=with_comments)
 
 
+@doc.command("push")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+@gax_command
+def doc_push(folder: Path, yes: bool):
+    """Push all changed tabs in a checkout folder to Google Docs.
+
+    Shows a combined diff across all tabs and asks for confirmation
+    before pushing, unless -y is passed.
+    """
+    d = Doc.from_file(folder)
+    diff_text = d.diff()
+
+    if diff_text is None:
+        click.echo("No differences to push.")
+        return
+
+    click.echo("Changes to push:")
+    click.echo("-" * 40)
+    click.echo(diff_text)
+    click.echo("-" * 40)
+
+    click.echo(
+        "Warning: markdown cannot faithfully represent a Google Doc. "
+        "Non-markdown formatting (colors, fonts, alignment, comments, "
+        "suggestions, images) may be lost."
+    )
+
+    if not yes:
+        if not click.confirm("Push these changes?"):
+            click.echo("Aborted.")
+            return
+
+    d.push()
+    success("Pushed successfully.")
+
+
 @doc.command("checkout")
 @click.argument("url")
 @click.option(

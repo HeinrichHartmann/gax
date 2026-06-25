@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import gax_command, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, confirm_and_pull, success
 from .. import docs
 from . import Label
 
@@ -41,11 +41,11 @@ def label_clone(output, include_all):
 @mail_label.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("--all", "include_all", is_flag=True, help="Include system labels")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def label_pull(file, include_all):
+def label_pull(file, include_all, yes: bool):
     """Pull latest labels to existing file."""
-    Label.from_file(file).pull(include_all=include_all)
-    success(f"Updated: {file}")
+    confirm_and_pull(Label.from_file(file), yes=yes, include_all=include_all)
 
 
 @mail_label.command("plan")

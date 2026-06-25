@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import gax_command, success
+from ..ui import gax_command, confirm_and_pull, success
 from .. import docs
 from . import TaskList, Task as TaskResource
 
@@ -86,15 +86,15 @@ def task_checkout_cmd(tasklist: str | None, output: Path | None, show_all: bool)
 
 @task_group.command(name="pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def task_pull_cmd(file_path: Path):
+def task_pull_cmd(file_path: Path, yes: bool):
     """Pull latest task data from API."""
     name = file_path.name
     if name.endswith(".tasks.gax.md") or name.endswith(".tasks.gax.yaml"):
-        TaskList.from_file(file_path).pull()
+        confirm_and_pull(TaskList.from_file(file_path), yes=yes)
     else:
-        TaskResource.from_file(file_path).pull()
-    success(f"Updated: {file_path}")
+        confirm_and_pull(TaskResource.from_file(file_path), yes=yes)
 
 
 @task_group.command(name="new")

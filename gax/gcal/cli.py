@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import gax_command, success
+from ..ui import gax_command, confirm_and_pull, success
 from .. import docs
 from . import Cal, Event
 
@@ -128,16 +128,16 @@ def cal_clone_cmd(
 
 @cal_group.command(name="pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def cal_pull_cmd(file: Path):
+def cal_pull_cmd(file: Path, yes: bool):
     """Pull latest events to existing file.
 
     \b
     Example:
         gax cal pull week.cal.gax.md
     """
-    Cal(path=file).pull()
-    success(f"Updated: {file}")
+    confirm_and_pull(Cal(path=file), yes=yes)
 
 
 @cal_group.command(name="checkout")
@@ -229,11 +229,11 @@ def cal_event_new_cmd(calendar: str, output_path: Path | None):
 
 @cal_event_group.command(name="pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def cal_event_pull_cmd(file_path: Path):
+def cal_event_pull_cmd(file_path: Path, yes: bool):
     """Pull latest event data from API."""
-    Event(path=file_path).pull()
-    success(f"Pulled latest data to {file_path}")
+    confirm_and_pull(Event(path=file_path), yes=yes)
 
 
 @cal_event_group.command(name="push")

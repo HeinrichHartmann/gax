@@ -3,7 +3,7 @@
 import click
 from pathlib import Path
 
-from ..ui import gax_command, success
+from ..ui import gax_command, confirm_and_pull, success
 from .. import docs
 from . import File
 from ..search.search import search_drive, format_table, format_json, format_jsonl
@@ -67,8 +67,9 @@ def file_checkout(url_or_id, output, shallow):
 
 @drive_group.command("pull")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def file_pull(file_path):
+def file_pull(file_path, yes: bool):
     """Pull latest version of a file from Google Drive.
 
     Requires a .gax.md tracking file (created by 'gax file clone').
@@ -77,8 +78,7 @@ def file_pull(file_path):
 
         gax file pull report.pdf
     """
-    File(path=file_path).pull()
-    success(f"Updated: {file_path}")
+    confirm_and_pull(File(path=file_path), yes=yes)
 
 
 @drive_group.command("push")
@@ -129,7 +129,7 @@ def file_push(file_path, public, yes):
 @click.argument("query")
 @click.option("--limit", default=50, show_default=True, help="Max results to return")
 @click.option(
-    "--format", "fmt",
+    "--format", "-f", "fmt",
     type=click.Choice(["table", "json", "jsonl"]),
     default="table",
     show_default=True,

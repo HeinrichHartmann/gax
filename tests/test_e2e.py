@@ -273,6 +273,104 @@ class TestDocE2E:
         final_content = tracking_file.read_text()
         assert "Updated E2E Tab" in final_content
 
+    def test_checkout_push_cycle(self, check_auth, test_doc, temp_dir):
+        """Test: import tab -> checkout -> modify -> doc push -> pull -> verify."""
+        uid = uuid.uuid4().hex[:8]
+        fixture_content = (FIXTURES_DIR / "e2e_test2.md").read_text()
+        test_file = temp_dir / f"{E2E_PREFIX}_docpush_{uid}.md"
+        test_file.write_text(fixture_content)
+
+        # Import as a new tab so we have something to checkout
+        tracking_file = temp_dir / f"{E2E_PREFIX}_docpush_{uid}.tab.gax.md"
+        result = _run_gax(
+            "doc", "tab", "import", test_doc["url"], str(test_file),
+            "-o", str(tracking_file),
+        )
+        assert result.returncode == 0, f"Import failed: {result.stderr}"
+
+        # Checkout the whole document
+        checkout_dir = temp_dir / f"{E2E_PREFIX}_docpush_{uid}.doc.gax.md.d"
+        result = _run_gax("doc", "checkout", test_doc["url"], "-o", str(checkout_dir))
+        assert result.returncode == 0, f"Checkout failed: {result.stderr}"
+        assert checkout_dir.exists()
+
+        # Modify the imported tab's file in the checkout folder
+        tab_file = checkout_dir / f"{E2E_PREFIX}_docpush_{uid}.doc.gax.md"
+        assert tab_file.exists(), f"Expected tab file: {tab_file}"
+        content = tab_file.read_text()
+        updated_content = content.replace("Second Test Tab", "Updated Via Doc Push")
+        tab_file.write_text(updated_content)
+
+        # Push via `gax doc push` (whole folder, with -y to skip confirmation)
+        result = _run_gax("doc", "push", str(checkout_dir), "-y")
+        assert result.returncode == 0, f"Doc push failed: {result.stderr}"
+        assert "Pushed" in result.stdout
+
+        # Pull the individual tab and verify the change landed
+        result = _run_gax("doc", "tab", "pull", str(tracking_file), "-y")
+        assert result.returncode == 0, f"Pull failed: {result.stderr}"
+        final_content = tracking_file.read_text()
+        assert "Updated Via Doc Push" in final_content
+
+    def test_pull_after_tab_rename(self, check_auth, test_doc, temp_dir):
+        """Regression: pull should succeed even when a tab is renamed on Google.
+
+        Bug: Doc.diff() calls Tab.diff() for each local file, which looks up
+        the tab by the name stored in the file header. If the tab was renamed
+        on Google, this raises "Tab not found" and aborts the pull.
+        """
+        uid = uuid.uuid4().hex[:8]
+        original_name = f"{E2E_PREFIX}_rename_orig_{uid}"
+        new_name = f"{E2E_PREFIX}_rename_new_{uid}"
+        doc_id = test_doc["id"]
+
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+
+        # Step 1: Create a tab via the API
+        resp = service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [{"addDocumentTab": {"tabProperties": {"title": original_name}}}]},
+        ).execute()
+        tab_id = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
+
+        try:
+            # Step 2: Checkout the whole document to a folder
+            checkout_dir = temp_dir / f"{E2E_PREFIX}_checkout_{uid}.doc.gax.md.d"
+            result = _run_gax("doc", "checkout", test_doc["url"], "-o", str(checkout_dir))
+            assert result.returncode == 0, f"Checkout failed: {result.stderr}"
+            assert checkout_dir.exists()
+
+            # Verify the tab file was created
+            tab_file = checkout_dir / f"{original_name}.doc.gax.md"
+            assert tab_file.exists(), f"Expected tab file: {tab_file}"
+
+            # Step 3: Rename the tab on Google via the API
+            service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": [{"updateDocumentTabProperties": {
+                    "tabProperties": {"tabId": tab_id, "title": new_name},
+                    "fields": "title",
+                }}]},
+            ).execute()
+
+            # Step 4: Pull the checkout folder — should fail with "Tab not found"
+            # because Doc.diff() -> Tab.diff() looks up by the stale local tab name
+            result = _run_gax("pull", str(checkout_dir))
+            assert result.returncode != 0, (
+                "Expected pull to fail after tab rename, but it succeeded"
+            )
+            assert "Tab not found" in result.stderr or "Tab not found" in result.stdout
+
+        finally:
+            try:
+                service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={"requests": [{"deleteTab": {"tabId": tab_id}}]},
+                ).execute()
+            except Exception as e:
+                print(f"Warning: Could not delete tab {tab_id}: {e}")
+
     # NOTE: table_push_pull_cycle and rich_formatting_round_trip tests
     # moved to test_roundtrip.py (TestPushVerify + TestIdentityRoundTrip)
 

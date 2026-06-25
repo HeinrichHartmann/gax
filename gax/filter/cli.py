@@ -4,7 +4,7 @@ import sys
 import click
 from pathlib import Path
 
-from ..ui import gax_command, confirm_and_push, success
+from ..ui import gax_command, confirm_and_push, confirm_and_pull, success
 from .. import docs
 from . import Filter
 
@@ -43,11 +43,11 @@ def filter_clone(output):
 
 @mail_filter.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
-def filter_pull(file):
+def filter_pull(file, yes: bool):
     """Pull latest filters to existing file."""
-    Filter.from_file(file).pull()
-    success(f"Updated: {file}")
+    confirm_and_pull(Filter.from_file(file), yes=yes)
 
 
 @mail_filter.command("plan")
