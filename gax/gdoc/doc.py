@@ -1177,9 +1177,12 @@ class Tab(Resource):
             content_to_push = inline_images_from_store(raw_content)
             # Update the tracking file so the tracking file stays in sync
             new_section = DocSection(
-                content=raw_content,
+                title=section.title,
                 source=source_url,
+                time=section.time,
+                section=section.section,
                 section_title=tab_name,
+                content=raw_content,
             )
             self.path.write_text(format_section(new_section), encoding="utf-8")
         else:

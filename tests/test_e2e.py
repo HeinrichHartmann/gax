@@ -229,7 +229,7 @@ class TestDocE2E:
         assert tracking_file.exists()
 
         # Step 2: Pull content back
-        result = _run_gax("doc", "tab", "pull", str(tracking_file))
+        result = _run_gax("doc", "tab", "pull", str(tracking_file), "-y")
         assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
         # Step 3: Verify content contains expected elements
@@ -434,6 +434,44 @@ class TestDocE2E:
             except Exception as e:
                 print(f"Warning: Could not delete tab {tab_id}: {e}")
 
+    def test_tab_push_bulk_flag(self, check_auth, test_doc, temp_dir):
+        """Test: --bulk -y produces a push with no interactive output."""
+        uid = uuid.uuid4().hex[:8]
+        tab_name = f"{E2E_PREFIX}_bulk_{uid}"
+
+        creds = get_authenticated_credentials()
+        service = build("docs", "v1", credentials=creds)
+
+        resp = service.documents().batchUpdate(
+            documentId=test_doc["id"],
+            body={"requests": [{"addDocumentTab": {"tabProperties": {"title": tab_name}}}]},
+        ).execute()
+        tab_id = resp["replies"][0]["addDocumentTab"]["tabProperties"]["tabId"]
+
+        try:
+            tracking_file = temp_dir / f"{tab_name}.doc.gax.md"
+            result = _run_gax(
+                "doc", "tab", "clone", test_doc["url"], tab_name,
+                "-o", str(tracking_file),
+            )
+            assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+            content = tracking_file.read_text()
+            tracking_file.write_text(content + f"\n\nBulk push test {uid}\n")
+
+            result = _run_gax("doc", "tab", "push", str(tracking_file), "--bulk", "-y")
+            assert result.returncode == 0, f"Push failed: {result.stderr}"
+            assert "Pushed" in result.stdout or result.stdout.strip() == ""
+
+        finally:
+            try:
+                service.documents().batchUpdate(
+                    documentId=test_doc["id"],
+                    body={"requests": [{"deleteTab": {"tabId": tab_id}}]},
+                ).execute()
+            except Exception as e:
+                print(f"Warning: Could not delete tab {tab_id}: {e}")
+
     # NOTE: table_push_pull_cycle and rich_formatting_round_trip tests
     # moved to test_roundtrip.py (TestPushVerify + TestIdentityRoundTrip)
 
@@ -496,7 +534,7 @@ class TestSheetE2E:
         assert "active" in content
 
         # Pull
-        result = _run_gax("sheet", "tab", "pull", str(output_file))
+        result = _run_gax("sheet", "tab", "pull", str(output_file), "-y")
         assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
     def test_push_cycle(self, check_auth, test_sheet, temp_dir):
@@ -942,7 +980,7 @@ class TestCalendarE2E:
         assert event_id, "Event ID should not be empty"
 
         # Step 4: Pull to verify
-        result = _run_gax("cal", "event", "pull", str(event_file))
+        result = _run_gax("cal", "event", "pull", str(event_file), "-y")
         assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
         # Verify title is still correct
@@ -1800,7 +1838,7 @@ class TestMailThreadE2E:
         assert "section: 1" in content
 
         # Pull to refresh
-        result = _run_gax("mail", "pull", str(output_file))
+        result = _run_gax("mail", "pull", str(output_file), "-y")
         assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
         # Content should still be valid after pull
@@ -1841,7 +1879,7 @@ class TestMailThreadE2E:
             assert r.returncode == 0, f"Clone {i} failed: {r.stderr}"
 
         # Pull the folder
-        result = _run_gax("mail", "pull", str(temp_dir))
+        result = _run_gax("mail", "pull", str(temp_dir), "-y")
         assert result.returncode == 0, f"Pull folder failed: {result.stderr}"
 
     def test_reply_creates_draft(self, check_auth, temp_dir):
@@ -1907,7 +1945,7 @@ class TestMailboxE2E:
         assert "id\tfrom\t" in content  # TSV header in body
 
         # Pull to refresh
-        result = _run_gax("mailbox", "pull", str(output_file))
+        result = _run_gax("mailbox", "pull", str(output_file), "-y")
         assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
         pulled = output_file.read_text()
@@ -1988,7 +2026,7 @@ class TestDriveFileE2E:
         try:
             # Clone
             output = temp_dir / f"{E2E_PREFIX}_test.txt"
-            result = _run_gax("file", "clone", file_id, "-o", str(output))
+            result = _run_gax("drive", "clone", file_id, "-o", str(output))
             assert result.returncode == 0, f"Clone failed: {result.stderr}"
             assert output.exists()
 
@@ -2003,7 +2041,7 @@ class TestDriveFileE2E:
             assert file_id in tracking_content
 
             # Pull to refresh
-            result = _run_gax("file", "pull", str(output))
+            result = _run_gax("drive", "pull", str(output), "-y")
             assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
             # Content should still be valid after pull
@@ -2022,7 +2060,7 @@ class TestDriveFileE2E:
         try:
             # Clone
             output = temp_dir / f"{E2E_PREFIX}_push_test.txt"
-            result = _run_gax("file", "clone", file_id, "-o", str(output))
+            result = _run_gax("drive", "clone", file_id, "-o", str(output))
             assert result.returncode == 0, f"Clone failed: {result.stderr}"
 
             # Modify local file
@@ -2034,7 +2072,7 @@ class TestDriveFileE2E:
             assert result.returncode == 0, f"Push failed: {result.stderr}"
 
             # Pull back and verify the update made it
-            result = _run_gax("file", "pull", str(output))
+            result = _run_gax("drive", "pull", str(output), "-y")
             assert result.returncode == 0, f"Pull failed: {result.stderr}"
             assert f"{E2E_PREFIX} modified" in output.read_text()
 
@@ -2105,7 +2143,7 @@ class TestDriveFolderE2E:
         try:
             # Checkout
             output = temp_dir / "test.drive.gax.md.d"
-            result = _run_gax("file", "checkout", folder_id, "-o", str(output))
+            result = _run_gax("drive", "checkout", folder_id, "-o", str(output))
             assert result.returncode == 0, f"Checkout failed: {result.stderr}"
             assert output.exists()
             assert (output / ".gax.yaml").exists()
@@ -2127,7 +2165,7 @@ class TestDriveFolderE2E:
             assert meta["folder_id"] == folder_id
 
             # Pull
-            result = _run_gax("pull", str(output))
+            result = _run_gax("pull", str(output), "-y")
             assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
             # Content should still be valid after pull
@@ -2146,11 +2184,11 @@ class TestDriveFolderE2E:
             output = temp_dir / "incr.drive.gax.md.d"
 
             # First checkout
-            result = _run_gax("file", "checkout", folder_id, "-o", str(output))
+            result = _run_gax("drive", "checkout", folder_id, "-o", str(output))
             assert result.returncode == 0
 
             # Second checkout — should skip existing
-            result = _run_gax("file", "checkout", folder_id, "-o", str(output))
+            result = _run_gax("drive", "checkout", folder_id, "-o", str(output))
             assert result.returncode == 0
 
             # File should still be there
@@ -2158,3 +2196,55 @@ class TestDriveFolderE2E:
 
         finally:
             _delete_drive_files(file_ids)
+
+
+# =============================================================================
+# gax get E2E Tests
+# =============================================================================
+
+
+@pytest.mark.e2e
+class TestGetE2E:
+    """End-to-end tests for gax get (fetch remote to stdout)."""
+
+    def test_get_url(self, check_auth, temp_dir):
+        """Test: gax get <url> prints remote content to stdout."""
+        doc_id = _get_test_doc_id()
+        url = f"https://docs.google.com/document/d/{doc_id}/edit"
+
+        result = _run_gax("get", url)
+        assert result.returncode == 0, f"gax get failed: {result.stderr}"
+        assert result.stdout.strip() != ""
+        assert "type: gax/doc" not in result.stdout
+        assert "source:" not in result.stdout
+
+    def test_get_file(self, check_auth, temp_dir):
+        """Test: gax get <file.gax.md> reads source URL and fetches remote."""
+        doc_id = _get_test_doc_id()
+        url = f"https://docs.google.com/document/d/{doc_id}/edit"
+
+        tracking_file = temp_dir / "test.doc.gax.md"
+        result = _run_gax("doc", "clone", url, "-o", str(tracking_file))
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        result = _run_gax("get", str(tracking_file))
+        assert result.returncode == 0, f"gax get failed: {result.stderr}"
+        assert result.stdout.strip() != ""
+        assert "type: gax/doc" not in result.stdout
+        assert "source:" not in result.stdout
+
+    def test_get_url_equals_get_file(self, check_auth, temp_dir):
+        """Test: gax get <url> and gax get <file> produce same content."""
+        doc_id = _get_test_doc_id()
+        url = f"https://docs.google.com/document/d/{doc_id}/edit"
+
+        tracking_file = temp_dir / "test.doc.gax.md"
+        result = _run_gax("doc", "clone", url, "-o", str(tracking_file))
+        assert result.returncode == 0, f"Clone failed: {result.stderr}"
+
+        result_url = _run_gax("get", url)
+        result_file = _run_gax("get", str(tracking_file))
+
+        assert result_url.returncode == 0
+        assert result_file.returncode == 0
+        assert result_url.stdout == result_file.stdout

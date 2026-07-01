@@ -9,6 +9,86 @@ from .. import docs
 from . import Tab, Doc
 
 
+def _push_tab_patch_or_bulk(
+    t: "Tab",
+    content: str,
+    yes: bool,
+    bulk: bool,
+    label: str = "",
+) -> bool:
+    """Patch-first push for one tab. Returns True if pushed, False if no diff."""
+    from .doc import parse_multipart, extract_doc_id
+    from .ir import from_markdown, check_unsupported
+
+    prefix = f"[{label}] " if label else ""
+
+    if not bulk:
+        from .diff_push import preview_diff
+
+        section = parse_multipart(t.path.read_text(encoding="utf-8"))[0]
+        document_id = extract_doc_id(section.source)
+        tab_name = section.section_title
+
+        preview = preview_diff(document_id, tab_name, content)
+
+        if not preview.ops:
+            return False  # no differences
+
+        if preview.error:
+            if preview.fatal:
+                click.echo(f"{prefix}Error: {preview.error}", err=True)
+                sys.exit(1)
+            # Non-fatal: offer bulk fallback
+            click.echo(f"{prefix}Patch cannot be applied: {preview.error}")
+            if yes:
+                bulk = True  # silent fallback
+            else:
+                if not click.confirm(f"{prefix}Fall back to bulk push?", default=False):
+                    click.echo("Aborted.")
+                    sys.exit(1)
+                bulk = True
+
+        if not bulk:
+            # Clean patch — show summary and confirm
+            click.echo(f"{prefix}Patch operations:")
+            click.echo("-" * 40)
+            for line in preview.summary_lines:
+                click.echo(line)
+            click.echo("-" * 40)
+            if not yes:
+                if not click.confirm("Apply patch?"):
+                    click.echo("Aborted.")
+                    sys.exit(1)
+            t.push(patch=True)
+            return True
+
+    # BULK path
+    diff_text = t.diff()
+    if diff_text is None:
+        return False  # no differences
+
+    if not (bulk and yes):
+        click.echo(f"{prefix}Changes to push:")
+        click.echo("-" * 40)
+        click.echo(diff_text)
+        click.echo("-" * 40)
+        section = parse_multipart(t.path.read_text(encoding="utf-8"))[0]
+        for w in check_unsupported(from_markdown(section.content)):
+            click.echo(f"  Warning: {w.feature}: {w.detail}")
+        click.echo(
+            "Warning: markdown cannot faithfully represent a Google Doc. "
+            "Non-markdown formatting (colors, fonts, alignment, comments, "
+            "suggestions, images) may be lost."
+        )
+        if not yes:
+            if not click.confirm("Push these changes?"):
+                click.echo("Aborted.")
+                sys.exit(1)
+
+    t.push()
+    return True
+
+
 @docs.section("resource")
 @click.group()
 def doc():
@@ -86,12 +166,7 @@ def doc_tab_diff(file: Path):
 @doc_tab.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-@click.option(
-    "--patch",
-    "use_patch",
-    is_flag=True,
-    help="Incremental push: apply only changed elements (experimental)",
-)
+@click.option("--bulk", is_flag=True, help="Full-replace push, skipping patch attempt")
 @click.option(
     "--body",
     type=click.Path(exists=True, path_type=Path),
@@ -99,93 +174,111 @@ def doc_tab_diff(file: Path):
     help="Push content from this external markdown file instead of the tracking file.",
 )
 @gax_command
-def doc_tab_push(file: Path, yes: bool, use_patch: bool, body: Path | None):
-    """Push local changes to a single tab (with confirmation).
+def doc_tab_push(file: Path, yes: bool, bulk: bool, body: Path | None):
+    """Push local changes to a single tab.
 
-    The default push path is full-replace (see ADR 023). The ``--patch`` flag
-    selects an **experimental** incremental push path (ADR 027) that diffs the
-    local markdown against the live document and applies only the changed
-    elements. The ``--patch`` path is under evaluation and may fail on
-    structural changes; when in doubt, omit the flag.
+    Patch is the default: applies only changed elements, preserving collaborator
+    formatting, comments, and suggestions. Use ``--bulk`` to force a full-replace
+    push (faster, but destroys all non-markdown formatting).
+
+    When patch cannot be applied (e.g. structural changes like adding a table),
+    gax offers to fall back to bulk. With ``-y`` the fallback happens silently.
 
     Use ``--body`` to push content from an external markdown file. The tracking
     file is updated in place so subsequent ``pull`` round-trips stay consistent.
+    ``--body`` is only supported with the bulk path.
     """
     from .doc import parse_multipart, extract_doc_id
-    from ..ui import error
+    from . import native_md as _native_md
 
     t = Tab.from_file(file)
 
-    if use_patch:
-        from .diff_push import preview_diff
-        from . import native_md as _native_md
+    if body:
+        # TODO: --body with patch
+        bulk = True
 
-        section = parse_multipart(file.read_text(encoding="utf-8"))[0]
-        source_url = section.source
-        tab_name = section.section_title
-        document_id = extract_doc_id(source_url)
-
-        content_to_push = _native_md.inline_images_from_store(section.content)
-
-        preview = preview_diff(document_id, tab_name, content_to_push)
-
-        if not preview.ops:
-            click.echo("No differences to push.")
-            return
-
-        click.echo("Patch operations:")
-        click.echo("-" * 40)
-        for line in preview.summary_lines:
-            click.echo(line)
-        click.echo("-" * 40)
-
-        if preview.warnings:
-            for w in preview.warnings:
-                error(w)
-            click.echo("Use regular push (without --patch) for structural changes.")
-            sys.exit(1)
-
-        if not yes:
-            if not click.confirm("Apply patch?"):
-                click.echo("Aborted.")
-                return
-
-        t.push(patch=True)
-        success("Patched successfully.")
+    # Resolve content
+    if body:
+        raw = body.read_text(encoding="utf-8")
     else:
+        raw = parse_multipart(file.read_text(encoding="utf-8"))[0].content
+    content = _native_md.inline_images_from_store(raw)
+
+    if bulk:
         diff_text = t.diff(body=body)
         if diff_text is None:
             click.echo("No differences to push.")
             return
+        if not (bulk and yes):
+            from .ir import from_markdown, check_unsupported
+            click.echo("Changes to push:")
+            click.echo("-" * 40)
+            click.echo(diff_text)
+            click.echo("-" * 40)
+            raw_for_warn = body.read_text(encoding="utf-8") if body else (
+                parse_multipart(file.read_text(encoding="utf-8"))[0].content
+            )
+            for w in check_unsupported(from_markdown(raw_for_warn)):
+                click.echo(f"  Warning: {w.feature}: {w.detail}")
+            click.echo(
+                "Warning: markdown cannot faithfully represent a Google Doc. "
+                "Non-markdown formatting (colors, fonts, alignment, comments, "
+                "suggestions, images) may be lost."
+            )
+            if not yes:
+                if not click.confirm("Push these changes?"):
+                    click.echo("Aborted.")
+                    return
+        t.push(body=body)
+        success("Pushed successfully.")
+        return
 
-        click.echo("Changes to push:")
-        click.echo("-" * 40)
-        click.echo(diff_text)
-        click.echo("-" * 40)
+    # PATCH path (default)
+    from .diff_push import preview_diff
 
-        from .ir import from_markdown, check_unsupported
+    section = parse_multipart(file.read_text(encoding="utf-8"))[0]
+    document_id = extract_doc_id(section.source)
+    tab_name = section.section_title
 
-        content_for_warnings = body.read_text(encoding="utf-8") if body else (
-            parse_multipart(file.read_text(encoding="utf-8"))[0].content
-        )
-        push_warnings = check_unsupported(from_markdown(content_for_warnings))
-        for w in push_warnings:
-            click.echo(f"  Warning: {w.feature}: {w.detail}")
+    preview = preview_diff(document_id, tab_name, content)
 
-        click.echo(
-            "Warning: markdown cannot faithfully represent a Google Doc. "
-            "Non-markdown formatting (colors, fonts, alignment, comments, "
-            "suggestions, images) may be lost. Use --patch for incremental "
-            "updates that preserve formatting (experimental)."
-        )
+    if not preview.ops:
+        click.echo("No differences to push.")
+        return
 
+    if preview.error:
+        if preview.fatal:
+            click.echo(f"Error: {preview.error}", err=True)
+            sys.exit(1)
+        click.echo(f"Patch cannot be applied: {preview.error}")
+        if not yes:
+            if not click.confirm("Fall back to bulk push?", default=False):
+                click.echo("Aborted.")
+                return
+        # Bulk fallback
+        if t.diff(body=body) is None:
+            click.echo("No differences to push.")
+            return
         if not yes:
             if not click.confirm("Push these changes?"):
                 click.echo("Aborted.")
                 return
-
         t.push(body=body)
-        success("Pushed successfully.")
+        success("Pushed successfully (bulk fallback).")
+        return
+
+    # Clean patch
+    click.echo("Patch operations:")
+    click.echo("-" * 40)
+    for line in preview.summary_lines:
+        click.echo(line)
+    click.echo("-" * 40)
+    if not yes:
+        if not click.confirm("Apply patch?"):
+            click.echo("Aborted.")
+            return
+    t.push(patch=True)
+    success("Patched successfully.")
 
 
 @doc.command("clone")
@@ -246,38 +339,41 @@ def doc_pull(file: Path, with_comments: bool, yes: bool):
 @doc.command("push")
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+@click.option("--bulk", is_flag=True, help="Full-replace push for all tabs")
 @gax_command
-def doc_push(folder: Path, yes: bool):
+def doc_push(folder: Path, yes: bool, bulk: bool):
     """Push all changed tabs in a checkout folder to Google Docs.
 
-    Shows a combined diff across all tabs and asks for confirmation
-    before pushing, unless -y is passed.
-    """
-    d = Doc.from_file(folder)
-    diff_text = d.diff()
+    Patch is the default: applies only changed elements per tab, preserving
+    collaborator formatting. Use ``--bulk`` to force full-replace for all tabs.
 
-    if diff_text is None:
-        click.echo("No differences to push.")
+    When patch cannot be applied for a tab, gax offers to fall back to bulk
+    for that tab individually. With ``-y`` the fallback happens silently.
+    """
+    from .doc import parse_multipart, _known_tab_files, _read_checkout_metadata
+    from . import native_md as _native_md
+
+    metadata = _read_checkout_metadata(folder)
+    tab_files = list(_known_tab_files(folder, metadata))
+
+    if not tab_files:
+        click.echo("No tab files found.")
         return
 
-    click.echo("Changes to push:")
-    click.echo("-" * 40)
-    click.echo(diff_text)
-    click.echo("-" * 40)
+    pushed = 0
+    for tab_file in tab_files:
+        t = Tab.from_file(tab_file)
+        label = tab_file.relative_to(folder).as_posix()
+        section = parse_multipart(tab_file.read_text(encoding="utf-8"))[0]
+        content = _native_md.inline_images_from_store(section.content)
+        did_push = _push_tab_patch_or_bulk(t, content=content, yes=yes, bulk=bulk, label=label)
+        if did_push:
+            pushed += 1
 
-    click.echo(
-        "Warning: markdown cannot faithfully represent a Google Doc. "
-        "Non-markdown formatting (colors, fonts, alignment, comments, "
-        "suggestions, images) may be lost."
-    )
-
-    if not yes:
-        if not click.confirm("Push these changes?"):
-            click.echo("Aborted.")
-            return
-
-    d.push()
-    success("Pushed successfully.")
+    if pushed == 0:
+        click.echo("No differences to push.")
+    else:
+        success(f"Pushed {pushed} tab(s).")
 
 
 @doc.command("checkout")

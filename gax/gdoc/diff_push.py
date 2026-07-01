@@ -658,7 +658,8 @@ class DiffPreview:
 
     ops: list[EditOp]
     summary_lines: list[str]
-    warnings: list[str]
+    error: str | None = None      # None = patch applicable; str = reason it is not
+    fatal: bool = False           # True = tab not found; don't offer bulk fallback
     docs_service: object = field(default=None, repr=False)
 
 
@@ -690,8 +691,6 @@ def preview_diff(
     docs_service=None,
 ) -> DiffPreview:
     """Compute the diff without applying it. Returns a preview for the user."""
-    warnings: list[str] = []
-
     try:
         doc, tab_id, tab_body, docs_service = _fetch_tab(
             document_id, tab_name, docs_service=docs_service
@@ -700,7 +699,8 @@ def preview_diff(
         return DiffPreview(
             ops=[],
             summary_lines=[],
-            warnings=[str(e)],
+            error=str(e),
+            fatal=True,
             docs_service=docs_service,
         )
 
@@ -713,15 +713,15 @@ def preview_diff(
         return DiffPreview(
             ops=[],
             summary_lines=[],
-            warnings=["No differences found."],
             docs_service=docs_service,
         )
 
     # Dry-run mutation translator
+    error: str | None = None
     try:
         diff_to_mutations(ops, remote_blocks, tab_id)
     except ValueError as e:
-        warnings.append(f"Patch cannot be applied: {e}")
+        error = str(e)
 
     # Build summary
     updates = [op for op in ops if op.type == "update"]
@@ -743,7 +743,7 @@ def preview_diff(
             summary.append(_op_summary(op))
 
     return DiffPreview(
-        ops=ops, summary_lines=summary, warnings=warnings, docs_service=docs_service
+        ops=ops, summary_lines=summary, error=error, docs_service=docs_service
     )
 
 

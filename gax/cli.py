@@ -245,6 +245,63 @@ def unified_push(files: tuple[str, ...], yes: bool, with_formulas: bool):
 
 
 @docs.section("main")
+@main.command("get")
+@click.argument("source")
+@gax_command
+def get_cmd(source: str):
+    """Fetch remote resource and print content to stdout.
+
+    Accepts a URL or a local .gax.md tracking file (reads the source URL
+    from its header). Content goes to stdout; progress goes to stderr.
+    No files are created or modified.
+
+    \b
+    Examples:
+        gax get https://docs.google.com/document/d/abc123 | less
+        gax get report.doc.gax.md | grep TODO
+        diff <(gax get https://docs.google.com/...) local.md
+    """
+    import tempfile
+
+    def _print_file(file_path: Path, first_ref: list) -> None:
+        sections = _parse(file_path.read_text(encoding="utf-8"))
+        for section in sections:
+            if not first_ref[0]:
+                sys.stdout.write("\n---\n\n")
+            sys.stdout.write(section.content)
+            if section.content and not section.content.endswith("\n"):
+                sys.stdout.write("\n")
+            first_ref[0] = False
+
+    def _print_folder(folder: Path, first_ref: list) -> None:
+        tab_files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix == ".md")
+        for tab_file in tab_files:
+            _print_file(tab_file, first_ref)
+
+    from .gaxfile import parse_multipart as _parse
+
+    path = Path(source)
+    if path.exists():
+        # Read source URL from file header, fetch remote
+        sections = _parse(path.read_text(encoding="utf-8"))
+        src_url = sections[0].headers.get("source", "") if sections else ""
+        if not src_url:
+            click.echo(f"Error: no source URL in {path}", err=True)
+            sys.exit(1)
+        resource = Resource.from_url(src_url)
+    else:
+        resource = Resource.from_url(source)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = resource.clone(output=Path(tmpdir) / "_get_tmp")
+        first_ref = [True]
+        if tmp_path.is_dir():
+            _print_folder(tmp_path, first_ref)
+        else:
+            _print_file(tmp_path, first_ref)
+
+
+@docs.section("main")
 @main.command()
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file")

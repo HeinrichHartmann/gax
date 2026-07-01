@@ -58,7 +58,15 @@ def mail_pull(path, yes: bool):
 
         gax mail pull Inbox/
     """
-    confirm_and_pull(Thread(path=path), yes=yes)
+    if path.is_dir():
+        files = sorted(path.glob("*.mail.gax.md"))
+        if not files:
+            click.echo("No .mail.gax.md files found.")
+            return
+        for f in files:
+            confirm_and_pull(Thread(path=f), yes=yes)
+    else:
+        confirm_and_pull(Thread(path=path), yes=yes)
 
 
 @mail_group.command("reply")
