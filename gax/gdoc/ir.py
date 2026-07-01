@@ -24,7 +24,15 @@ from typing import Optional
 import mistune
 from mistune.core import BlockState
 from mistune.renderers.markdown import MarkdownRenderer
-from mistune.renderers._list import _render_list_item, _render_unordered_list
+try:
+    from mistune.renderers._list import _render_list_item, _render_unordered_list
+except ImportError:
+    # mistune >= 3.3 renamed _render_list_item → render_list_item and changed signature
+    from mistune.renderers._list import render_list_item as _render_list_item_new, _render_unordered_list  # noqa: E501
+
+    def _render_list_item(renderer, parent, item, state):  # type: ignore[misc]
+        marker = parent.get("leading", "")
+        return _render_list_item_new(renderer, item, state, marker=marker)
 from mistune.util import strip_end
 
 logger = logging.getLogger(__name__)
