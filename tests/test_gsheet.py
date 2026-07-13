@@ -132,7 +132,9 @@ class TestGSheetClientRead:
         df = client.read("spreadsheet-123", "Sheet1", range="A1:B2")
 
         # Should use get() instead of get_all_values() for range
-        worksheet.get.assert_called_once_with("A1:B2")
+        from gax.gsheet.client import _READ_OPTS
+
+        worksheet.get.assert_called_once_with("A1:B2", pad_values=True, **_READ_OPTS)
         assert len(df) == 1
         assert df.iloc[0]["Name"] == "Alice"
 

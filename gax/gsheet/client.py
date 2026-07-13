@@ -8,9 +8,23 @@ from concurrent.futures import ThreadPoolExecutor
 
 import gspread
 import pandas as pd
+from gspread.utils import DateTimeOption, ValueRenderOption
+
 from ..auth import get_authenticated_credentials
 
 logger = logging.getLogger(__name__)
+
+# Render options for reading cell values (see ADR 034):
+#   FORMULA render option implements the three-type contract:
+#     - formula cells  -> formula text ("=SUM(A1:B1)")
+#     - number cells   -> raw number, no display formatting ("82000", not "$82,500")
+#     - string cells   -> the string
+#   FORMATTED_STRING keeps date/time cells as displayed strings instead of
+#   serial numbers (which FORMULA rendering would otherwise return).
+_READ_OPTS = {
+    "value_render_option": ValueRenderOption.formula,
+    "date_time_render_option": DateTimeOption.formatted_string,
+}
 
 _PROFILE = os.environ.get("GAX_PROFILE", "")
 
@@ -85,7 +99,7 @@ class GSheetClient:
 
         t0 = time.perf_counter()
         if range:
-            data = ws.get(range)
+            data = ws.get(range, pad_values=True, **_READ_OPTS)
             _tlog(f"ws.get(range) '{tab}': {time.perf_counter() - t0:.3f}s")
             if not data:
                 return pd.DataFrame()
@@ -94,7 +108,7 @@ class GSheetClient:
             return pd.DataFrame(rows, columns=headers)
         else:
             # Use get_all_values to handle empty/duplicate headers
-            data = ws.get_all_values()
+            data = ws.get_all_values(**_READ_OPTS)
             _tlog(f"get_all_values '{tab}': {time.perf_counter() - t0:.3f}s")
             if not data:
                 return pd.DataFrame()
@@ -114,7 +128,7 @@ class GSheetClient:
 
         def _fetch(tab: str) -> tuple[str, pd.DataFrame]:
             ws = self._get_worksheet(spreadsheet_id, tab)
-            data = ws.get_all_values()
+            data = ws.get_all_values(**_READ_OPTS)
             if not data:
                 return tab, pd.DataFrame()
             return tab, pd.DataFrame(data[1:], columns=data[0])
