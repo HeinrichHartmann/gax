@@ -40,7 +40,7 @@ def label_clone(output, include_all):
 
 @mail_label.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option("--all", "include_all", is_flag=True, help="Include system labels")
+@click.option("--include-all", is_flag=True, help="Include system labels")
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @gax_command
 def label_pull(file, include_all, yes: bool):
