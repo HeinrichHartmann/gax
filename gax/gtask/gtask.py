@@ -49,6 +49,7 @@ from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
+from ..syncstate import read_sync, write_sync_header
 
 logger = logging.getLogger(__name__)
 
@@ -223,13 +224,15 @@ def task_to_api_body(task: TaskItem) -> dict:
 
 def task_to_yaml(task: TaskItem) -> str:
     """Serialize TaskItem to split YAML (header + body)."""
-    header: dict[str, Any] = {
-        "type": "gax/task",
-        "id": task.id,
-        "tasklist": task.tasklist,
-        "source": task.source,
-        "synced": task.synced,
-    }
+    header: dict[str, Any] = write_sync_header(
+        {
+            "type": "gax/task",
+            "id": task.id,
+            "tasklist": task.tasklist,
+            "source": task.source,
+        },
+        rev=task.updated,
+    )
 
     body: dict[str, Any] = {
         "title": task.title,
@@ -276,11 +279,13 @@ def yaml_to_task(content: str) -> TaskItem:
     if header.get("type") != "gax/task":
         raise ValueError(f"Expected type gax/task, got {header.get('type')}")
 
+    _sync = read_sync(header)
+    synced = _sync.time.strftime("%Y-%m-%dT%H:%M:%SZ") if _sync.time else ""
     return TaskItem(
         id=header.get("id", ""),
         tasklist=header.get("tasklist", ""),
         source=header.get("source", ""),
-        synced=header.get("synced", ""),
+        synced=synced,
         title=body.get("title", ""),
         status=body.get("status", "needsAction"),
         due=str(body["due"]) if body.get("due") else "",
@@ -636,12 +641,13 @@ class TaskList(Resource):
             return 0, 0
 
         # Write .gax.yaml metadata
-        metadata = {
-            "type": "gax/task-checkout",
-            "tasklist_id": tl_id,
-            "title": tl_title,
-            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+        metadata = write_sync_header(
+            {
+                "type": "gax/task-checkout",
+                "tasklist_id": tl_id,
+                "title": tl_title,
+            }
+        )
         metadata_path = folder / ".gax.yaml"
         with open(metadata_path, "w") as f:
             yaml.dump(
@@ -694,13 +700,14 @@ class TaskList(Resource):
         show_all: bool,
     ) -> None:
         """Write task list file with header and formatted body."""
-        header: dict[str, Any] = {
-            "type": "gax/task-list",
-            "id": tl_id,
-            "title": tl_title,
-            "format": fmt,
-            "synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+        header: dict[str, Any] = write_sync_header(
+            {
+                "type": "gax/task-list",
+                "id": tl_id,
+                "title": tl_title,
+                "format": fmt,
+            }
+        )
         if show_all:
             header["show_all"] = True
 

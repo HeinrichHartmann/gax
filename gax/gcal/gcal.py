@@ -47,6 +47,7 @@ from googleapiclient.discovery import build
 
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
+from ..syncstate import read_sync, write_sync_header
 
 logger = logging.getLogger(__name__)
 
@@ -461,13 +462,14 @@ def event_to_yaml(event: CalendarEvent) -> str:
 
     Header contains gax sync metadata; body contains user-editable event data.
     """
-    header: dict[str, Any] = {
-        "type": "gax/cal",
-        "id": event.id,
-        "calendar": event.calendar,
-        "source": event.source,
-        "synced": event.synced,
-    }
+    header: dict[str, Any] = write_sync_header(
+        {
+            "type": "gax/cal",
+            "id": event.id,
+            "calendar": event.calendar,
+            "source": event.source,
+        }
+    )
 
     body: dict[str, Any] = {
         "title": event.title,
@@ -531,11 +533,13 @@ def yaml_to_event(content: str) -> CalendarEvent:
             uri=conf_data.get("uri", ""),
         )
 
+    _sync = read_sync(data)
+    synced = _sync.time.strftime("%Y-%m-%dT%H:%M:%SZ") if _sync.time else ""
     return CalendarEvent(
         id=data.get("id", ""),
         calendar=data.get("calendar", "primary"),
         source=data.get("source", ""),
-        synced=data.get("synced", ""),
+        synced=synced,
         title=data.get("title", ""),
         start=data.get("start", ""),
         end=data.get("end", ""),
