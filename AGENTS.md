@@ -94,6 +94,10 @@ session to the given beads/label, and sets the cmux tab title.
 - Handoff between roles happens exclusively through beads
   (`review`/`revisions`/`approved` labels); never through shared
   uncommitted files.
+- Merge discipline: **workers rebase** their branch onto main (before
+  each ticket and before review); **architect/reviewer squash-merge**
+  approved branches (`git merge --squash worker/<id>`) — one commit
+  per bead on main, micro-commits stay on the worker branch.
 - All shell commands must be prefixed with `direnv exec .` (direnv/nix).
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->

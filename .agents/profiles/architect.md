@@ -104,13 +104,20 @@ audit existing issues.
 
    You do not review code yourself — delegate to the reviewer.
 
-8. **Merge approved work**: after the reviewer approves:
+8. **Merge approved work**: after the reviewer approves,
+   **squash-merge** — one commit per bead on main, clean message:
 
    ```bash
    bd list -l approved       # find approved reviews
-   git merge worker/<id>     # merge to main
+   git merge --squash worker/<id>
+   git commit -m "<type>(<area>): <summary> (<bead-id>)"
    bd close <review-id> --reason="Merged to main"
    ```
+
+   The worker's micro-commits stay on the worker branch for
+   archaeology; main reads like a changelog. If a branch covers
+   several beads, merge it bead-by-bead only if the commits separate
+   cleanly — otherwise one squash commit listing all bead IDs.
 
    If the branch conflicts (e.g. worker branched before your latest
    commits), resolve by keeping main's version for files you own

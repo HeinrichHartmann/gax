@@ -73,9 +73,10 @@ git diff main..<branch>
 - Descriptive commit messages referencing bead IDs?
 
 **Conflicts**
-- Does the branch merge cleanly with current main?
+- Is the branch rebased onto current main? A stale base is a
+  hand-back: the worker rebases, not you.
   ```bash
-  git merge --no-commit --no-ff <branch> && git merge --abort
+  git merge-base --is-ancestor main <branch> && echo rebased || echo stale
   ```
 
 ### 4. Record your verdict
@@ -95,7 +96,8 @@ bd tag <review-id> approved
 bd note <review-id> "Approved. Ready to merge."
 ```
 
-The architect or user merges. You do not merge yourself.
+The architect or user squash-merges (`git merge --squash` — one
+commit per bead on main). You do not merge yourself.
 
 **If changes needed**, create a follow-up bead for the worker:
 

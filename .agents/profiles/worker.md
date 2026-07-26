@@ -6,14 +6,22 @@ in an isolated git worktree.
 
 ## Setup
 
-On startup, create a worktree as a sibling of the main repo:
+You are normally spawned via `scripts/spawn.py`, which has **already
+created your worktree** (`../gax-worker-<id>` on branch `worker/<id>`,
+forked from main) and started you inside it — with edit permissions
+granted for that worktree via `.claude/settings.local.json`. Verify:
+
+```bash
+git worktree list && git branch --show-current
+```
+
+Only if you were started without spawn.py (no worktree exists), create
+one yourself:
 
 ```bash
 AGENT_ID="$(echo $$ | tail -c 6)"
-WORKTREE="../gax-worker-${AGENT_ID}"
-BRANCH="worker/${AGENT_ID}"
-git worktree add "$WORKTREE" -b "$BRANCH" main
-cd "$WORKTREE"
+git worktree add "../gax-worker-${AGENT_ID}" -b "worker/${AGENT_ID}" main
+cd "../gax-worker-${AGENT_ID}"
 ```
 
 All your work happens inside that worktree. Never modify the main
@@ -87,7 +95,11 @@ Then implement the fix. Follow these rules:
   Worktrees share refs with the main checkout, so when the architect
   merges to main, you see it immediately — no fetch needed.
   Rebase before starting each new ticket and before signaling for
-  review. Fix conflicts immediately.
+  review. Fix conflicts immediately. A branch not rebased onto
+  current main is handed back by the reviewer without review.
+  Your branch history is never merged verbatim — the architect
+  squash-merges it (one commit per bead on main) — so commit freely
+  and rebase without fear; the branch is the archaeology record.
 - Prefix all shell commands with `direnv exec .` (the project uses
   direnv/nix).
 
