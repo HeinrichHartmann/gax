@@ -162,6 +162,183 @@ class TestPullDoc:
         assert len(sections) == 0
 
 
+class TestBaselineStorage:
+    """Tests for pull-time baseline storage (ADR 034, gax-cvi.2)."""
+
+    def test_pull_stores_baseline_hash(self):
+        """Pull writes a baseline hash into each DocSection."""
+        doc = _make_doc_response(
+            "Baseline Test",
+            [
+                (
+                    "Tab1",
+                    [
+                        _make_empty_para(1),
+                        _make_paragraph(2, "Hello world"),
+                    ],
+                ),
+            ],
+        )
+        doc["revisionId"] = "ALm37BWxyz"
+        service = _make_mock_service(doc)
+
+        sections = pull_doc(
+            "test-doc-123",
+            "https://docs.google.com/document/d/test-doc-123/edit",
+            docs_service=service,
+        )
+
+        assert len(sections) == 1
+        assert sections[0].baseline != "", "Should have baseline hash"
+        assert sections[0].baseline.startswith("sha256-"), (
+            f"Baseline should be sha256 hash, got: {sections[0].baseline}"
+        )
+
+    def test_pull_stores_revision_id(self):
+        """Pull captures the document's revisionId."""
+        doc = _make_doc_response(
+            "Rev Test",
+            [
+                (
+                    "Tab1",
+                    [_make_empty_para(1), _make_paragraph(2, "Content")],
+                ),
+            ],
+        )
+        doc["revisionId"] = "ALm37BWxyz"
+        service = _make_mock_service(doc)
+
+        sections = pull_doc(
+            "test-doc-123",
+            "https://docs.google.com/document/d/test-doc-123/edit",
+            docs_service=service,
+        )
+
+        assert sections[0].revision == "ALm37BWxyz"
+
+    def test_baseline_idempotent_on_repull(self):
+        """Re-pulling the same content produces the same baseline hash."""
+        doc = _make_doc_response(
+            "Idem Test",
+            [
+                (
+                    "Tab1",
+                    [_make_empty_para(1), _make_paragraph(2, "Same content")],
+                ),
+            ],
+        )
+        doc["revisionId"] = "rev1"
+        service = _make_mock_service(doc)
+
+        sections1 = pull_doc("doc1", "url1", docs_service=service)
+        sections2 = pull_doc("doc1", "url1", docs_service=service)
+
+        assert sections1[0].baseline == sections2[0].baseline, (
+            "Same content should produce the same baseline hash"
+        )
+
+    def test_baseline_appears_in_frontmatter(self):
+        """Baseline hash appears in the formatted multipart output."""
+        doc = _make_doc_response(
+            "Format Test",
+            [
+                (
+                    "Tab1",
+                    [_make_empty_para(1), _make_paragraph(2, "Content")],
+                ),
+            ],
+        )
+        doc["revisionId"] = "rev123"
+        service = _make_mock_service(doc)
+
+        sections = pull_doc(
+            "test-doc-123",
+            "https://docs.google.com/document/d/test-doc-123/edit",
+            docs_service=service,
+        )
+        output = format_multipart(sections)
+
+        assert "baseline: sha256-" in output, (
+            f"Should have baseline in frontmatter, got:\n{output[:500]}"
+        )
+        assert "revision: rev123" in output, (
+            f"Should have revision in frontmatter, got:\n{output[:500]}"
+        )
+
+    def test_baseline_retrievable_from_store(self):
+        """Stored baseline blob can be loaded back."""
+        from gax.store import load_baseline
+
+        doc = _make_doc_response(
+            "Retrieve Test",
+            [
+                (
+                    "Tab1",
+                    [_make_empty_para(1), _make_paragraph(2, "Stored content")],
+                ),
+            ],
+        )
+        doc["revisionId"] = "rev1"
+        service = _make_mock_service(doc)
+
+        sections = pull_doc("doc1", "url1", docs_service=service)
+        baseline_hash = sections[0].baseline
+
+        loaded = load_baseline(baseline_hash)
+        assert loaded is not None, "Should be able to load baseline"
+        assert "body" in loaded, "Baseline should contain body"
+        assert "content" in loaded["body"], "Body should have content"
+
+    def test_missing_baseline_loads_as_none(self):
+        """A non-existent baseline hash loads as None (graceful degradation)."""
+        from gax.store import load_baseline
+
+        result = load_baseline("sha256-0000000000000000000000000000000000000000000000000000000000000000")
+        assert result is None
+
+    def test_no_revision_id_degrades_gracefully(self):
+        """Document without revisionId sets revision to empty string."""
+        doc = _make_doc_response(
+            "No Rev",
+            [
+                (
+                    "Tab1",
+                    [_make_empty_para(1), _make_paragraph(2, "Content")],
+                ),
+            ],
+        )
+        # No revisionId key in doc
+        service = _make_mock_service(doc)
+
+        sections = pull_doc("doc1", "url1", docs_service=service)
+        assert sections[0].revision == ""
+
+    def test_parse_multipart_preserves_baseline(self):
+        """Parsing a multipart file with baseline/revision preserves them."""
+        from gax.gdoc.doc import parse_multipart
+
+        doc = _make_doc_response(
+            "Parse Test",
+            [
+                (
+                    "Tab1",
+                    [_make_empty_para(1), _make_paragraph(2, "Content")],
+                ),
+            ],
+        )
+        doc["revisionId"] = "rev999"
+        service = _make_mock_service(doc)
+
+        sections = pull_doc("doc1", "url1", docs_service=service)
+        output = format_multipart(sections)
+
+        # Parse it back
+        parsed = parse_multipart(output)
+        assert len(parsed) == 1
+        assert parsed[0].baseline == sections[0].baseline
+        assert parsed[0].revision == "rev999"
+
+
 class TestFormatMultipart:
     """Tests for multipart format output."""
 

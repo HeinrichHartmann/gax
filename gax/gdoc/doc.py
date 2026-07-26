@@ -85,6 +85,8 @@ class DocSection:
     tab_depth: int = 0  # 0 = top-level, 1 = child, etc.
     tab_has_children: bool = False  # True if tab has child tabs
     tab_id: str = ""  # Google Docs tabId
+    baseline: str = ""  # CAS hash of raw tab JSON at pull time (ADR 034)
+    revision: str = ""  # Document revisionId at pull time (ADR 034)
 
 
 @dataclass
@@ -126,8 +128,12 @@ def _doc_section_to_multipart(section: DocSection) -> gaxfile.Section:
     }
     if section.section_type:
         headers["tab_type"] = section.section_type
+    if section.baseline:
+        headers["baseline"] = section.baseline
+    if section.revision:
+        headers["revision"] = section.revision
     if section.section == 1:
-        headers = write_sync_header(headers)
+        headers = write_sync_header(headers, rev=section.revision)
     return gaxfile.Section(headers=headers, content=section.content)
 
 
@@ -144,6 +150,8 @@ def _multipart_to_doc_section(section: gaxfile.Section) -> DocSection:
         section_title=tab_name,
         content=section.content,
         section_type=h.get("tab_type", h.get("section_type")),
+        baseline=h.get("baseline", ""),
+        revision=h.get("revision", ""),
     )
 
 
@@ -191,19 +199,37 @@ def _fetch_doc(document_id: str, *, docs_service=None, num_retries: int = 0) -> 
     )
 
 
-def _tab_content_to_markdown(doc: dict, tab: dict) -> str:
-    """Convert a tab's body content to markdown via the IR."""
+def _tab_content_to_markdown(doc: dict, tab: dict) -> tuple[str, str]:
+    """Convert a tab's body content to markdown via the IR.
+
+    Returns:
+        Tuple of (markdown_content, baseline_hash).
+        baseline_hash is the CAS key of the raw tab JSON snapshot.
+    """
     from . import ir
+    from ..store import store_baseline
 
     doc_tab = tab.get("documentTab", {})
     body = doc_tab.get("body", {}).get("content", [])
     lists = doc_tab.get("lists") or doc.get("lists")
     inline_objects = doc_tab.get("inlineObjects")
+
+    # Store raw tab JSON as baseline (ADR 034 §1)
+    baseline_json = {"body": {"content": body}}
+    if lists:
+        baseline_json["lists"] = lists
+    if inline_objects:
+        baseline_json["inlineObjects"] = inline_objects
+    footnotes = doc_tab.get("footnotes")
+    if footnotes:
+        baseline_json["footnotes"] = footnotes
+    baseline_hash = store_baseline(baseline_json)
+
     blocks = ir.from_doc_json(body, lists=lists, inline_objects=inline_objects)
     md = ir.render_markdown(blocks)
     # Post-process: extract base64 images to blob store
     md = extract_images_to_store(md)
-    return md
+    return md, baseline_hash
 
 
 def _flatten_tabs(tabs: list[dict], depth: int = 0) -> list[tuple[dict, TabInfo]]:
@@ -245,6 +271,7 @@ def pull_doc(
         num_retries=num_retries,
     )
     doc_title = doc.get("title", "Untitled")
+    revision_id = doc.get("revisionId", "")
     flat = _flatten_tabs(doc.get("tabs", []))
 
     if not flat:
@@ -261,7 +288,7 @@ def pull_doc(
         for i, (tab, info) in enumerate(flat, start=1):
             logger.info(f"Processing tab: {info.title}")
 
-            content = _tab_content_to_markdown(doc, tab)
+            content, baseline_hash = _tab_content_to_markdown(doc, tab)
 
             sections.append(
                 DocSection(
@@ -274,6 +301,8 @@ def pull_doc(
                     tab_depth=info.depth,
                     tab_has_children=info.has_children,
                     tab_id=info.id,
+                    baseline=baseline_hash,
+                    revision=revision_id,
                 )
             )
             op.advance()
@@ -323,7 +352,8 @@ def pull_single_tab(
         )
 
     tab, info, _path = matches[0]
-    content = _tab_content_to_markdown(doc, tab)
+    revision_id = doc.get("revisionId", "")
+    content, baseline_hash = _tab_content_to_markdown(doc, tab)
     time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return DocSection(
         title=doc_title,
@@ -335,6 +365,8 @@ def pull_single_tab(
         tab_depth=info.depth,
         tab_has_children=info.has_children,
         tab_id=info.id,
+        baseline=baseline_hash,
+        revision=revision_id,
     )
 
 
@@ -1036,7 +1068,8 @@ class Tab(Resource):
                 raise ValueError("Document has no tabs")
 
             first_tab, first_info = flat[0]
-            content = _tab_content_to_markdown(doc, first_tab)
+            content, baseline_hash = _tab_content_to_markdown(doc, first_tab)
+            revision_id = doc.get("revisionId", "")
 
             time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             section = DocSection(
@@ -1049,6 +1082,8 @@ class Tab(Resource):
                 tab_depth=first_info.depth,
                 tab_has_children=first_info.has_children,
                 tab_id=first_info.id,
+                baseline=baseline_hash,
+                revision=revision_id,
             )
 
             # Warn about nested tabs
