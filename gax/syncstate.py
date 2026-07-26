@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 
 _ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
@@ -71,6 +71,26 @@ def is_stale(state: SyncState, max_age: timedelta = _DEFAULT_MAX_AGE) -> bool:
         return True
     age = datetime.now(timezone.utc) - state.time
     return age > max_age
+
+
+def rev_guard(state: SyncState, fetch_rev: Callable[[], str]) -> tuple[bool, str]:
+    """Check whether the remote revision has moved since *state* was written.
+
+    Args:
+        state:     The :class:`SyncState` read from the local file header.
+        fetch_rev: Zero-argument callable that returns the *current* remote
+                   revision string (e.g. Drive ``modifiedTime``, Gmail
+                   ``historyId``).  Called only when ``state.rev`` is set.
+
+    Returns:
+        ``(changed, remote_rev)`` — *changed* is True when the remote rev
+        differs from ``state.rev``; *remote_rev* is the value returned by
+        *fetch_rev* (empty string when not applicable).
+    """
+    if not state.rev:
+        return False, ""
+    remote_rev = fetch_rev()
+    return remote_rev != state.rev, remote_rev
 
 
 def format_stale_warning(state: SyncState, path: str) -> str:

@@ -37,7 +37,7 @@ from rich.progress import (
 )
 from rich.prompt import Confirm
 
-from .syncstate import is_stale, read_sync
+from .syncstate import is_stale, read_sync, rev_guard
 
 console = Console()
 err_console = Console(stderr=True)
@@ -264,9 +264,46 @@ def warn_if_stale(path: Path) -> None:
             )
 
 
+def _read_sync_from_path(path: Path):
+    """Return SyncState from *path*'s YAML frontmatter, or None on error."""
+    try:
+        if path.is_dir():
+            gax_yaml = path / ".gax.yaml"
+            if not gax_yaml.exists():
+                return None
+            headers = yaml.safe_load(gax_yaml.read_text(encoding="utf-8")) or {}
+        else:
+            content = path.read_text(encoding="utf-8")
+            if not content.startswith("---"):
+                return None
+            parts = content.split("---", 2)
+            if len(parts) < 2:
+                return None
+            headers = yaml.safe_load(parts[1]) or {}
+    except Exception:
+        return None
+    return read_sync(headers)
+
+
 def confirm_and_push(resource, *, yes=False, **kw):
     """Standard diff -> confirm -> push flow."""
     warn_if_stale(resource.path)
+    # Revision guard: if resource provides fetch_rev(), compare with stored rev
+    fetch_rev = getattr(resource, "fetch_rev", None)
+    if callable(fetch_rev):
+        state = _read_sync_from_path(resource.path)
+        if state is not None:
+            changed, remote_rev = rev_guard(state, fetch_rev)
+            if changed:
+                click.echo(
+                    f"warning: remote changed since last pull"
+                    f" (local rev={state.rev!r}, remote rev={remote_rev!r})",
+                    err=True,
+                )
+                if not yes:
+                    if not click.confirm("Remote has changed. Push anyway?"):
+                        click.echo("Cancelled.")
+                        return
     diff_text = resource.diff(**kw)
     if diff_text is None:
         click.echo("No changes to push.")
