@@ -56,7 +56,9 @@ import base64
 import difflib
 import logging
 import mimetypes
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email import encoders
@@ -549,7 +551,18 @@ class Draft(Resource):
 
         header.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         new_content = format_draft(header, body)
-        self.path.write_text(new_content, encoding="utf-8")
+        # Write atomically so draft_id is never lost if the process is interrupted
+        # between the Gmail API create and the local file update.
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".tmp",
+            dir=self.path.parent,
+            delete=False,
+            encoding="utf-8",
+        ) as tmp:
+            tmp.write(new_content)
+            tmp_path = tmp.name
+        os.replace(tmp_path, self.path)
         logger.info("Pushed successfully")
 
 
