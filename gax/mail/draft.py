@@ -67,6 +67,8 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
+import mistune
+
 
 from ..auth import get_service
 from .. import gaxfile
@@ -208,12 +210,17 @@ def build_message(
 
     Args:
         header: Draft metadata.
-        body: Plain text body.
+        body: Markdown body (converted to multipart/alternative with HTML).
         attachments: Optional list of (filename, mime_type, data) tuples.
     """
+    html_body = str(mistune.html(body))
+    alternative = MIMEMultipart("alternative")
+    alternative.attach(MIMEText(body, "plain", "utf-8"))
+    alternative.attach(MIMEText(html_body, "html", "utf-8"))
+
     if attachments:
-        message = MIMEMultipart()
-        message.attach(MIMEText(body, "plain", "utf-8"))
+        message: MIMEMultipart = MIMEMultipart("mixed")
+        message.attach(alternative)
         for filename, mime_type, data in attachments:
             maintype, subtype = mime_type.split("/", 1)
             part = MIMEBase(maintype, subtype)
@@ -222,7 +229,7 @@ def build_message(
             part.add_header("Content-Disposition", "attachment", filename=filename)
             message.attach(part)
     else:
-        message = MIMEText(body, "plain", "utf-8")
+        message = alternative
 
     message["to"] = header.to
     message["subject"] = header.subject

@@ -572,14 +572,15 @@ class TestDraftAttachments:
         assert parsed_header.subject == header.subject
 
     def test_build_message_without_attachments(self):
-        """Without attachments, produces plain text MIME."""
+        """Without attachments, produces multipart/alternative with plain+html."""
         header = DraftHeader(subject="Test", to="bob@test.com")
         msg = build_message(header, "Hello")
         assert "raw" in msg
         import base64
         raw = base64.urlsafe_b64decode(msg["raw"])
         assert b"text/plain" in raw
-        assert b"multipart" not in raw
+        assert b"text/html" in raw
+        assert b"multipart/alternative" in raw
 
     def test_build_message_with_attachments(self):
         """With attachments, produces multipart MIME."""
