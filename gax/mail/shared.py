@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+
 from ..auth import get_service
 from ..store import store_blob
 from .. import gaxfile
@@ -146,18 +147,41 @@ def _decode_body(part: dict) -> str:
     return ""
 
 
+def _html_to_markdown(html: str) -> str:
+    """Convert HTML to markdown using html2text."""
+    import html2text  # type: ignore[import-untyped]  # lazy: optional dep
+
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.body_width = 0  # no wrapping
+    return h.handle(html)
+
+
 def _extract_text_body(payload: dict) -> str:
-    """Extract plain text body from message payload."""
+    """Extract plain text body from message payload.
+
+    Prefers text/plain parts. Falls back to converting text/html to markdown
+    when no plain-text part is available (HTML-only emails).
+    """
     mime_type = payload.get("mimeType", "")
 
     if mime_type == "text/plain":
         return _decode_body(payload)
 
+    if mime_type == "text/html":
+        return _html_to_markdown(_decode_body(payload))
+
     if mime_type.startswith("multipart/"):
         parts = payload.get("parts", [])
+        # Prefer text/plain
         for part in parts:
             if part.get("mimeType") == "text/plain":
                 return _decode_body(part)
+        # Fall back to text/html converted to markdown
+        for part in parts:
+            if part.get("mimeType") == "text/html":
+                return _html_to_markdown(_decode_body(part))
+        # Recurse into nested multipart
         for part in parts:
             result = _extract_text_body(part)
             if result:
