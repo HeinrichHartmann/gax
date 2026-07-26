@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from ..auth import get_service
 from ..store import store_blob
 from .. import gaxfile
+from ..syncstate import write_sync_header
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class MailSection:
     content: str
     attachments: list[Attachment] = field(default_factory=list)
     message_id: str = ""  # RFC 2822 Message-ID header value
+    history_id: str = ""  # Gmail historyId (first section only)
 
 
 # =============================================================================
@@ -90,6 +92,8 @@ def _mail_section_to_multipart(section: MailSection) -> gaxfile.Section:
             {"name": att.name, "size": att.size, "url": att.url}
             for att in section.attachments
         ]
+    if section.section == 1:
+        headers = write_sync_header(headers, rev=section.history_id)
     return gaxfile.Section(headers=headers, content=section.content)
 
 
@@ -298,6 +302,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
     first_headers = messages[0].get("payload", {}).get("headers", [])
     subject = _get_header(first_headers, "Subject") or "No Subject"
 
+    history_id = thread.get("historyId", "")
     time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     source_url = f"https://mail.google.com/mail/u/0/#inbox/{thread_id}"
 
@@ -341,6 +346,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
                 content=body.strip(),
                 attachments=attachments,
                 message_id=rfc_message_id,
+                history_id=history_id if i == 1 else "",
             )
         )
 

@@ -25,7 +25,6 @@ Additional notes specific to slides:
 import json
 import logging
 import re
-from datetime import datetime, timezone
 from difflib import unified_diff
 from pathlib import Path
 
@@ -34,6 +33,7 @@ import yaml
 from ..auth import get_service
 from ..gaxfile import Section, format_section, parse_multipart
 from ..resource import Resource
+from ..syncstate import write_sync_header
 
 logger = logging.getLogger(__name__)
 
@@ -200,15 +200,16 @@ def _slide_headers(
     fmt: str,
 ) -> dict:
     """Build multipart headers for a slide file."""
-    headers = {
-        "type": "gax/slides",
-        "title": presentation_title,
-        "source": source_url,
-        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "slide_index": slide_index,
-        "slide_id": slide.get("objectId", ""),
-        "layout": _get_slide_layout(slide),
-    }
+    headers = write_sync_header(
+        {
+            "type": "gax/slides",
+            "title": presentation_title,
+            "source": source_url,
+            "slide_index": slide_index,
+            "slide_id": slide.get("objectId", ""),
+            "layout": _get_slide_layout(slide),
+        }
+    )
     if fmt == "json":
         headers["format"] = "json"
     return headers
@@ -430,14 +431,15 @@ class Presentation(Resource):
         folder.mkdir(parents=True, exist_ok=True)
 
         # Write .gax.yaml metadata
-        metadata = {
-            "type": "gax/slides-checkout",
-            "presentation_id": presentation_id,
-            "url": source_url,
-            "title": title,
-            "format": fmt,
-            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+        metadata = write_sync_header(
+            {
+                "type": "gax/slides-checkout",
+                "presentation_id": presentation_id,
+                "url": source_url,
+                "title": title,
+                "format": fmt,
+            }
+        )
         with open(folder / ".gax.yaml", "w") as f:
             yaml.dump(
                 metadata,
@@ -485,9 +487,7 @@ class Presentation(Resource):
         slides = pres.get("slides", [])
 
         # Update metadata
-        metadata["checked_out"] = datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        metadata = write_sync_header(metadata)
         metadata["title"] = title
         with open(metadata_path, "w") as f:
             yaml.dump(

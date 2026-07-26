@@ -35,7 +35,6 @@ Additional notes specific to file:
 
 import logging
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -43,6 +42,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from ..auth import get_service
 from ..resource import Resource
+from ..syncstate import write_sync_header
 
 logger = logging.getLogger(__name__)
 
@@ -59,17 +59,20 @@ def create_tracking_file(file_path: Path, metadata: dict) -> Path:
     """
     tracking_path = file_path.with_suffix(file_path.suffix + ".gax.md")
 
-    tracking_data = {
-        "type": "gax/file",
-        "file_id": metadata["id"],
-        "name": metadata["name"],
-        "mime_type": metadata.get("mimeType", ""),
-        "source": metadata.get(
-            "webViewLink", f"https://drive.google.com/file/d/{metadata['id']}/view"
-        ),
-        "pulled": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "size": int(metadata.get("size", 0)),
-    }
+    tracking_data = write_sync_header(
+        {
+            "type": "gax/file",
+            "file_id": metadata["id"],
+            "name": metadata["name"],
+            "mime_type": metadata.get("mimeType", ""),
+            "source": metadata.get(
+                "webViewLink",
+                f"https://drive.google.com/file/d/{metadata['id']}/view",
+            ),
+            "size": int(metadata.get("size", 0)),
+        },
+        rev=metadata.get("modifiedTime", ""),
+    )
 
     if metadata.get("webContentLink"):
         tracking_data["download"] = metadata["webContentLink"]
@@ -119,7 +122,7 @@ def download_file(file_id: str, output_path: Path) -> dict:
 
     file_metadata = (
         service.files()
-        .get(fileId=file_id, fields="id,name,mimeType,size,webViewLink,webContentLink")
+        .get(fileId=file_id, fields="id,name,mimeType,size,webViewLink,webContentLink,modifiedTime")
         .execute()
     )
 
@@ -155,7 +158,7 @@ def upload_file(
         .create(
             body=file_metadata,
             media_body=media,
-            fields="id,name,mimeType,size,webViewLink,webContentLink",
+            fields="id,name,mimeType,size,webViewLink,webContentLink,modifiedTime",
         )
         .execute()
     )
@@ -166,7 +169,7 @@ def upload_file(
             service.files()
             .get(
                 fileId=file["id"],
-                fields="id,name,mimeType,size,webViewLink,webContentLink",
+                fields="id,name,mimeType,size,webViewLink,webContentLink,modifiedTime",
             )
             .execute()
         )
@@ -184,7 +187,7 @@ def update_file(file_id: str, file_path: Path, public: bool | None = None) -> di
         .update(
             fileId=file_id,
             media_body=media,
-            fields="id,name,mimeType,size,webViewLink,webContentLink",
+            fields="id,name,mimeType,size,webViewLink,webContentLink,modifiedTime",
         )
         .execute()
     )
@@ -195,7 +198,7 @@ def update_file(file_id: str, file_path: Path, public: bool | None = None) -> di
             service.files()
             .get(
                 fileId=file_id,
-                fields="id,name,mimeType,size,webViewLink,webContentLink",
+                fields="id,name,mimeType,size,webViewLink,webContentLink,modifiedTime",
             )
             .execute()
         )
@@ -370,7 +373,7 @@ class File(Resource):
             service.files()
             .get(
                 fileId=file_id,
-                fields="id,name,mimeType,size,webViewLink,webContentLink",
+                fields="id,name,mimeType,size,webViewLink,webContentLink,modifiedTime",
             )
             .execute()
         )
@@ -483,14 +486,15 @@ class Folder(Resource):
         folder.mkdir(parents=True, exist_ok=True)
 
         # Write .gax.yaml metadata
-        metadata = {
-            "type": "gax/drive-checkout",
-            "folder_id": folder_id,
-            "url": f"https://drive.google.com/drive/folders/{folder_id}",
-            "title": title,
-            "recursive": recursive,
-            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+        metadata = write_sync_header(
+            {
+                "type": "gax/drive-checkout",
+                "folder_id": folder_id,
+                "url": f"https://drive.google.com/drive/folders/{folder_id}",
+                "title": title,
+                "recursive": recursive,
+            }
+        )
         with open(folder / ".gax.yaml", "w") as f:
             yaml.dump(
                 metadata,
@@ -626,7 +630,7 @@ class Folder(Resource):
                 (path / item["path"]).mkdir(parents=True, exist_ok=True)
 
         # Update metadata timestamp
-        meta["checked_out"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        meta = write_sync_header(meta)
         with open(metadata_path, "w") as f:
             yaml.dump(
                 meta,
