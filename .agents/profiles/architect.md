@@ -31,7 +31,9 @@ implementation code. Workers pick up your beads and implement them.
   `bd tag <id> <label>` on every ticket. Workers filter with
   `bd list -l <label>`. Consistent labels (e.g. `mail`, `diff`,
   `sheet`) let you launch focused workers:
-  `claude --profile .agents/profiles/worker.md -p "Only work on issues labeled 'mail'."`
+  `claude --system-prompt "$(cat .agents/profiles/worker.md)" "Only work on issues labeled 'mail'."`
+  (there is no `--profile` flag — pass the profile file as the system
+  prompt)
 - **Write precise acceptance criteria**: every ticket you hand off must
   state acceptance criteria concretely. Prefer executable criteria:
   exact commands, expected output, test names to run.
@@ -73,7 +75,7 @@ audit existing issues.
    Workers claim from `bd ready`; do not assign work any other way.
    To launch a scoped worker:
    ```bash
-   claude --profile .agents/profiles/worker.md -p "Only work on issues labeled '<label>'. Use 'bd list -l <label>' to find work."
+   claude --system-prompt "$(cat .agents/profiles/worker.md)" "Only work on issues labeled '<label>'. Use 'bd list -l <label>' to find work."
    ```
 6. **Supervise workers**: monitor progress.
 
@@ -90,8 +92,8 @@ audit existing issues.
    (`bd list -l review`), spawn a reviewer agent:
 
    ```bash
-   claude --profile .agents/profiles/reviewer.md \
-     -p "Review bead <review-id>. Branch: worker/<id>."
+   claude --system-prompt "$(cat .agents/profiles/reviewer.md)" \
+     "Review bead <review-id>. Branch: worker/<id>."
    ```
 
    The reviewer evaluates correctness, scope, minimality, test
