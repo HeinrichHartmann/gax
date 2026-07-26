@@ -3,16 +3,21 @@
 Design goals (from gax-75t / ADR 035):
 - Validate BEFORE any write/diff is computed: invalid YAML never reaches
   the plan engine.
-- YAML implicit type coercion: force all text positions to str so that
-  No/Yes/On/3.10 round-trip as strings, not bools/floats.
+- Lossless YAML parsing: uses BaseLoader so every scalar stays as the
+  original string (No stays "No", 3.10 stays "3.10", 007 stays "007").
+  Typed attributes (b/i/s/u, depth, size, indent_*) are converted at
+  the schema layer where the expected type is known.
 - Precise error paths: every validation error names the YAML node path
   (e.g. "body[2].p.runs[0].color") so the LLM can self-correct.
 - Edit contract: appendix entries and ref:rNN values are immutable;
   edits to them are rejected.
+- Canonical shape: validates the rewrite-tree emission from
+  rewrite_rules.py (ul/ol containers with items, opaque _-prefixed keys).
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -54,162 +59,273 @@ _HEADER_KEYS = {"source", "kind", "body", "tab", "appendix"}
 # The only accepted kind value
 ACCEPTED_KIND = "doc-tree/v1"
 
-# Block-level node type keys
+# Block-level node type keys (canonical rewrite-tree shape)
 _BLOCK_KEYS = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "table"}
 
 # Heading keys (compact form: str, full form: dict)
 _HEADING_KEYS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 
-# List item keys
+# List container keys (canonical: {ul: {items: [...]}})
 _LIST_KEYS = {"ul", "ol"}
 
-# Allowed keys inside a full-form heading/paragraph/list-item dict
-_BLOCK_INNER_KEYS = {"t", "runs", "style", "depth", "raw"}
+# Allowed keys inside a full-form heading/paragraph inner dict
+_BLOCK_INNER_KEYS = {"t", "runs", "style", "raw"}
+
+# Additional keys allowed inside a list item (inside items array or flat li)
+_LIST_ITEM_EXTRA_KEYS = {"depth", "_bullet", "_indent_start", "_indent_first"}
+
+# Allowed keys inside a list container dict (canonical shape)
+_LIST_CONTAINER_KEYS = {"items", "_listId"}
 
 # Allowed keys inside a text style run dict
-_TEXT_STYLE_KEYS = {"t", "b", "i", "s", "u", "url", "color", "bg", "font", "size", "baseline", "raw"}
+_TEXT_STYLE_KEYS = {
+    "t", "b", "i", "s", "u", "url", "color", "bg", "font", "size",
+    "baseline", "raw", "_link_fg", "_verbatim_element",
+}
 
 # Allowed keys inside a paragraph style dict
-_PARA_STYLE_KEYS = {"align", "indent_start", "indent_end", "indent_first",
-                     "line_spacing", "space_above", "space_below", "raw"}
+_PARA_STYLE_KEYS = {
+    "align", "named", "indent_start", "indent_end", "indent_first",
+    "line_spacing", "space_above", "space_below", "raw",
+}
+# Also allow _raw_* prefixed keys (opaque passthrough from rewrite engine)
+_PARA_STYLE_RAW_PREFIX = "_raw_"
 
 # Alignment enum values (lowercase)
-_ALIGN_VALUES = {"start", "center", "end", "justified"}
+_ALIGN_VALUES = {"start", "center", "end", "justified",
+                 "left", "right", "justify"}
 
-# Baseline offset enum values (lowercase)
+# Baseline offset enum values (case-insensitive)
 _BASELINE_VALUES = {"superscript", "subscript"}
 
 # Color pattern: #rrggbb hex
-import re
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-# Table allowed keys
-_TABLE_KEYS = {"rows"}
+# Table allowed keys (canonical shape)
+_TABLE_KEYS = {"rows", "_nrows", "_cols", "_tableStyle", "_rowStyles"}
 
 # Table cell inner keys (when cell is a dict, not a string)
-_TABLE_CELL_KEYS = {"t", "runs", "style"}
+_TABLE_CELL_KEYS = {"t", "runs", "style", "_raw_ps", "_cellStyle", "_verbatim"}
+
+# Ref pattern
+_REF_RE = re.compile(r"^ref:r\d+$")
 
 
 # =============================================================================
-# YAML implicit type coercion
+# BaseLoader YAML parsing
 # =============================================================================
 
-def _coerce_to_str(value: Any) -> str:
-    """Coerce a YAML-parsed value back to its string representation.
 
-    Handles the YAML implicit typing problem:
-    - No/Yes/On/Off → bool → "No"/"Yes"/"On"/"Off"
-    - 3.10 → float 3.1 → "3.10" (information lost — we coerce to "3.1")
-    - null → None → ""
+def _yaml_baseload(yaml_str: str) -> Any:
+    """Parse YAML with BaseLoader — all scalars remain as strings.
 
-    For bool, we use the canonical Python repr ("True"/"False") since we
-    can't know the original casing. The LLM should quote these values.
+    This prevents YAML implicit typing from corrupting text content:
+    No stays "No" (not False), 3.10 stays "3.10" (not 3.1),
+    007 stays "007" (not 7), null stays "null" (not None).
     """
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        # YAML parsed Yes/No/On/Off/True/False as bool
-        return str(value)
-    if isinstance(value, (int, float)):
-        # YAML parsed 3.10 as 3.1, version numbers, etc.
-        return str(value)
-    if isinstance(value, str):
+    import yaml
+
+    return yaml.load(yaml_str, Loader=yaml.BaseLoader)  # noqa: S506
+
+
+# =============================================================================
+# Typed attribute conversion
+# =============================================================================
+
+# When BaseLoader is used, ALL values are strings. The schema layer knows
+# which attributes are typed and converts them. Text positions stay as-is.
+
+
+def _str_to_bool(value: str, path: str, errors: list[SchemaError]) -> bool | str:
+    """Convert a BaseLoader string to bool for known boolean fields."""
+    if value.lower() in ("true", "yes", "on", "1"):
+        return True
+    if value.lower() in ("false", "no", "off", "0"):
+        return False
+    errors.append(SchemaError(path, f"expected boolean, got '{value}'"))
+    return value  # Leave as-is on error
+
+
+def _str_to_int(value: str, path: str, errors: list[SchemaError]) -> int | str:
+    """Convert a BaseLoader string to int for known integer fields."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        errors.append(SchemaError(path, f"expected integer, got '{value}'"))
         return value
-    # Fallback
-    return str(value)
 
 
-def coerce_text_values(doc: dict) -> dict:
-    """Walk a parsed doc-tree/v1 document and coerce all text positions to str.
+def _str_to_number(value: str, path: str, errors: list[SchemaError]) -> int | float | str:
+    """Convert a BaseLoader string to int or float for known numeric fields."""
+    try:
+        # Try int first, then float
+        if "." in value:
+            return float(value)
+        return int(value)
+    except (ValueError, TypeError):
+        errors.append(SchemaError(path, f"expected number, got '{value}'"))
+        return value
 
-    Text positions are:
-    - Compact block values (e.g. {p: No} → {p: "No"})
-    - The 't' key in run dicts and full-form blocks
-    - Table cell strings
 
-    Returns a new dict (does not mutate input).
+def convert_typed_attrs(doc: dict) -> tuple[dict, list[SchemaError]]:
+    """Convert typed attributes in a BaseLoader-parsed doc from str to proper types.
+
+    BaseLoader leaves everything as strings. This function converts known
+    typed fields (booleans, numbers) at the schema layer, where the expected
+    type is known. Text positions remain untouched — this is the key
+    difference from the old coerce_text_values approach.
+
+    Returns (converted_doc, conversion_errors).
     """
     import copy
     result = copy.deepcopy(doc)
+    errors: list[SchemaError] = []
 
     if "body" in result and isinstance(result["body"], list):
-        result["body"] = [_coerce_block(b) for b in result["body"]]
+        result["body"] = [
+            _convert_block(b, f"$.body[{i}]", errors)
+            for i, b in enumerate(result["body"])
+        ]
 
-    return result
+    return result, errors
 
 
-def _coerce_block(block: Any) -> Any:
-    """Coerce text values in a single block."""
+def _convert_block(block: Any, path: str, errors: list[SchemaError]) -> Any:
+    """Convert typed attributes in a single block."""
     if not isinstance(block, dict):
         return block
 
     result = {}
     for key, value in block.items():
-        if key in _HEADING_KEYS | {"p"} | _LIST_KEYS:
-            result[key] = _coerce_block_value(value)
+        if key in _HEADING_KEYS | {"p"}:
+            result[key] = _convert_block_value(value, f"{path}.{key}", errors)
+        elif key in _LIST_KEYS:
+            result[key] = _convert_list_value(value, f"{path}.{key}", errors)
         elif key == "table":
-            result[key] = _coerce_table(value)
+            result[key] = _convert_table(value, f"{path}.table", errors)
         else:
             result[key] = value
     return result
 
 
-def _coerce_block_value(value: Any) -> Any:
-    """Coerce the value of a block-type key (heading/p/ul/ol).
-
-    Compact form: the value itself is the text.
-    Full form: dict with t/runs keys.
-    """
-    # Compact form: value is the text content
+def _convert_block_value(value: Any, path: str, errors: list[SchemaError]) -> Any:
+    """Convert typed attrs in a block value (heading/p)."""
     if not isinstance(value, dict):
-        return _coerce_to_str(value)
+        return value  # Compact form — text stays as-is
 
-    # Full form: dict with possible t/runs keys
     result = dict(value)
-    if "t" in result:
-        result["t"] = _coerce_to_str(result["t"])
     if "runs" in result and isinstance(result["runs"], list):
-        result["runs"] = [_coerce_run(r) for r in result["runs"]]
+        result["runs"] = [
+            _convert_run(r, f"{path}.runs[{i}]", errors)
+            for i, r in enumerate(result["runs"])
+        ]
+    if "style" in result:
+        result["style"] = _convert_para_style(result["style"], f"{path}.style", errors)
     return result
 
 
-def _coerce_run(run: Any) -> Any:
-    """Coerce text in a single run."""
+def _convert_list_value(value: Any, path: str, errors: list[SchemaError]) -> Any:
+    """Convert typed attrs in a list container or flat list item."""
+    if not isinstance(value, dict):
+        return value  # Compact form
+
+    result = dict(value)
+
+    # Canonical container form: {items: [...], _listId: ...}
+    if "items" in result and isinstance(result["items"], list):
+        result["items"] = [
+            _convert_list_item(item, f"{path}.items[{i}]", errors)
+            for i, item in enumerate(result["items"])
+        ]
+        return result
+
+    # Flat list item form (legacy): {t/runs, depth, style}
+    return _convert_list_item(result, path, errors)
+
+
+def _convert_list_item(item: Any, path: str, errors: list[SchemaError]) -> Any:
+    """Convert typed attrs in a single list item."""
+    if not isinstance(item, dict):
+        return item
+
+    result = dict(item)
+    if "depth" in result and isinstance(result["depth"], str):
+        result["depth"] = _str_to_int(result["depth"], f"{path}.depth", errors)
+    if "runs" in result and isinstance(result["runs"], list):
+        result["runs"] = [
+            _convert_run(r, f"{path}.runs[{i}]", errors)
+            for i, r in enumerate(result["runs"])
+        ]
+    if "style" in result:
+        result["style"] = _convert_para_style(result["style"], f"{path}.style", errors)
+    return result
+
+
+def _convert_run(run: Any, path: str, errors: list[SchemaError]) -> Any:
+    """Convert typed attrs in a text run."""
     if not isinstance(run, dict):
-        return _coerce_to_str(run)
+        return run  # Plain string run
+
     result = dict(run)
-    if "t" in result:
-        result["t"] = _coerce_to_str(result["t"])
+    for bool_key in ("b", "i", "s", "u"):
+        if bool_key in result and isinstance(result[bool_key], str):
+            result[bool_key] = _str_to_bool(result[bool_key], f"{path}.{bool_key}", errors)
+    if "size" in result and isinstance(result["size"], str):
+        result["size"] = _str_to_number(result["size"], f"{path}.size", errors)
     return result
 
 
-def _coerce_table(table_val: Any) -> Any:
-    """Coerce text values inside a table."""
+def _convert_para_style(style: Any, path: str, errors: list[SchemaError]) -> Any:
+    """Convert typed attrs in a paragraph style dict."""
+    if not isinstance(style, dict):
+        return style
+
+    result = dict(style)
+    for num_key in ("indent_start", "indent_end", "indent_first",
+                    "line_spacing", "space_above", "space_below"):
+        if num_key in result and isinstance(result[num_key], str):
+            result[num_key] = _str_to_number(result[num_key], f"{path}.{num_key}", errors)
+    return result
+
+
+def _convert_table(table_val: Any, path: str, errors: list[SchemaError]) -> Any:
+    """Convert typed attrs in a table."""
     if not isinstance(table_val, dict):
         return table_val
+
     result = dict(table_val)
+    if "_nrows" in result and isinstance(result["_nrows"], str):
+        result["_nrows"] = _str_to_int(result["_nrows"], f"{path}._nrows", errors)
+    if "_cols" in result and isinstance(result["_cols"], str):
+        result["_cols"] = _str_to_int(result["_cols"], f"{path}._cols", errors)
     if "rows" in result and isinstance(result["rows"], list):
         result["rows"] = [
-            [_coerce_cell(cell) for cell in row]
+            [_convert_cell(cell, f"{path}.rows[{ri}][{ci}]", errors)
+             for ci, cell in enumerate(row)]
             if isinstance(row, list) else row
-            for row in result["rows"]
+            for ri, row in enumerate(result["rows"])
         ]
     return result
 
 
-def _coerce_cell(cell: Any) -> Any:
-    """Coerce text in a table cell."""
+def _convert_cell(cell: Any, path: str, errors: list[SchemaError]) -> Any:
+    """Convert typed attrs in a table cell."""
     if isinstance(cell, dict):
         result = dict(cell)
-        if "t" in result:
-            result["t"] = _coerce_to_str(result["t"])
         if "runs" in result and isinstance(result["runs"], list):
-            result["runs"] = [_coerce_run(r) for r in result["runs"]]
+            result["runs"] = [
+                _convert_run(r, f"{path}.runs[{i}]", errors)
+                for i, r in enumerate(result["runs"])
+            ]
+        if "style" in result:
+            result["style"] = _convert_para_style(result["style"], f"{path}.style", errors)
         return result
     if isinstance(cell, list):
-        return [_coerce_run(r) for r in cell]
-    # Scalar cell value
-    return _coerce_to_str(cell)
+        return [
+            _convert_run(r, f"{path}[{i}]", errors)
+            for i, r in enumerate(cell)
+        ]
+    return cell  # Scalar text — stays as string
 
 
 # =============================================================================
@@ -219,6 +335,9 @@ def _coerce_cell(cell: Any) -> Any:
 
 def validate(doc: dict) -> list[SchemaError]:
     """Validate a parsed doc-tree/v1 document against the formal schema.
+
+    Accepts both the canonical rewrite-tree shape (ul/ol containers with
+    items) and the legacy flat shape (ul/ol as flat list items).
 
     Returns a list of SchemaError (empty = valid). Does NOT raise.
     Call validate_or_raise() if you want an exception.
@@ -301,14 +420,18 @@ def _validate_block(block: Any, path: str, errors: list[SchemaError]) -> None:
     # A block must have exactly one type key
     type_keys = set(block.keys()) & _BLOCK_KEYS
     if len(type_keys) == 0:
+        # Check for _verbatim (canonical fallback)
+        if "_verbatim" in block:
+            return  # Opaque passthrough, no validation
         errors.append(SchemaError(path, f"block has no recognized type key; expected one of {sorted(_BLOCK_KEYS)}"))
         return
     if len(type_keys) > 1:
         errors.append(SchemaError(path, f"block has multiple type keys: {sorted(type_keys)}; expected exactly one"))
         return
 
-    # Check for unknown keys at block level
     type_key = type_keys.pop()
+
+    # At block level, only the type key is allowed (no extra sibling keys)
     unknown = set(block.keys()) - {type_key}
     for key in sorted(unknown):
         errors.append(SchemaError(f"{path}.{key}", f"unknown key '{key}' at block level"))
@@ -320,20 +443,17 @@ def _validate_block(block: Any, path: str, errors: list[SchemaError]) -> None:
     elif type_key == "p":
         _validate_paragraph_value(value, f"{path}.p", errors)
     elif type_key in _LIST_KEYS:
-        _validate_list_item_value(value, f"{path}.{type_key}", errors)
+        _validate_list_value(value, f"{path}.{type_key}", errors)
     elif type_key == "table":
         _validate_table_value(value, f"{path}.table", errors)
 
 
 def _validate_heading_value(value: Any, path: str, errors: list[SchemaError]) -> None:
     """Validate the value of an h1-h6 key."""
-    # Compact form: scalar (string, or YAML-coerced value)
     if not isinstance(value, dict):
-        # Accept any scalar — coercion will fix types
-        return
+        return  # Compact form: scalar text
 
-    # Full form: dict with inner keys
-    _validate_inner_block(value, path, errors, allow_depth=False)
+    _validate_inner_block(value, path, errors, extra_keys=set())
 
 
 def _validate_paragraph_value(value: Any, path: str, errors: list[SchemaError]) -> None:
@@ -341,29 +461,57 @@ def _validate_paragraph_value(value: Any, path: str, errors: list[SchemaError]) 
     if not isinstance(value, dict):
         return  # Compact form
 
-    _validate_inner_block(value, path, errors, allow_depth=False)
+    _validate_inner_block(value, path, errors, extra_keys=set())
 
 
-def _validate_list_item_value(value: Any, path: str, errors: list[SchemaError]) -> None:
-    """Validate the value of a ul/ol key."""
+def _validate_list_value(value: Any, path: str, errors: list[SchemaError]) -> None:
+    """Validate the value of a ul/ol key.
+
+    Accepts two shapes:
+    1. Canonical container: {items: [...], _listId: "..."}
+    2. Legacy flat item: str or {t/runs, depth, style}
+    """
     if not isinstance(value, dict):
-        return  # Compact form
+        return  # Compact form (legacy flat)
 
-    _validate_inner_block(value, path, errors, allow_depth=True)
+    # Canonical container shape: has 'items' key
+    if "items" in value:
+        _validate_list_container(value, path, errors)
+        return
+
+    # Legacy flat item shape: {t/runs, depth, style}
+    _validate_inner_block(value, path, errors, extra_keys=_LIST_ITEM_EXTRA_KEYS)
+
+
+def _validate_list_container(value: dict, path: str, errors: list[SchemaError]) -> None:
+    """Validate a canonical list container: {items: [...], _listId: "..."}."""
+    unknown = set(value.keys()) - _LIST_CONTAINER_KEYS
+    for key in sorted(unknown):
+        errors.append(SchemaError(f"{path}.{key}", f"unknown list container key '{key}'"))
+
+    items = value.get("items")
+    if not isinstance(items, list):
+        errors.append(SchemaError(f"{path}.items", f"items must be a list, got {type(items).__name__}"))
+        return
+
+    for i, item in enumerate(items):
+        item_path = f"{path}.items[{i}]"
+        if not isinstance(item, dict):
+            errors.append(SchemaError(item_path, f"list item must be a mapping, got {type(item).__name__}"))
+            continue
+        _validate_inner_block(item, item_path, errors, extra_keys=_LIST_ITEM_EXTRA_KEYS)
 
 
 def _validate_inner_block(value: dict, path: str, errors: list[SchemaError],
-                          allow_depth: bool) -> None:
+                          extra_keys: set[str]) -> None:
     """Validate the inner dict of a full-form block (heading/p/list item)."""
-    allowed = set(_BLOCK_INNER_KEYS)
-    if not allow_depth:
-        allowed -= {"depth"}
-
-    unknown = set(value.keys()) - allowed
+    allowed = _BLOCK_INNER_KEYS | extra_keys
+    # Allow _-prefixed keys as opaque passthrough (rewrite engine metadata)
+    unknown = {k for k in value.keys() if k not in allowed and not k.startswith("_")}
     for key in sorted(unknown):
         errors.append(SchemaError(f"{path}.{key}", f"unknown attribute '{key}'"))
 
-    # Must have either 't' or 'runs' (not both, ideally)
+    # Must have either 't' or 'runs' (not both)
     has_t = "t" in value
     has_runs = "runs" in value
     if not has_t and not has_runs:
@@ -379,10 +527,16 @@ def _validate_inner_block(value: dict, path: str, errors: list[SchemaError],
     if "style" in value:
         _validate_para_style(value["style"], f"{path}.style", errors)
 
-    # Validate depth
-    if "depth" in value:
+    # Validate depth (only present when extra_keys permits it)
+    if "depth" in value and "depth" in extra_keys:
         depth = value["depth"]
-        if not isinstance(depth, int) or depth < 0:
+        if isinstance(depth, int):
+            if depth < 0:
+                errors.append(SchemaError(f"{path}.depth", f"depth must be a non-negative integer, got {depth!r}"))
+        elif isinstance(depth, str):
+            # BaseLoader: still a string, will be converted later
+            pass
+        else:
             errors.append(SchemaError(f"{path}.depth", f"depth must be a non-negative integer, got {depth!r}"))
 
     # Validate raw (opaque dict, we just check it's a dict)
@@ -402,12 +556,13 @@ def _validate_runs(runs: Any, path: str, errors: list[SchemaError]) -> None:
         run_path = f"{path}[{i}]"
         if isinstance(run, dict):
             _validate_run_dict(run, run_path, errors)
-        # Scalar runs are fine (plain unstyled text) — coercion handles type
+        # Scalar runs are fine (plain unstyled text)
 
 
 def _validate_run_dict(run: dict, path: str, errors: list[SchemaError]) -> None:
     """Validate a styled run dict."""
-    unknown = set(run.keys()) - _TEXT_STYLE_KEYS
+    # Allow _-prefixed keys as opaque passthrough
+    unknown = {k for k in run.keys() if k not in _TEXT_STYLE_KEYS and not k.startswith("_")}
     for key in sorted(unknown):
         errors.append(SchemaError(f"{path}.{key}", f"unknown text style key '{key}'"))
 
@@ -415,13 +570,21 @@ def _validate_run_dict(run: dict, path: str, errors: list[SchemaError]) -> None:
     if "t" not in run:
         errors.append(SchemaError(path, "styled run must have 't' (text) key"))
 
-    # Type checks for style keys
+    # Type checks for style keys (accept both native types and BaseLoader strings)
     for bool_key in ("b", "i", "s", "u"):
-        if bool_key in run and not isinstance(run[bool_key], bool):
-            errors.append(SchemaError(
-                f"{path}.{bool_key}",
-                f"'{bool_key}' must be boolean, got {type(run[bool_key]).__name__}"
-            ))
+        if bool_key in run:
+            val = run[bool_key]
+            if isinstance(val, str):
+                if val.lower() not in ("true", "false", "yes", "no", "on", "off", "1", "0"):
+                    errors.append(SchemaError(
+                        f"{path}.{bool_key}",
+                        f"'{bool_key}' must be boolean, got '{val}'"
+                    ))
+            elif not isinstance(val, bool):
+                errors.append(SchemaError(
+                    f"{path}.{bool_key}",
+                    f"'{bool_key}' must be boolean, got {type(val).__name__}"
+                ))
 
     if "url" in run and not isinstance(run["url"], str):
         errors.append(SchemaError(f"{path}.url", f"url must be a string, got {type(run['url']).__name__}"))
@@ -436,10 +599,18 @@ def _validate_run_dict(run: dict, path: str, errors: list[SchemaError]) -> None:
 
     if "size" in run:
         size = run["size"]
-        if not isinstance(size, (int, float)):
+        if isinstance(size, str):
+            try:
+                fval = float(size)
+                if fval <= 0:
+                    errors.append(SchemaError(f"{path}.size", f"size must be positive, got {size}"))
+            except ValueError:
+                errors.append(SchemaError(f"{path}.size", f"size must be a number, got '{size}'"))
+        elif isinstance(size, (int, float)):
+            if size <= 0:
+                errors.append(SchemaError(f"{path}.size", f"size must be positive, got {size}"))
+        else:
             errors.append(SchemaError(f"{path}.size", f"size must be a number, got {type(size).__name__}"))
-        elif size <= 0:
-            errors.append(SchemaError(f"{path}.size", f"size must be positive, got {size}"))
 
     if "baseline" in run:
         baseline = run["baseline"]
@@ -467,7 +638,9 @@ def _validate_para_style(style: Any, path: str, errors: list[SchemaError]) -> No
         errors.append(SchemaError(path, f"style must be a mapping, got {type(style).__name__}"))
         return
 
-    unknown = set(style.keys()) - _PARA_STYLE_KEYS
+    # Allow _raw_* prefixed keys (opaque passthrough from rewrite engine)
+    unknown = {k for k in style.keys()
+               if k not in _PARA_STYLE_KEYS and not k.startswith(_PARA_STYLE_RAW_PREFIX)}
     for key in sorted(unknown):
         errors.append(SchemaError(f"{path}.{key}", f"unknown paragraph style key '{key}'"))
 
@@ -485,7 +658,16 @@ def _validate_para_style(style: Any, path: str, errors: list[SchemaError]) -> No
                     "line_spacing", "space_above", "space_below"):
         if num_key in style:
             val = style[num_key]
-            if not isinstance(val, (int, float)):
+            if isinstance(val, str):
+                # BaseLoader string — will be converted later, just check it's numeric
+                try:
+                    float(val)
+                except ValueError:
+                    errors.append(SchemaError(
+                        f"{path}.{num_key}",
+                        f"'{num_key}' must be a number, got '{val}'"
+                    ))
+            elif not isinstance(val, (int, float)):
                 errors.append(SchemaError(
                     f"{path}.{num_key}",
                     f"'{num_key}' must be a number, got {type(val).__name__}"
@@ -503,7 +685,8 @@ def _validate_table_value(value: Any, path: str, errors: list[SchemaError]) -> N
         errors.append(SchemaError(path, f"table must be a mapping, got {type(value).__name__}"))
         return
 
-    unknown = set(value.keys()) - _TABLE_KEYS
+    # Allow _-prefixed keys (canonical rewrite-tree metadata)
+    unknown = {k for k in value.keys() if k not in _TABLE_KEYS and not k.startswith("_")}
     for key in sorted(unknown):
         errors.append(SchemaError(f"{path}.{key}", f"unknown table key '{key}'"))
 
@@ -529,22 +712,24 @@ def _validate_table_cell(cell: Any, path: str, errors: list[SchemaError]) -> Non
     """Validate a single table cell."""
     # Scalar: plain text
     if not isinstance(cell, (dict, list)):
-        return  # Any scalar is fine (coercion handles type)
+        return  # Any scalar is fine
 
     # List: runs
     if isinstance(cell, list):
         _validate_runs(cell, path, errors)
         return
 
-    # Dict: cell with style
-    unknown = set(cell.keys()) - _TABLE_CELL_KEYS
+    # Dict: cell with style or _-prefixed opaque keys
+    # Allow _-prefixed keys (canonical rewrite-tree: _raw_ps, _cellStyle, _verbatim)
+    unknown = {k for k in cell.keys() if k not in _TABLE_CELL_KEYS and not k.startswith("_")}
     for key in sorted(unknown):
         errors.append(SchemaError(f"{path}.{key}", f"unknown table cell key '{key}'"))
 
     has_t = "t" in cell
     has_runs = "runs" in cell
-    if not has_t and not has_runs:
-        errors.append(SchemaError(path, "table cell dict must have either 't' or 'runs'"))
+    has_verbatim = "_verbatim" in cell
+    if not has_t and not has_runs and not has_verbatim:
+        errors.append(SchemaError(path, "table cell dict must have either 't', 'runs', or '_verbatim'"))
     if has_t and has_runs:
         errors.append(SchemaError(path, "table cell dict cannot have both 't' and 'runs'"))
 
@@ -628,9 +813,6 @@ def validate_refs_immutable(
     return errors
 
 
-_REF_RE = re.compile(r"^ref:r\d+$")
-
-
 def _collect_refs(obj: Any, path: str) -> dict[str, str]:
     """Collect all ref:rNN values with their paths."""
     refs: dict[str, str] = {}
@@ -655,27 +837,34 @@ def _collect_refs(obj: Any, path: str) -> dict[str, str]:
 
 
 def validated_parse(yaml_str: str) -> dict:
-    """Parse a YAML string, coerce text values, and validate against schema.
+    """Parse YAML losslessly, convert typed attrs, and validate against schema.
 
-    Returns the coerced document dict.
+    Uses BaseLoader so all scalars remain as their original strings
+    (No → "No", 3.10 → "3.10", 007 → "007"). Then converts typed
+    attributes (booleans, numbers) at the schema layer where the
+    expected type is known. Text positions are never touched.
+
+    Returns the converted document dict.
     Raises SchemaValidationError if validation fails.
 
     This is the intended entry point: nothing downstream (diff/plan)
     should run on an invalid file.
     """
-    import yaml
-
-    doc = yaml.safe_load(yaml_str)
+    doc = _yaml_baseload(yaml_str)
     if doc is None:
         raise SchemaValidationError([SchemaError("$", "empty document")])
 
     if not isinstance(doc, dict):
         raise SchemaValidationError([SchemaError("$", f"document must be a mapping, got {type(doc).__name__}")])
 
-    # Coerce text values (fix YAML implicit typing)
-    doc = coerce_text_values(doc)
+    # Validate structure first (before type conversion)
+    errors = validate(doc)
+    if errors:
+        raise SchemaValidationError(errors)
 
-    # Validate against schema
-    validate_or_raise(doc)
+    # Convert typed attributes (booleans, numbers) — text stays verbatim
+    doc, conv_errors = convert_typed_attrs(doc)
+    if conv_errors:
+        raise SchemaValidationError(conv_errors)
 
     return doc
