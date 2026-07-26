@@ -5,6 +5,7 @@ Resource-specific commands live in each resource's cli.py module.
 """
 
 import glob
+import os
 import sys
 import click
 from pathlib import Path
@@ -111,6 +112,24 @@ def unified_get(target: str, tab: str | None):
         sys.exit(1)
 
 
+def _collect_recursive(root: Path) -> list[Path]:
+    """Walk root recursively, collecting *.gax.md files and *.gax.md.d/ pull units.
+
+    A .gax.md.d folder is itself a pull unit — its contents are not descended into.
+    """
+    collected: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dp = Path(dirpath)
+        if dp.name.endswith(".gax.md.d"):
+            collected.append(dp)
+            dirnames.clear()  # don't descend into the checkout folder
+            continue
+        for fname in filenames:
+            if fname.endswith(".gax.md"):
+                collected.append(dp / fname)
+    return collected
+
+
 @docs.section("main")
 @main.command(
     "pull",
@@ -118,7 +137,8 @@ def unified_get(target: str, tab: str | None):
 )
 @click.argument("files", nargs=-1, required=True)
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
-def unified_pull(files: tuple[str, ...], yes: bool):
+@click.option("-r", "--recursive", is_flag=True, help="Recursively collect .gax.md files and .gax.md.d folders from directory tree(s)")
+def unified_pull(files: tuple[str, ...], yes: bool, recursive: bool):
     """Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
 
     Shows a diff and asks for confirmation before overwriting local files.
@@ -144,13 +164,16 @@ def unified_pull(files: tuple[str, ...], yes: bool):
     # Expand globs and '.'
     all_paths: list[Path] = []
     for pattern in file_args:
-        if pattern == ".":
+        p = Path(pattern)
+        if recursive and (pattern == "." or (p.is_dir() and not pattern.endswith(".gax.md.d"))):
+            all_paths.extend(_collect_recursive(p))
+        elif pattern == ".":
             # Current directory - find all .gax.md files and .gax.md.d folders
             all_paths.extend(Path(".").glob("*.gax.md"))
             all_paths.extend(Path(".").glob("*.gax.md.d"))
         elif "*" in pattern or "?" in pattern:
             # Glob pattern
-            all_paths.extend(Path(p) for p in glob.glob(pattern))
+            all_paths.extend(Path(g) for g in glob.glob(pattern))
         else:
             all_paths.append(Path(pattern))
 
