@@ -275,8 +275,32 @@ def _extract_text_style(style_dict: dict) -> TextStyle:
     )
 
 
-def _extract_para_style(style_dict: dict) -> ParagraphStyle:
-    """Extract a ParagraphStyle from a Docs API paragraphStyle dict."""
+# =============================================================================
+# Known table-cell paragraph style defaults (gax-24m)
+# =============================================================================
+
+# These keys appear verbatim on every table cell paragraph style with their
+# default values. Suppressing them in the IR reduces YAML noise significantly
+# while the original data is preserved in Table._raw_table for push.
+_TABLE_CELL_PARA_DEFAULT_KEYS: frozenset[str] = frozenset({
+    "borderBetween", "borderTop", "borderBottom", "borderLeft", "borderRight",
+    "keepLinesTogether", "keepWithNext", "avoidWidowAndOrphan",
+    "shading", "pageBreakBefore", "spacingMode",
+})
+
+# lineSpacing=100 is the table-cell default; suppress it when table_cell=True.
+_TABLE_CELL_DEFAULT_LINE_SPACING = 100
+
+
+def _extract_para_style(style_dict: dict, table_cell: bool = False) -> ParagraphStyle:
+    """Extract a ParagraphStyle from a Docs API paragraphStyle dict.
+
+    Args:
+        style_dict: The raw paragraphStyle dict from the Docs API.
+        table_cell: When True, suppress known table-cell default keys from raw
+            (borders, shading, keepLines*, etc.) and the default lineSpacing
+            of 100. These defaults are preserved in Table._raw_table for push.
+    """
     if not style_dict:
         return ParagraphStyle()
 
@@ -286,7 +310,9 @@ def _extract_para_style(style_dict: dict) -> ParagraphStyle:
         "direction", "headingId",
     }
 
-    raw = {k: v for k, v in style_dict.items() if k not in known_keys}
+    # For table cells also exclude the known-default noise keys from raw.
+    exclude = known_keys | _TABLE_CELL_PARA_DEFAULT_KEYS if table_cell else known_keys
+    raw = {k: v for k, v in style_dict.items() if k not in exclude}
 
     alignment = style_dict.get("alignment")
     if alignment == "START":
@@ -298,13 +324,18 @@ def _extract_para_style(style_dict: dict) -> ParagraphStyle:
             return obj.get("magnitude")
         return None
 
+    line_spacing = style_dict.get("lineSpacing")
+    # Suppress the table-cell default lineSpacing=100 from the IR.
+    if table_cell and line_spacing == _TABLE_CELL_DEFAULT_LINE_SPACING:
+        line_spacing = None
+
     return ParagraphStyle(
         alignment=alignment,
         named_style=style_dict.get("namedStyleType"),
         indent_start=_mag("indentStart"),
         indent_end=_mag("indentEnd"),
         indent_first_line=_mag("indentFirstLine"),
-        line_spacing=style_dict.get("lineSpacing"),
+        line_spacing=line_spacing,
         space_above=_mag("spaceAbove"),
         space_below=_mag("spaceBelow"),
         raw=raw if raw else None,
@@ -362,7 +393,8 @@ def from_doc_json(
                                 _spans_from_textruns(ce["paragraph"].get("elements", []))
                             )
                             cell_para_style = _extract_para_style(
-                                ce["paragraph"].get("paragraphStyle", {})
+                                ce["paragraph"].get("paragraphStyle", {}),
+                                table_cell=True,
                             )
                     row_spans.append(cell_spans)
                     row_styles.append(cell_para_style)

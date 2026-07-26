@@ -810,6 +810,134 @@ class TestLiveDocRoundTrip:
         )
 
 
+# =============================================================================
+# Enriched IR suppression tests (gax-24m)
+# =============================================================================
+
+
+class TestTableCellDefaultSuppression:
+    """Unit tests for table-cell default paragraph style suppression (gax-24m)."""
+
+    def _make_cell_body(self, para_style: dict) -> list[dict]:
+        """Wrap a paragraphStyle in minimal table-body content."""
+        return [{
+            "startIndex": 1,
+            "endIndex": 10,
+            "table": {
+                "rows": 1,
+                "columns": 1,
+                "tableRows": [{
+                    "tableCells": [{
+                        "content": [{
+                            "startIndex": 1,
+                            "endIndex": 10,
+                            "paragraph": {
+                                "elements": [{
+                                    "startIndex": 1,
+                                    "endIndex": 10,
+                                    "textRun": {
+                                        "content": "Cell text\n",
+                                        "textStyle": {},
+                                    },
+                                }],
+                                "paragraphStyle": para_style,
+                            },
+                        }],
+                    }],
+                }],
+            },
+        }]
+
+    def test_border_defaults_not_in_raw(self):
+        """Known border defaults are stripped from cell ParagraphStyle.raw."""
+        from .enriched_ir import Table, from_doc_json
+
+        para_style = {
+            "namedStyleType": "NORMAL_TEXT",
+            "lineSpacing": 100,
+            "borderTop": {
+                "color": {}, "width": {"unit": "PT"},
+                "padding": {"unit": "PT"}, "dashStyle": "SOLID",
+            },
+            "borderLeft": {
+                "color": {}, "width": {"unit": "PT"},
+                "padding": {"unit": "PT"}, "dashStyle": "SOLID",
+            },
+            "keepLinesTogether": False,
+            "shading": {"backgroundColor": {}},
+            "pageBreakBefore": False,
+        }
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        assert len(blocks) == 1
+        assert isinstance(blocks[0], Table)
+        cell_ps = blocks[0].cell_styles[0][0]
+        # raw should be None (all keys were defaults)
+        assert cell_ps.raw is None, f"Expected raw=None, got: {cell_ps.raw}"
+
+    def test_line_spacing_100_suppressed(self):
+        """lineSpacing=100 (table-cell default) is suppressed from IR."""
+        from .enriched_ir import Table, from_doc_json
+
+        para_style = {"namedStyleType": "NORMAL_TEXT", "lineSpacing": 100}
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        cell_ps = blocks[0].cell_styles[0][0]
+        assert cell_ps.line_spacing is None, (
+            f"lineSpacing=100 should be suppressed, got: {cell_ps.line_spacing}"
+        )
+
+    def test_non_default_line_spacing_kept(self):
+        """Non-default lineSpacing (e.g. 115) is kept in the IR."""
+        from .enriched_ir import Table, from_doc_json
+
+        para_style = {"namedStyleType": "NORMAL_TEXT", "lineSpacing": 115}
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        cell_ps = blocks[0].cell_styles[0][0]
+        assert cell_ps.line_spacing == 115
+
+    def test_spacingmode_default_suppressed(self):
+        """spacingMode=COLLAPSE_LISTS (table-cell noise) is suppressed from raw."""
+        from .enriched_ir import Table, from_doc_json
+
+        para_style = {
+            "namedStyleType": "NORMAL_TEXT",
+            "spacingMode": "COLLAPSE_LISTS",
+        }
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        cell_ps = blocks[0].cell_styles[0][0]
+        assert cell_ps.raw is None or "spacingMode" not in (cell_ps.raw or {})
+
+    def test_yaml_contains_no_border_noise(self):
+        """YAML output for table with cell border defaults has no border keys."""
+        from .enriched_ir import from_doc_json
+        from .yaml_serializer import serialize_tree
+
+        para_style = {
+            "namedStyleType": "NORMAL_TEXT",
+            "lineSpacing": 100,
+            "borderTop": {
+                "color": {}, "width": {"unit": "PT"},
+                "padding": {"unit": "PT"}, "dashStyle": "SOLID",
+            },
+            "borderBottom": {
+                "color": {}, "width": {"unit": "PT"},
+                "padding": {"unit": "PT"}, "dashStyle": "SOLID",
+            },
+            "keepLinesTogether": False,
+            "keepWithNext": False,
+            "avoidWidowAndOrphan": False,
+            "shading": {"backgroundColor": {}},
+            "pageBreakBefore": False,
+            "spacingMode": "COLLAPSE_LISTS",
+        }
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        yaml_str = serialize_tree(blocks)
+        assert "borderTop" not in yaml_str, "Border defaults must not appear in YAML"
+        assert "borderBottom" not in yaml_str
+        assert "keepLinesTogether" not in yaml_str
+        assert "shading" not in yaml_str
+        assert "spacingMode" not in yaml_str
+
+
 def _dict_diff(a: dict, b: dict, path: str = "") -> str:
     """Find first difference between two nested dicts."""
     if a == b:
