@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import auth
 from . import docs
-from .ui import gax_command, confirm_and_push  # noqa: F401
+from .ui import gax_command, confirm_and_push, warn_if_stale  # noqa: F401
 from .resource import Resource
 
 # Import resource CLI groups — triggers Resource.__init_subclass__ registration
@@ -355,6 +355,8 @@ def unified_push(files: tuple[str, ...], yes: bool, values: bool):
         except ValueError:
             click.echo(f"Error: unsupported file: {path}", err=True)
             continue
+
+        warn_if_stale(path)
 
         try:
             diff_text = r.diff()

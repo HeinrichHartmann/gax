@@ -22,9 +22,11 @@ import functools
 import logging
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Optional
 
 import click
+import yaml
 from rich.console import Console
 from rich.progress import (
     Progress,
@@ -34,6 +36,8 @@ from rich.progress import (
     TaskProgressColumn,
 )
 from rich.prompt import Confirm
+
+from .syncstate import is_stale, read_sync
 
 console = Console()
 err_console = Console(stderr=True)
@@ -213,8 +217,56 @@ def gax_command(fn):
 handle_errors = gax_command
 
 
+def warn_if_stale(path: Path) -> None:
+    """Print a staleness warning to stderr if the sync header is >1h old.
+
+    Reads the YAML frontmatter from *path* (file) or *path*/.gax.yaml
+    (directory).  Silently skips paths that cannot be read or have no sync
+    header — the warning is best-effort and must never block the push.
+    """
+    try:
+        if path.is_dir():
+            gax_yaml = path / ".gax.yaml"
+            if not gax_yaml.exists():
+                return
+            headers = yaml.safe_load(gax_yaml.read_text(encoding="utf-8")) or {}
+        else:
+            content = path.read_text(encoding="utf-8")
+            # Extract first YAML frontmatter block
+            if not content.startswith("---"):
+                return
+            parts = content.split("---", 2)
+            if len(parts) < 2:
+                return
+            headers = yaml.safe_load(parts[1]) or {}
+    except Exception:
+        return
+
+    state = read_sync(headers)
+    if is_stale(state):
+        if state.time is None:
+            click.echo(
+                f"warning: {path}: never synced — remote may have changed"
+                " (gax diff / gax pull)",
+                err=True,
+            )
+        else:
+            from datetime import datetime, timezone
+
+            age = datetime.now(timezone.utc) - state.time
+            h = int(age.total_seconds() // 3600)
+            m = int((age.total_seconds() % 3600) // 60)
+            age_str = f"{h}h{m}m" if m else f"{h}h"
+            click.echo(
+                f"warning: {path}: last synced {age_str} ago"
+                " — remote may have changed (gax diff / gax pull)",
+                err=True,
+            )
+
+
 def confirm_and_push(resource, *, yes=False, **kw):
     """Standard diff -> confirm -> push flow."""
+    warn_if_stale(resource.path)
     diff_text = resource.diff(**kw)
     if diff_text is None:
         click.echo("No changes to push.")

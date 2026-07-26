@@ -1,4 +1,4 @@
-"""Unit tests for gax.syncstate."""
+"""Unit tests for gax.syncstate and ui.warn_if_stale."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +11,7 @@ from gax.syncstate import (
     read_sync,
     write_sync_header,
 )
+from gax.ui import warn_if_stale
 
 _NOW = datetime(2026, 7, 26, 12, 0, 0, tzinfo=timezone.utc)
 _TS = "2026-07-26T12:00:00Z"
@@ -182,6 +183,103 @@ class TestFormatStaleWarning:
         state = SyncState(time=None)
         msg = format_stale_warning(state, "x.md")
         assert msg.startswith("warning:")
+
+
+# ---------------------------------------------------------------------------
+# warn_if_stale (ui.py integration)
+# ---------------------------------------------------------------------------
+
+
+class TestWarnIfStale:
+    def test_fresh_file_no_warning(self, tmp_path):
+        from gax.syncstate import write_sync_header
+        import yaml
+
+        headers = write_sync_header({"type": "gax/cal"})
+        content = f"---\n{yaml.dump(headers)}---\n"
+        f = tmp_path / "event.cal.gax.md"
+        f.write_text(content)
+
+        from click.testing import CliRunner
+        import click
+
+        @click.command()
+        def cmd():
+            warn_if_stale(f)
+
+        result = CliRunner().invoke(cmd, catch_exceptions=False)
+        assert result.output == ""
+
+    def test_stale_file_prints_warning(self, tmp_path):
+        from datetime import datetime, timezone, timedelta
+        import yaml
+
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        headers = {"type": "gax/cal", "sync": {"time": old_time}}
+        content = f"---\n{yaml.dump(headers)}---\n"
+        f = tmp_path / "event.cal.gax.md"
+        f.write_text(content)
+
+        from click.testing import CliRunner
+        import click
+
+        @click.command()
+        def cmd():
+            warn_if_stale(f)
+
+        result = CliRunner().invoke(cmd, catch_exceptions=False)
+        assert "warning" in result.output
+
+    def test_never_synced_file_prints_warning(self, tmp_path):
+        f = tmp_path / "event.cal.gax.md"
+        f.write_text("---\ntype: gax/cal\n---\n")
+
+        from click.testing import CliRunner
+        import click
+
+        @click.command()
+        def cmd():
+            warn_if_stale(f)
+
+        result = CliRunner().invoke(cmd, catch_exceptions=False)
+        # File has no sync header — warn_if_stale should print to stderr
+        assert "warning" in result.output
+
+    def test_stale_directory_reads_gax_yaml(self, tmp_path):
+        from datetime import datetime, timezone, timedelta
+        import yaml
+
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        meta = {"type": "gax/contacts-checkout", "sync": {"time": old_time}}
+        (tmp_path / ".gax.yaml").write_text(
+            yaml.dump(meta, default_flow_style=False, sort_keys=False)
+        )
+
+        from click.testing import CliRunner
+        import click
+
+        @click.command()
+        def cmd():
+            warn_if_stale(tmp_path)
+
+        result = CliRunner().invoke(cmd, catch_exceptions=False)
+        assert "warning" in result.output
+
+    def test_missing_file_is_silent(self, tmp_path):
+        """warn_if_stale must never raise even if path does not exist."""
+        from click.testing import CliRunner
+        import click
+
+        @click.command()
+        def cmd():
+            warn_if_stale(tmp_path / "nonexistent.cal.gax.md")
+
+        result = CliRunner().invoke(cmd, catch_exceptions=False)
+        assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
