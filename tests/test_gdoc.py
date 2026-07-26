@@ -16,6 +16,7 @@ from gax.gdoc.doc import (
     format_multipart,
     format_section,
     pull_single_tab,
+    render_baseline,
 )
 from gax.gdoc.doc import _flatten_tabs, _compute_tab_paths, DocSection
 
@@ -312,6 +313,39 @@ class TestBaselineStorage:
 
         sections = pull_doc("doc1", "url1", docs_service=service)
         assert sections[0].revision == ""
+
+    def test_render_baseline_produces_deterministic_markdown(self):
+        """render_baseline produces the same markdown as the original pull."""
+        doc = _make_doc_response(
+            "Render Test",
+            [
+                (
+                    "Tab1",
+                    [
+                        _make_empty_para(1),
+                        _make_paragraph(2, "Hello World", style="HEADING_1"),
+                        _make_paragraph(15, "Body paragraph"),
+                    ],
+                ),
+            ],
+        )
+        doc["revisionId"] = "rev1"
+        service = _make_mock_service(doc)
+
+        sections = pull_doc("doc1", "url1", docs_service=service)
+        baseline_md = render_baseline(sections[0].baseline)
+
+        assert baseline_md is not None
+        assert "Hello World" in baseline_md
+        assert "Body paragraph" in baseline_md
+        # Should be deterministic: same hash → same output
+        baseline_md2 = render_baseline(sections[0].baseline)
+        assert baseline_md == baseline_md2
+
+    def test_render_baseline_missing_returns_none(self):
+        """render_baseline returns None for missing baseline."""
+        result = render_baseline("sha256-nonexistent")
+        assert result is None
 
     def test_parse_multipart_preserves_baseline(self):
         """Parsing a multipart file with baseline/revision preserves them."""

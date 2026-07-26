@@ -113,6 +113,31 @@ class CommentReply:
 
 
 # =============================================================================
+# Baseline helpers (ADR 034 §2 — deterministic base rendering)
+# =============================================================================
+
+
+def render_baseline(baseline_hash: str) -> Optional[str]:
+    """Render stored baseline JSON to markdown deterministically.
+
+    This produces the "base" state for three-way diff: the markdown as it
+    was at pull time. Returns None if the baseline is not found.
+    """
+    from . import ir
+    from ..store import load_baseline
+
+    tab_json = load_baseline(baseline_hash)
+    if tab_json is None:
+        return None
+
+    body = tab_json.get("body", {}).get("content", [])
+    lists = tab_json.get("lists")
+    inline_objects = tab_json.get("inlineObjects")
+    blocks = ir.from_doc_json(body, lists=lists, inline_objects=inline_objects)
+    return ir.render_markdown(blocks)
+
+
+# =============================================================================
 # Multipart format helpers
 # =============================================================================
 
