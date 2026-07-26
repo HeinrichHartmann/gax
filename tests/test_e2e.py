@@ -34,6 +34,7 @@ Run with: make test-e2e
 
 import os
 import subprocess
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -73,11 +74,22 @@ def _get_test_sheet_id() -> str:
 
 
 def _run_gax(*args: str) -> subprocess.CompletedProcess:
-    """Run gax CLI command and return result."""
+    """Run gax CLI command and return result.
+
+    Runs ``python -m gax.cli`` with THIS checkout first on PYTHONPATH.
+    The bare ``gax`` entry point resolves through the shared venv's
+    editable install to the MAIN checkout — from a git worktree that
+    silently tests the wrong code (false pre-existing failures / false
+    passes).
+    """
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
     return subprocess.run(
-        ["gax", *args],
+        [sys.executable, "-m", "gax.cli", *args],
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
