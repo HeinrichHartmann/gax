@@ -1136,3 +1136,970 @@ def _build_summary(ops: list[EditOp]) -> list[str]:
         for op in deletes:
             summary.append(_op_summary(op))
     return summary
+
+
+# =============================================================================
+# Tree plan front-end (ADR 035 / gax-cvi.7)
+# =============================================================================
+#
+# The tree plan front-end takes compressed tree IR bodies (from tree.py)
+# instead of markdown and produces ThreeWayPlan results using the shared
+# mutation machinery.
+#
+# Key differences from the markdown front-end:
+# - Style-only edits emit updateTextStyle (not delete+insert)
+# - Run boundaries are non-semantic (normalized before diff)
+# - Appendix/ref/raw modifications rejected pre-plan
+# - Full style vocabulary: color, font, size, bg, baseline, etc.
+
+_TREE_HEADING_KEYS = frozenset(f"h{i}" for i in range(1, 7))
+_TREE_STYLE_KEYS = frozenset({
+    "b", "i", "s", "u", "color", "bg", "font", "size", "url", "baseline",
+})
+
+
+def _tree_block_type(block: dict) -> str:
+    """Detect tree block type key (h1-h6, p, li, table, toc, etc.)."""
+    for key in ("h1", "h2", "h3", "h4", "h5", "h6"):
+        if key in block:
+            return key
+    for key in ("p", "li", "table", "toc", "_verbatim", "ul", "ol"):
+        if key in block:
+            return key
+    return "unknown"
+
+
+def _tree_block_runs(block: dict) -> list:
+    """Extract runs from a paragraph-like tree block."""
+    btype = _tree_block_type(block)
+    if btype not in _TREE_HEADING_KEYS and btype not in ("p", "li"):
+        return []
+    val = block[btype]
+    if isinstance(val, str):
+        return [val]
+    if isinstance(val, dict):
+        if "runs" in val:
+            return val["runs"]
+        if "t" in val:
+            return [val]  # Single styled run — return the whole dict
+    return []
+
+
+def _tree_run_text(run: object) -> str:
+    """Extract text from a tree run."""
+    if isinstance(run, str):
+        return run
+    if isinstance(run, dict):
+        return run.get("t", "")
+    return ""
+
+
+def _tree_run_style(run: object) -> dict:
+    """Extract style dict from a tree run (string -> empty style)."""
+    if isinstance(run, str):
+        return {}
+    if not isinstance(run, dict):
+        return {}
+    return {k: v for k, v in run.items() if k in _TREE_STYLE_KEYS}
+
+
+def _tree_block_text(block: dict) -> str:
+    """Get plain text from a tree block (joins all run texts)."""
+    btype = _tree_block_type(block)
+    if btype == "table":
+        table_data = block.get("table", {})
+        cell_texts = []
+        for row in table_data.get("rows", []):
+            if isinstance(row, list):
+                for cell in row:
+                    cell_texts.append(_tree_cell_text(cell))
+        return ",".join(cell_texts)
+    runs = _tree_block_runs(block)
+    return "".join(_tree_run_text(r) for r in runs)
+
+
+def _tree_cell_text(cell: object) -> str:
+    """Extract text from a tree table cell."""
+    if isinstance(cell, str):
+        return cell
+    if isinstance(cell, dict):
+        if "runs" in cell:
+            return "".join(_tree_run_text(r) for r in cell["runs"])
+        return cell.get("t", "")
+    if isinstance(cell, list):
+        return "".join(_tree_run_text(r) for r in cell)
+    return ""
+
+
+def _tree_block_para_style(block: dict) -> dict:
+    """Extract editable paragraph style (no _ prefixed keys)."""
+    btype = _tree_block_type(block)
+    if btype in _TREE_HEADING_KEYS or btype in ("p", "li"):
+        val = block[btype]
+        if isinstance(val, dict):
+            style = val.get("style", {})
+            return {k: v for k, v in style.items() if not k.startswith("_")}
+    return {}
+
+
+def _tree_block_raw_attrs(block: dict) -> dict:
+    """Extract raw/opaque (_ prefixed) paragraph style keys."""
+    btype = _tree_block_type(block)
+    if btype in _TREE_HEADING_KEYS or btype in ("p", "li"):
+        val = block[btype]
+        if isinstance(val, dict):
+            style = val.get("style", {})
+            return {k: v for k, v in style.items() if k.startswith("_")}
+    return {}
+
+
+def _tree_block_match_key(block: dict) -> str:
+    """Block key compatible with _block_key() for ir.Block alignment."""
+    btype = _tree_block_type(block)
+    if btype in _TREE_HEADING_KEYS:
+        text = "".join(_tree_run_text(r) for r in _tree_block_runs(block))
+        return f"heading:{text}"
+    if btype == "p":
+        text = "".join(_tree_run_text(r) for r in _tree_block_runs(block))
+        return f"paragraph:{text}"
+    if btype == "li":
+        text = "".join(_tree_run_text(r) for r in _tree_block_runs(block))
+        return f"list_item:{text}"
+    if btype == "table":
+        return f"table:{_tree_block_text(block)}"
+    return f"{btype}:opaque"
+
+
+def _normalize_tree_runs(runs: list) -> list[tuple[str, dict]]:
+    """Merge adjacent runs with identical style.  Returns [(text, style)].
+
+    Makes run boundaries non-semantic: different splits of same
+    text+style produce identical normalized form.
+    """
+    if not runs:
+        return []
+    result: list[tuple[str, dict]] = []
+    cur_text = _tree_run_text(runs[0])
+    cur_style = _tree_run_style(runs[0])
+    for run in runs[1:]:
+        text = _tree_run_text(run)
+        style = _tree_run_style(run)
+        if style == cur_style:
+            cur_text += text
+        else:
+            if cur_text:
+                result.append((cur_text, cur_style))
+            cur_text = text
+            cur_style = style
+    if cur_text:
+        result.append((cur_text, cur_style))
+    return result
+
+
+def _build_tree_style_delta(old_style: dict, new_style: dict) -> tuple[dict, str]:
+    """Build Docs API textStyle dict and fields from old->new tree style delta."""
+    from .tree import _hex_to_color
+
+    api_style: dict = {}
+    fields: list[str] = []
+
+    for key, api_key in [
+        ("b", "bold"), ("i", "italic"), ("s", "strikethrough"), ("u", "underline"),
+    ]:
+        old_val = old_style.get(key, False)
+        new_val = new_style.get(key, False)
+        if old_val != new_val:
+            api_style[api_key] = bool(new_val)
+            fields.append(api_key)
+
+    old_color = old_style.get("color")
+    new_color = new_style.get("color")
+    if old_color != new_color:
+        api_style["foregroundColor"] = _hex_to_color(new_color) if new_color else {}
+        fields.append("foregroundColor")
+
+    old_bg = old_style.get("bg")
+    new_bg = new_style.get("bg")
+    if old_bg != new_bg:
+        api_style["backgroundColor"] = _hex_to_color(new_bg) if new_bg else {}
+        fields.append("backgroundColor")
+
+    old_font = old_style.get("font")
+    new_font = new_style.get("font")
+    if old_font != new_font:
+        if new_font:
+            api_style["weightedFontFamily"] = {"fontFamily": new_font, "weight": 400}
+        else:
+            api_style["weightedFontFamily"] = {}
+        fields.append("weightedFontFamily")
+
+    old_size = old_style.get("size")
+    new_size = new_style.get("size")
+    if old_size != new_size:
+        if new_size:
+            api_style["fontSize"] = {"magnitude": new_size, "unit": "PT"}
+        else:
+            api_style["fontSize"] = {}
+        fields.append("fontSize")
+
+    old_url = old_style.get("url")
+    new_url = new_style.get("url")
+    if old_url != new_url:
+        if new_url:
+            api_style["link"] = {"url": new_url}
+        else:
+            api_style["link"] = {}
+        fields.append("link")
+
+    old_bl = old_style.get("baseline")
+    new_bl = new_style.get("baseline")
+    if old_bl != new_bl:
+        api_style["baselineOffset"] = new_bl if new_bl else "NONE"
+        fields.append("baselineOffset")
+
+    return api_style, ",".join(fields)
+
+
+def _tree_style_to_api(style: dict) -> tuple[dict, str]:
+    """Convert tree run style dict to Docs API textStyle + fields."""
+    from .tree import _hex_to_color
+
+    api_style: dict = {}
+    fields: list[str] = []
+
+    if style.get("b"):
+        api_style["bold"] = True
+        fields.append("bold")
+    if style.get("i"):
+        api_style["italic"] = True
+        fields.append("italic")
+    if style.get("s"):
+        api_style["strikethrough"] = True
+        fields.append("strikethrough")
+    if style.get("u"):
+        api_style["underline"] = True
+        fields.append("underline")
+    if "color" in style:
+        api_style["foregroundColor"] = _hex_to_color(style["color"])
+        fields.append("foregroundColor")
+    if "bg" in style:
+        api_style["backgroundColor"] = _hex_to_color(style["bg"])
+        fields.append("backgroundColor")
+    if "font" in style:
+        api_style["weightedFontFamily"] = {"fontFamily": style["font"], "weight": 400}
+        fields.append("weightedFontFamily")
+    if "size" in style:
+        api_style["fontSize"] = {"magnitude": style["size"], "unit": "PT"}
+        fields.append("fontSize")
+    if "url" in style:
+        api_style["link"] = {"url": style["url"]}
+        fields.append("link")
+    if "baseline" in style:
+        api_style["baselineOffset"] = style["baseline"]
+        fields.append("baselineOffset")
+
+    return api_style, ",".join(fields)
+
+
+def _tree_style_diff_requests(
+    base_runs: list,
+    local_runs: list,
+    block_start: int,
+    tab_id: str,
+) -> list[dict]:
+    """Generate updateTextStyle for style-only changes (text must match).
+
+    Normalizes runs first so different splits of same text+style produce
+    zero mutations.  Then walks per-character styles and emits a single
+    updateTextStyle for each contiguous range where style differs.
+    """
+    base_norm = _normalize_tree_runs(base_runs)
+    local_norm = _normalize_tree_runs(local_runs)
+
+    base_text = "".join(t for t, _ in base_norm)
+    local_text = "".join(t for t, _ in local_norm)
+
+    if base_text != local_text:
+        return []  # Text differs — not a style-only change
+
+    if not base_text:
+        return []
+
+    # Build per-character style maps
+    def _char_styles(norm_runs: list[tuple[str, dict]]) -> list[dict]:
+        result: list[dict] = []
+        for text, style in norm_runs:
+            for _ in text:
+                result.append(style)
+        return result
+
+    base_cs = _char_styles(base_norm)
+    local_cs = _char_styles(local_norm)
+
+    requests: list[dict] = []
+    i = 0
+    while i < len(base_cs):
+        if base_cs[i] != local_cs[i]:
+            range_start = i
+            new_style = local_cs[i]
+            # Extend while style differs and local keeps same new style
+            while (
+                i < len(base_cs)
+                and base_cs[i] != local_cs[i]
+                and local_cs[i] == new_style
+            ):
+                i += 1
+            range_end = i
+
+            start_off = block_start + _utf16_len(base_text[:range_start])
+            end_off = block_start + _utf16_len(base_text[:range_end])
+            api_style, api_fields = _build_tree_style_delta(
+                base_cs[range_start], new_style
+            )
+            if api_style and api_fields:
+                requests.append({
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": start_off,
+                            "endIndex": end_off,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": api_style,
+                        "fields": api_fields,
+                    }
+                })
+        else:
+            i += 1
+
+    return requests
+
+
+def _tree_full_style_requests(
+    normalized_runs: list[tuple[str, dict]],
+    block_start: int,
+    tab_id: str,
+) -> list[dict]:
+    """Apply full style for each run (after text splice)."""
+    requests: list[dict] = []
+    offset = block_start
+    for text, style in normalized_runs:
+        if not text:
+            continue
+        span_end = offset + _utf16_len(text)
+        if style:
+            api_style, api_fields = _tree_style_to_api(style)
+            if api_style:
+                requests.append({
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": offset,
+                            "endIndex": span_end,
+                            "tabId": tab_id,
+                        },
+                        "textStyle": api_style,
+                        "fields": api_fields,
+                    }
+                })
+        offset = span_end
+    return requests
+
+
+def _tree_para_style_diff_requests(
+    base_style: dict,
+    local_style: dict,
+    block_start: int,
+    block_end: int,
+    tab_id: str,
+) -> list[dict]:
+    """Generate updateParagraphStyle for paragraph-style changes."""
+    if base_style == local_style:
+        return []
+
+    api_style: dict = {}
+    fields: list[str] = []
+
+    old_align = base_style.get("align")
+    new_align = local_style.get("align")
+    if old_align != new_align:
+        api_style["alignment"] = (new_align or "START").upper()
+        fields.append("alignment")
+
+    old_ls = base_style.get("line_spacing")
+    new_ls = local_style.get("line_spacing")
+    if old_ls != new_ls:
+        if new_ls:
+            api_style["lineSpacing"] = new_ls
+        fields.append("lineSpacing")
+
+    old_sa = base_style.get("space_above")
+    new_sa = local_style.get("space_above")
+    if old_sa != new_sa:
+        api_style["spaceAbove"] = (
+            {"magnitude": new_sa, "unit": "PT"} if new_sa else {}
+        )
+        fields.append("spaceAbove")
+
+    old_sb = base_style.get("space_below")
+    new_sb = local_style.get("space_below")
+    if old_sb != new_sb:
+        api_style["spaceBelow"] = (
+            {"magnitude": new_sb, "unit": "PT"} if new_sb else {}
+        )
+        fields.append("spaceBelow")
+
+    if not fields:
+        return []
+
+    return [{
+        "updateParagraphStyle": {
+            "range": {
+                "startIndex": block_start,
+                "endIndex": block_end,
+                "tabId": tab_id,
+            },
+            "paragraphStyle": api_style,
+            "fields": ",".join(fields),
+        }
+    }]
+
+
+def _tree_heading_level_requests(
+    base_type: str,
+    local_type: str,
+    block_start: int,
+    block_end: int,
+    tab_id: str,
+) -> list[dict]:
+    """Generate updateParagraphStyle for heading level changes."""
+    base_is_heading = base_type in _TREE_HEADING_KEYS
+    local_is_heading = local_type in _TREE_HEADING_KEYS
+
+    if base_is_heading and local_is_heading:
+        base_level = int(base_type[1:])
+        local_level = int(local_type[1:])
+        if base_level == local_level:
+            return []
+        return [{
+            "updateParagraphStyle": {
+                "range": {
+                    "startIndex": block_start,
+                    "endIndex": block_end,
+                    "tabId": tab_id,
+                },
+                "paragraphStyle": {
+                    "namedStyleType": HEADING_STYLE_MAP.get(local_level, "HEADING_1"),
+                },
+                "fields": "namedStyleType",
+            }
+        }]
+    elif base_is_heading and not local_is_heading:
+        return [{
+            "updateParagraphStyle": {
+                "range": {
+                    "startIndex": block_start,
+                    "endIndex": block_end,
+                    "tabId": tab_id,
+                },
+                "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                "fields": "namedStyleType",
+            }
+        }]
+    elif not base_is_heading and local_is_heading:
+        local_level = int(local_type[1:])
+        return [{
+            "updateParagraphStyle": {
+                "range": {
+                    "startIndex": block_start,
+                    "endIndex": block_end,
+                    "tabId": tab_id,
+                },
+                "paragraphStyle": {
+                    "namedStyleType": HEADING_STYLE_MAP.get(local_level, "HEADING_1"),
+                },
+                "fields": "namedStyleType",
+            }
+        }]
+    return []
+
+
+def compute_tree_plan(
+    local_tree_body: list,
+    local_appendix: dict[str, object] | None,
+    remote_body: list[dict],
+    remote_revision: str,
+    stored_revision: str,
+    tab_id: str,
+    *,
+    lists: dict | None = None,
+) -> ThreeWayPlan:
+    """Compute a tree plan: diff remote-tree vs local-tree.
+
+    Simple model (ADR 037 / gax-cvi.7): no baseline, no drift.
+    Under the revision guard the remote IS the state you pulled,
+    so diffing against it gives exactly your edits with correct
+    indices.
+
+    Guarantees:
+    - Style-only edits emit updateTextStyle (no delete+insert)
+    - Identical content with different run splits -> zero mutations
+    - Appendix modifications rejected pre-plan
+    - Raw/opaque attribute edits rejected pre-plan
+    - Unsupported block edits (TOC, _verbatim) rejected pre-plan
+
+    Args:
+        local_tree_body: Compressed body from edited YAML.
+        local_appendix: Appendix dict from edited file (None if absent).
+        remote_body: Current raw doc JSON body from documents().get().
+        remote_revision: Current remote revisionId.
+        stored_revision: revisionId stored at pull time.
+        tab_id: Google Docs tab ID.
+        lists: Document lists metadata.
+
+    Returns:
+        ThreeWayPlan with mutations targeting the remote document.
+    """
+    from .tree import (
+        _ungroup_list_containers,
+        compress_doc,
+        extract_appendix,
+        resolve_appendix,
+        validate_appendix_immutable,
+    )
+
+    # --- Revision guard (ADR 037: mismatch = refuse) ---
+    if (
+        stored_revision
+        and remote_revision
+        and stored_revision != remote_revision
+    ):
+        return ThreeWayPlan(
+            ops=[], mutations=[], summary_lines=[],
+            error=(
+                f"Remote changed since pull "
+                f"(rev {stored_revision} -> {remote_revision}). "
+                f"Pull first."
+            ),
+            revision_changed=True,
+        )
+
+    # --- Compress remote to tree (the "base" for comparison) ---
+    remote_compressed = compress_doc(remote_body, lists=lists)
+
+    # --- Appendix immutability check ---
+    if local_appendix is not None:
+        remote_app = extract_appendix(remote_compressed.body)
+        app_errors = validate_appendix_immutable(
+            remote_app.appendix, local_appendix,
+        )
+        if app_errors:
+            error_msg = "; ".join(str(e) for e in app_errors)
+            return ThreeWayPlan(
+                ops=[], mutations=[], summary_lines=[],
+                error=f"Appendix modification rejected: {error_msg}",
+            )
+
+    # --- Resolve local appendix (bring payloads inline) ---
+    if local_appendix:
+        local_resolved = resolve_appendix(local_tree_body, local_appendix)
+    else:
+        local_resolved = list(local_tree_body)
+
+    # --- Flatten list containers ---
+    remote_flat = _ungroup_list_containers(remote_compressed.body)
+    local_flat = _ungroup_list_containers(local_resolved)
+
+    # --- Remote blocks for doc_range ---
+    remote_blocks = from_doc_json(remote_body, lists=lists)
+
+    # --- Align remote-tree <-> remote-blocks (for doc_range lookup) ---
+    remote_tree_keys = [
+        _tree_block_match_key(b) if isinstance(b, dict) else "unknown"
+        for b in remote_flat
+    ]
+    remote_ir_keys = [_block_key(b) for b in remote_blocks]
+    align_sm = difflib.SequenceMatcher(None, remote_tree_keys, remote_ir_keys)
+
+    tree_to_block: dict[int, int] = {}
+    for atag, ai1, ai2, aj1, aj2 in align_sm.get_opcodes():
+        if atag == "equal":
+            for ti, bi in zip(range(ai1, ai2), range(aj1, aj2)):
+                tree_to_block[ti] = bi
+        elif atag == "replace":
+            pairs = min(ai2 - ai1, aj2 - aj1)
+            for k in range(pairs):
+                tree_to_block[ai1 + k] = aj1 + k
+
+    # --- Block-level diff: remote-tree vs local-tree ---
+    local_keys = [
+        _tree_block_match_key(b) if isinstance(b, dict) else "unknown"
+        for b in local_flat
+    ]
+    sm = difflib.SequenceMatcher(None, remote_tree_keys, local_keys)
+
+    # --- Generate mutations ---
+    mutations: list[dict] = []
+    summary: list[str] = []
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            result = _tree_diff_equal_range(
+                remote_flat, local_flat, i1, i2, j1, j2,
+                tree_to_block, remote_blocks, tab_id,
+            )
+            if isinstance(result, str):
+                return ThreeWayPlan(
+                    ops=[], mutations=[], summary_lines=[],
+                    error=result,
+                )
+            if result is not None:
+                muts, summ, _ = result
+                mutations.extend(muts)
+                summary.extend(summ)
+
+        elif tag == "replace":
+            result = _tree_diff_replace_range(
+                remote_flat, local_flat, i1, i2, j1, j2,
+                tree_to_block, remote_blocks, tab_id,
+            )
+            if isinstance(result, str):
+                return ThreeWayPlan(
+                    ops=[], mutations=[], summary_lines=[],
+                    error=result,
+                )
+            muts, summ, _ = result
+            mutations.extend(muts)
+            summary.extend(summ)
+
+        elif tag == "delete":
+            for k in range(i1, i2):
+                if k not in tree_to_block:
+                    continue
+                bi = tree_to_block[k]
+                rb = remote_blocks[bi]
+                if not rb.doc_range:
+                    continue
+                mutations.append({
+                    "deleteContentRange": {
+                        "range": {
+                            "startIndex": rb.doc_range[0],
+                            "endIndex": rb.doc_range[1],
+                            "tabId": tab_id,
+                        }
+                    }
+                })
+                summary.append(
+                    f"  delete: '{_tree_block_text(remote_flat[k])[:40]}'"
+                )
+
+        elif tag == "insert":
+            insert_idx = _tree_find_insert_point(
+                i1, tree_to_block, remote_blocks,
+            )
+            for k in range(j1, j2):
+                lb = local_flat[k]
+                if not isinstance(lb, dict):
+                    continue
+                imuts = _tree_insert_block_mutations(lb, insert_idx, tab_id)
+                mutations.extend(imuts)
+                summary.append(f"  insert: '{_tree_block_text(lb)[:40]}'")
+
+    # Sort by descending start index (safe application order)
+    def _sort_key(req: dict) -> int:
+        for val in req.values():
+            if isinstance(val, dict):
+                r = val.get("range") or val.get("location")
+                if r and "startIndex" in r:
+                    return -r["startIndex"]
+                if r and "index" in r:
+                    return -r["index"]
+        return 0
+
+    mutations.sort(key=_sort_key)
+
+    return ThreeWayPlan(
+        ops=[],  # Tree mode produces mutations directly
+        mutations=mutations,
+        summary_lines=summary,
+    )
+
+
+def _tree_diff_equal_range(
+    base_flat: list,
+    local_flat: list,
+    i1: int, i2: int,
+    j1: int, j2: int,
+    base_to_remote: dict[int, int],
+    remote_blocks: list[Block],
+    tab_id: str,
+) -> tuple[list[dict], list[str], set[int]] | str | None:
+    """Diff blocks matched as 'equal' (same key = same type+text).
+
+    Returns (mutations, summary, edited_indices), error string, or None.
+    """
+    mutations: list[dict] = []
+    summary: list[str] = []
+    edited: set[int] = set()
+
+    for bi, li in zip(range(i1, i2), range(j1, j2)):
+        base_block = base_flat[bi]
+        local_block = local_flat[li]
+        if not isinstance(base_block, dict) or not isinstance(local_block, dict):
+            continue
+
+        btype = _tree_block_type(base_block)
+        ltype = _tree_block_type(local_block)
+
+        # Reject edits to unsupported block types
+        if btype in ("toc", "_verbatim", "unknown"):
+            if base_block != local_block:
+                return f"Unsupported edit to {btype} block at index {bi}"
+            continue
+
+        # Reject raw attribute edits
+        base_raw = _tree_block_raw_attrs(base_block)
+        local_raw = _tree_block_raw_attrs(local_block)
+        if base_raw != local_raw:
+            changed = set(base_raw.keys()) ^ set(local_raw.keys())
+            if not changed:
+                changed = {k for k in base_raw if base_raw.get(k) != local_raw.get(k)}
+            return (
+                f"Unsupported edit to raw attribute(s) {sorted(changed)} "
+                f"at block {bi}"
+            )
+
+        if bi not in base_to_remote:
+            continue
+        ri = base_to_remote[bi]
+        rb = remote_blocks[ri]
+        if not rb.doc_range:
+            continue
+
+        block_start = rb.doc_range[0]
+        block_end = rb.doc_range[1] - 1  # exclude trailing newline
+
+        # Style diff
+        style_muts = _tree_style_diff_requests(
+            _tree_block_runs(base_block),
+            _tree_block_runs(local_block),
+            block_start, tab_id,
+        )
+
+        # Paragraph style diff
+        para_muts = _tree_para_style_diff_requests(
+            _tree_block_para_style(base_block),
+            _tree_block_para_style(local_block),
+            block_start, block_end, tab_id,
+        )
+
+        # Heading level change
+        heading_muts = _tree_heading_level_requests(
+            btype, ltype, block_start, block_end, tab_id,
+        )
+
+        if style_muts or para_muts or heading_muts:
+            edited.add(bi)
+            mutations.extend(style_muts)
+            mutations.extend(para_muts)
+            mutations.extend(heading_muts)
+            text = _tree_block_text(base_block)[:40]
+            summary.append(f"  restyle: '{text}'")
+
+    return mutations, summary, edited
+
+
+def _tree_diff_replace_range(
+    base_flat: list,
+    local_flat: list,
+    i1: int, i2: int,
+    j1: int, j2: int,
+    base_to_remote: dict[int, int],
+    remote_blocks: list[Block],
+    tab_id: str,
+) -> tuple[list[dict], list[str], set[int]] | str:
+    """Diff blocks matched as 'replace' (keys differ)."""
+    mutations: list[dict] = []
+    summary: list[str] = []
+    edited: set[int] = set()
+
+    pairs = min(i2 - i1, j2 - j1)
+
+    # Paired updates
+    for k in range(pairs):
+        bi = i1 + k
+        li = j1 + k
+        base_block = base_flat[bi]
+        local_block = local_flat[li]
+
+        if not isinstance(base_block, dict) or not isinstance(local_block, dict):
+            continue
+
+        btype = _tree_block_type(base_block)
+        ltype = _tree_block_type(local_block)
+
+        # Reject unsupported types
+        if btype in ("toc", "_verbatim", "unknown") or ltype in ("toc", "_verbatim", "unknown"):
+            return f"Unsupported edit: {btype} -> {ltype} at block {bi}"
+
+        if bi not in base_to_remote:
+            continue
+        ri = base_to_remote[bi]
+        rb = remote_blocks[ri]
+        if not rb.doc_range:
+            continue
+
+        edited.add(bi)
+        block_start = rb.doc_range[0]
+        block_end = rb.doc_range[1] - 1
+
+        base_text = _tree_block_text(base_block)
+        local_text = _tree_block_text(local_block)
+
+        if base_text != local_text:
+            # Text changed -- splice + full style application
+            mutations.extend(
+                _splice_text_requests(base_text, local_text, block_start, tab_id)
+            )
+            local_norm = _normalize_tree_runs(_tree_block_runs(local_block))
+            mutations.extend(
+                _tree_full_style_requests(local_norm, block_start, tab_id)
+            )
+        else:
+            # Same text -- style diff only
+            style_muts = _tree_style_diff_requests(
+                _tree_block_runs(base_block),
+                _tree_block_runs(local_block),
+                block_start, tab_id,
+            )
+            mutations.extend(style_muts)
+
+        # Paragraph style diff
+        para_muts = _tree_para_style_diff_requests(
+            _tree_block_para_style(base_block),
+            _tree_block_para_style(local_block),
+            block_start, block_end, tab_id,
+        )
+        mutations.extend(para_muts)
+
+        # Heading level
+        heading_muts = _tree_heading_level_requests(
+            btype, ltype, block_start, block_end, tab_id,
+        )
+        mutations.extend(heading_muts)
+
+        base_t = base_text[:30]
+        local_t = local_text[:30]
+        if base_t == local_t:
+            summary.append(f"  restyle: '{base_t}'")
+        else:
+            summary.append(f"  update: '{base_t}' -> '{local_t}'")
+
+    # Remaining deletes
+    for k in range(pairs, i2 - i1):
+        bi = i1 + k
+        if bi not in base_to_remote:
+            continue
+        ri = base_to_remote[bi]
+        rb = remote_blocks[ri]
+        if not rb.doc_range:
+            continue
+        edited.add(bi)
+        mutations.append({
+            "deleteContentRange": {
+                "range": {
+                    "startIndex": rb.doc_range[0],
+                    "endIndex": rb.doc_range[1],
+                    "tabId": tab_id,
+                }
+            }
+        })
+        summary.append(f"  delete: '{_tree_block_text(base_flat[bi])[:40]}'")
+
+    # Remaining inserts
+    for k in range(pairs, j2 - j1):
+        li = j1 + k
+        insert_idx = _tree_find_insert_point_after(
+            i1 + pairs - 1 if pairs > 0 else i1 - 1,
+            base_to_remote, remote_blocks,
+        )
+        local_block = local_flat[li]
+        if isinstance(local_block, dict):
+            imuts = _tree_insert_block_mutations(local_block, insert_idx, tab_id)
+            mutations.extend(imuts)
+            summary.append(f"  insert: '{_tree_block_text(local_block)[:40]}'")
+
+    return mutations, summary, edited
+
+
+def _tree_find_insert_point(
+    base_idx: int,
+    base_to_remote: dict[int, int],
+    remote_blocks: list[Block],
+) -> int:
+    """Find insertion index: after the base block preceding the insert."""
+    anchor_bi = base_idx - 1 if base_idx > 0 else None
+    return _tree_find_insert_point_after(anchor_bi, base_to_remote, remote_blocks)
+
+
+def _tree_find_insert_point_after(
+    anchor_bi: int | None,
+    base_to_remote: dict[int, int],
+    remote_blocks: list[Block],
+) -> int:
+    """Find insertion index after a given base block."""
+    if anchor_bi is not None and anchor_bi >= 0 and anchor_bi in base_to_remote:
+        ri = base_to_remote[anchor_bi]
+        rb = remote_blocks[ri]
+        if rb.doc_range:
+            return rb.doc_range[1]
+    if remote_blocks:
+        first = remote_blocks[0]
+        if first.doc_range:
+            return first.doc_range[0]
+    return 1
+
+
+def _tree_insert_block_mutations(
+    block: dict,
+    insert_idx: int,
+    tab_id: str,
+) -> list[dict]:
+    """Generate mutations to insert a tree block."""
+    btype = _tree_block_type(block)
+    if btype not in _TREE_HEADING_KEYS and btype not in ("p", "li"):
+        return []  # Only paragraph-like blocks supported for insert
+
+    text = _tree_block_text(block)
+    if not text:
+        return []
+
+    mutations: list[dict] = []
+
+    mutations.append({
+        "insertText": {
+            "text": text + "\n",
+            "location": {"index": insert_idx, "tabId": tab_id},
+        }
+    })
+
+    # Apply styles
+    local_norm = _normalize_tree_runs(_tree_block_runs(block))
+    mutations.extend(_tree_full_style_requests(local_norm, insert_idx, tab_id))
+
+    # Heading style
+    if btype in _TREE_HEADING_KEYS:
+        level = int(btype[1:])
+        mutations.append({
+            "updateParagraphStyle": {
+                "range": {
+                    "startIndex": insert_idx,
+                    "endIndex": insert_idx + _utf16_len(text),
+                    "tabId": tab_id,
+                },
+                "paragraphStyle": {
+                    "namedStyleType": HEADING_STYLE_MAP.get(level, "HEADING_1"),
+                },
+                "fields": "namedStyleType",
+            }
+        })
+
+    return mutations
