@@ -98,6 +98,9 @@ def main() -> None:
         branch = f"{profile_name}/{agent_id}"
         worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
         sh("git", "worktree", "add", str(worktree), "-b", branch, "main", cwd=repo)
+        # Allow the worktree's .envrc — otherwise direnv silently falls back
+        # to a parent .envrc and agents run against the wrong environment.
+        sh("direnv", "allow", str(worktree))
         cwd = worktree
         # Grant edit/test/git permissions scoped to this worktree only
         claude_dir = worktree / ".claude"
