@@ -150,6 +150,39 @@ def _decode_body(part: dict) -> str:
     return ""
 
 
+def _strip_quoted_text(body: str) -> str:
+    """Strip quoted reply history from email body.
+
+    Detects and removes:
+    - Lines starting with '>' (RFC 2822 quoting)
+    - 'On ... wrote:' attribution blocks (Gmail/Outlook style, may wrap over
+      up to 3 lines when the sender name is long)
+
+    Returns the new-content portion only.
+    """
+    lines = body.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].rstrip()
+
+        # '> ' prefixed quoting — start of quote block
+        if stripped.startswith(">"):
+            return "\n".join(lines[:i]).rstrip()
+
+        # 'On ... wrote:' attribution — may span 1-3 lines
+        if stripped.startswith("On "):
+            # Look ahead for 'wrote:' within the next 3 lines
+            lookahead = " ".join(
+                lines[i : min(i + 3, len(lines))]
+            )
+            if "wrote:" in lookahead:
+                return "\n".join(lines[:i]).rstrip()
+
+        i += 1
+
+    return body
+
+
 def _html_to_markdown(html: str) -> str:
     """Convert HTML to markdown using html2text."""
     import html2text  # type: ignore[import-untyped]  # lazy: optional dep
@@ -288,7 +321,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
         except (ValueError, TypeError):
             date_iso = date_str
 
-        body = _extract_text_body(payload)
+        body = _strip_quoted_text(_extract_text_body(payload))
         attachments = _extract_attachments(payload, msg_id, service)
 
         sender_name = from_addr.split("<")[0].strip().strip('"') or from_addr
