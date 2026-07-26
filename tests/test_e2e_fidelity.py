@@ -432,11 +432,6 @@ class TestWordEditPreservesSiblings:
         update_ops = [op for op in ops if op.type == "update"]
         assert len(update_ops) >= 1, "Should have at least one update"
 
-    @pytest.mark.xfail(
-        reason="gax-cvi.3: requires run-level splicing (ADR 034 §3); "
-        "current diff_push deletes+reinserts entire paragraph",
-        strict=False,
-    )
     def test_sibling_runs_survive_word_edit(self):
         """After push of word edit, bold/link formatting on sibling runs is preserved.
 
@@ -814,11 +809,6 @@ class TestEmojiUtf16:
         # 𝕳 is U+1D573
         assert _utf16_len("𝕳") == 2
 
-    @pytest.mark.xfail(
-        reason="gax-cvi.3: run-level splice must use UTF-16 offsets; "
-        "current paragraph-replace path sidesteps per-character indexing",
-        strict=False,
-    )
     def test_emoji_edit_index_math(self):
         """Edit text adjacent to emoji; verify mutation indices are UTF-16 correct.
 

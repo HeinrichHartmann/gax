@@ -17,7 +17,10 @@ from gax.gdoc.ir import (
 )
 from gax.gdoc.diff_push import (
     EditOp,
+    _splice_text_requests,
+    _span_style_requests,
     ast_diff,
+    compute_three_way_plan,
     diff_to_mutations,
 )
 
@@ -65,7 +68,11 @@ def _make_blocks_with_range(*specs) -> list[Block]:
 
 
 def _make_doc_table_json(rows_data, start_index=1):
-    """Build minimal Google Doc table JSON for testing."""
+    """Build minimal Google Doc table JSON for testing.
+
+    Matches real Google Docs API format: startIndex/endIndex live on the
+    structural element wrapper, not inside the "paragraph" dict.
+    """
     table_rows = []
     idx = start_index
     for row in rows_data:
@@ -76,13 +83,17 @@ def _make_doc_table_json(rows_data, start_index=1):
                 {
                     "content": [
                         {
+                            "startIndex": idx,
+                            "endIndex": cell_end,
                             "paragraph": {
-                                "startIndex": idx,
-                                "endIndex": cell_end,
                                 "elements": [
-                                    {"textRun": {"content": cell_text + "\n"}}
+                                    {
+                                        "startIndex": idx,
+                                        "endIndex": cell_end,
+                                        "textRun": {"content": cell_text + "\n"},
+                                    }
                                 ],
-                            }
+                            },
                         }
                     ]
                 }
@@ -446,3 +457,455 @@ class TestTableUpdates:
         ops = [EditOp("update", 0, 0, base_table, edit)]
         with pytest.raises(ValueError, match="multi-paragraph"):
             diff_to_mutations(ops, [base_table], "t1")
+
+
+# =============================================================================
+# Three-way plan (ADR 034 §2)
+# =============================================================================
+
+
+class TestThreeWayPlan:
+    """Tests for compute_three_way_plan (baseline-aware diff)."""
+
+    def _store_baseline(self, body, lists=None):
+        """Helper: store a baseline and return its hash."""
+        from gax.store import store_baseline
+
+        baseline_json = {"body": {"content": body}}
+        if lists:
+            baseline_json["lists"] = lists
+        return store_baseline(baseline_json)
+
+    def test_no_edit_produces_empty_plan(self):
+        """No edits (local == base rendered) → empty plan."""
+        from gax.gdoc.ir import render_markdown
+
+        body = [_make_paragraph(1, "Hello world")]
+        baseline_hash = self._store_baseline(body)
+
+        # Render base to get local_markdown (no edits)
+        base_blocks = from_doc_json(body)
+        local_md = render_markdown(base_blocks)
+
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=body,
+            remote_revision="rev1",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        assert plan.is_empty
+        assert len(plan.mutations) == 0
+        assert not plan.revision_changed
+
+    def test_user_edit_produces_mutations(self):
+        """User edits → plan has mutations."""
+        body = [_make_paragraph(1, "Original text")]
+        baseline_hash = self._store_baseline(body)
+
+        # User edits the markdown
+        local_md = "Changed text\n"
+
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=body,
+            remote_revision="rev1",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        assert not plan.is_empty
+        assert len(plan.mutations) > 0
+        assert plan.error is None
+
+    def test_revision_gate_same_rev(self):
+        """Same revision → no conflict flag."""
+        from gax.gdoc.ir import render_markdown
+
+        body = [_make_paragraph(1, "Content")]
+        baseline_hash = self._store_baseline(body)
+        local_md = render_markdown(from_doc_json(body))
+
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=body,
+            remote_revision="rev1",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        assert not plan.revision_changed
+
+    def test_revision_gate_different_rev_no_conflict(self):
+        """Different revision but disjoint changes → proceeds with warning."""
+        body = [
+            _make_paragraph(1, "First paragraph"),
+            _make_paragraph(18, "Second paragraph"),
+        ]
+        baseline_hash = self._store_baseline(body)
+
+        # User edits first paragraph
+        local_md = "Edited first\n\nSecond paragraph\n"
+
+        # Remote is unchanged (same body), but revision moved
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=body,
+            remote_revision="rev2",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        assert plan.revision_changed
+        # No error because remote content didn't actually change
+        # (remote renders same as base)
+        assert plan.error is None
+        assert not plan.is_empty
+
+    def test_revision_gate_overlapping_conflict(self):
+        """Overlapping remote change → error with conflict info."""
+        body = [_make_paragraph(1, "Shared paragraph")]
+        baseline_hash = self._store_baseline(body)
+
+        # User edits the paragraph
+        local_md = "User edited this\n"
+
+        # Remote ALSO changed (different body content)
+        remote_body = [_make_paragraph(1, "Collaborator changed this")]
+
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=remote_body,
+            remote_revision="rev2",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        assert plan.revision_changed
+        assert plan.error is not None
+        assert "Conflicting" in plan.error or "Remote changed" in plan.error
+        assert len(plan.mutations) == 0
+
+    def test_missing_baseline_falls_back_to_stateless(self):
+        """Missing baseline → degrades to stateless diff."""
+        body = [_make_paragraph(1, "Some content")]
+        local_md = "Different content\n"
+
+        plan = compute_three_way_plan(
+            baseline_hash="sha256-nonexistent",
+            local_markdown=local_md,
+            remote_body=body,
+            remote_revision="rev1",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        # Should still produce a plan (stateless fallback)
+        assert not plan.is_empty
+        assert "stateless fallback" in plan.summary_lines[0]
+
+    def test_empty_baseline_hash_falls_back(self):
+        """Empty baseline hash → stateless fallback."""
+        body = [_make_paragraph(1, "Some content")]
+        local_md = "Different content\n"
+
+        plan = compute_three_way_plan(
+            baseline_hash="",
+            local_markdown=local_md,
+            remote_body=body,
+            remote_revision="rev1",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        # Empty hash → load_baseline returns None → fallback
+        assert not plan.is_empty
+
+    def test_drift_insert_above_shifts_range(self):
+        """Remote inserted a block above the user's edit → mutation targets shifted range."""
+        # Base: two paragraphs
+        base_body = [
+            _make_paragraph(1, "First paragraph"),
+            _make_paragraph(18, "Second paragraph"),
+        ]
+        baseline_hash = self._store_baseline(base_body)
+
+        # User edited the second paragraph
+        local_md = "First paragraph\n\nEdited second\n"
+
+        # Remote inserted a new block ABOVE the user's edit
+        remote_body = [
+            _make_paragraph(1, "First paragraph"),
+            _make_paragraph(18, "Inserted by collaborator"),
+            _make_paragraph(44, "Second paragraph"),
+        ]
+
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=remote_body,
+            remote_revision="rev2",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        # Should produce mutations targeting the SHIFTED range (index 44+),
+        # not the original range (index 18+)
+        assert not plan.is_empty
+        assert plan.error is None
+        assert len(plan.mutations) > 0
+        # Verify the mutation targets the correct (shifted) range
+        for req in plan.mutations:
+            if "deleteContentRange" in req:
+                r = req["deleteContentRange"]["range"]
+                # Must target the third paragraph's range (44+), not second (18+)
+                assert r["startIndex"] >= 44, (
+                    f"Mutation at {r['startIndex']} targets wrong range "
+                    f"(should be >= 44, the shifted position)"
+                )
+
+    def test_drift_delete_above_shifts_range(self):
+        """Remote deleted a block above the user's edit → mutation targets collapsed range."""
+        # Base: three paragraphs
+        base_body = [
+            _make_paragraph(1, "First paragraph"),
+            _make_paragraph(18, "Middle paragraph"),
+            _make_paragraph(36, "Third paragraph"),
+        ]
+        baseline_hash = self._store_baseline(base_body)
+
+        # User edited the third paragraph
+        local_md = "First paragraph\n\nMiddle paragraph\n\nEdited third\n"
+
+        # Remote deleted the middle paragraph — third moves up
+        remote_body = [
+            _make_paragraph(1, "First paragraph"),
+            _make_paragraph(18, "Third paragraph"),
+        ]
+
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=remote_body,
+            remote_revision="rev2",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        # Should produce mutations at the collapsed range (18+),
+        # not the original (36+)
+        assert not plan.is_empty
+        assert plan.error is None
+        assert len(plan.mutations) > 0
+        for req in plan.mutations:
+            if "deleteContentRange" in req:
+                r = req["deleteContentRange"]["range"]
+                assert r["startIndex"] >= 18, (
+                    f"Mutation at {r['startIndex']} targets wrong range"
+                )
+
+    def test_drift_unmapped_user_edit_aborts(self):
+        """User edited a block that is missing from remote → conflict abort.
+
+        Uses same revision to bypass drift detection and exercise the
+        alignment-based unmapped-edit guard directly.
+        """
+        # Base: two paragraphs
+        base_body = [
+            _make_paragraph(1, "First paragraph"),
+            _make_paragraph(18, "Second paragraph"),
+        ]
+        baseline_hash = self._store_baseline(base_body)
+
+        # User edited the second paragraph
+        local_md = "First paragraph\n\nEdited second\n"
+
+        # Remote has the second paragraph removed (structural mismatch)
+        remote_body = [
+            _make_paragraph(1, "First paragraph"),
+        ]
+
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=remote_body,
+            remote_revision="rev1",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        # Alignment cannot map user-edited block 1 → abort
+        assert plan.error is not None
+        assert "no longer exist" in plan.error
+        assert len(plan.mutations) == 0
+
+    def test_overlap_conflict_via_drift_detection(self):
+        """User edited a block that remote also changed → drift conflict."""
+        base_body = [
+            _make_paragraph(1, "First paragraph"),
+            _make_paragraph(18, "Second paragraph"),
+        ]
+        baseline_hash = self._store_baseline(base_body)
+
+        local_md = "First paragraph\n\nEdited second\n"
+
+        # Remote changed the same block (revision differs)
+        remote_body = [
+            _make_paragraph(1, "First paragraph"),
+            _make_paragraph(18, "Remote edited second"),
+        ]
+
+        plan = compute_three_way_plan(
+            baseline_hash=baseline_hash,
+            local_markdown=local_md,
+            remote_body=remote_body,
+            remote_revision="rev2",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        assert plan.error is not None
+        assert "Conflicting blocks" in plan.error
+        assert plan.revision_changed
+
+
+# =============================================================================
+# Docs batchUpdate simulator
+# =============================================================================
+
+
+def _utf16_to_char(text: str, utf16_idx: int) -> int:
+    """Convert a UTF-16 code-unit offset to a Python character index."""
+    pos = 0
+    for i, ch in enumerate(text):
+        if pos >= utf16_idx:
+            return i
+        pos += 2 if ord(ch) > 0xFFFF else 1
+    return len(text)
+
+
+def _simulate_requests(text: str, requests: list[dict]) -> str:
+    """Simulate Google Docs batchUpdate on a text buffer.
+
+    Applies requests sequentially in order. Each request operates on the
+    buffer AS IT EXISTS after all previous requests (matching Docs API
+    semantics). Handles UTF-16 index conversion for emoji/surrogate-pair
+    characters. Only processes deleteContentRange and insertText.
+    """
+    for req in requests:
+        if "deleteContentRange" in req:
+            r = req["deleteContentRange"]["range"]
+            start = _utf16_to_char(text, r["startIndex"])
+            end = _utf16_to_char(text, r["endIndex"])
+            text = text[:start] + text[end:]
+        elif "insertText" in req:
+            loc = req["insertText"]["location"]
+            idx = _utf16_to_char(text, loc["index"])
+            ins = req["insertText"]["text"]
+            text = text[:idx] + ins + text[idx:]
+        # Skip style requests (they don't change text)
+
+    return text
+
+
+# =============================================================================
+# Tests: multi-region splice correctness (gax-d75)
+# =============================================================================
+
+
+class TestSpliceMultiRegion:
+    """Simulator-based tests for _splice_text_requests reverse ordering."""
+
+    def _run_splice(self, base: str, new: str, block_start: int = 0):
+        """Splice base→new, simulate, return result text."""
+        # Prepend block_start chars to simulate document offset
+        prefix = "X" * block_start
+        doc_text = prefix + base
+
+        reqs = _splice_text_requests(base, new, block_start, "t.1")
+        result = _simulate_requests(doc_text, reqs)
+        return result[block_start:]  # strip prefix
+
+    def test_bead_repro_two_regions(self):
+        """Exact repro from gax-d75: quick→slow + jumps→leaps."""
+        base = "The quick brown fox jumps over the lazy dog"
+        new = "The slow brown fox leaps over the lazy dog"
+        assert self._run_splice(base, new) == new
+
+    def test_two_regions_different_lengths(self):
+        """Two replacements with different length changes."""
+        base = "Hello World, Goodbye World"
+        new = "Hi World, Bye World"
+        assert self._run_splice(base, new) == new
+
+    def test_three_regions(self):
+        """Three changed regions in one paragraph."""
+        base = "The big red car drove fast down the long road"
+        new = "The small blue car crept slowly down the short road"
+        assert self._run_splice(base, new) == new
+
+    def test_emoji_multi_region(self):
+        """Multi-region edit with emoji (multi-byte UTF-16)."""
+        base = "Hello 🌍 world, goodbye 🌍 moon"
+        new = "Howdy 🌎 world, farewell 🌎 moon"
+        assert self._run_splice(base, new) == new
+
+    def test_insert_and_delete_regions(self):
+        """Mixed insert + delete across regions."""
+        base = "AAA BBB CCC"
+        new = "AAA DDD"
+        assert self._run_splice(base, new) == new
+
+    def test_block_offset_nonzero(self):
+        """Splice with non-zero block_start (paragraph not at doc start)."""
+        base = "The quick brown fox jumps over the lazy dog"
+        new = "The slow brown fox leaps over the lazy dog"
+        assert self._run_splice(base, new, block_start=100) == new
+
+    def test_single_region_unchanged(self):
+        """Single region edit still works after reverse-order refactor."""
+        base = "Hello World"
+        new = "Hello Earth"
+        assert self._run_splice(base, new) == new
+
+    def test_style_offsets_after_splice(self):
+        """Style requests use final-text offsets, valid after all splices."""
+        from gax.gdoc.ir import _utf16_len
+
+        base = "The quick brown fox jumps"
+        new = "The slow brown fox leaps"
+        block_start = 10
+
+        splice_reqs = _splice_text_requests(base, new, block_start, "t.1")
+        # Spans for the new text
+        spans = [
+            Span(text="The "),
+            Span(text="slow", bold=True),
+            Span(text=" brown fox "),
+            Span(text="leaps", italic=True),
+        ]
+        style_reqs = _span_style_requests(spans, block_start, "t.1")
+
+        # All splice requests should precede (have higher or equal index than)
+        # any style request at the same or lower position — verify indices
+        # are within the block range
+        for req in splice_reqs:
+            if "deleteContentRange" in req:
+                r = req["deleteContentRange"]["range"]
+                assert r["startIndex"] >= block_start
+                assert r["endIndex"] <= block_start + _utf16_len(base)
+            elif "insertText" in req:
+                loc = req["insertText"]["location"]
+                assert loc["index"] >= block_start
+
+        for req in style_reqs:
+            if "updateTextStyle" in req:
+                r = req["updateTextStyle"]["range"]
+                assert r["startIndex"] >= block_start
+                assert r["endIndex"] <= block_start + _utf16_len(new)

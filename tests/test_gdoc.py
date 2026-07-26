@@ -373,6 +373,156 @@ class TestBaselineStorage:
         assert parsed[0].revision == "rev999"
 
 
+class TestPostPushBaselineRefresh:
+    """Tests for baseline refresh after successful push (ADR 034, gax-cvi.9)."""
+
+    def test_push_updates_baseline_and_revision(self, tmp_path):
+        """After push, tracking file has new baseline hash and revision."""
+        from gax.gdoc.doc import (
+            _refresh_baseline_after_push,
+            parse_multipart,
+        )
+        from gax.store import load_baseline
+
+        # --- Set up a tracking file with "old" baseline/revision ---
+        initial_section = DocSection(
+            title="Push Test",
+            source="https://docs.google.com/document/d/doc-push-1/edit",
+            time="2026-07-26T00:00:00Z",
+            section=1,
+            section_title="Tab1",
+            content="Old content\n",
+            baseline="sha256-old-placeholder",
+            revision="rev-before-push",
+        )
+        tab_file = tmp_path / "Tab1.doc.gax.md"
+        tab_file.write_text(format_section(initial_section), encoding="utf-8")
+
+        # --- Fake post-push doc response (new body + new revisionId) ---
+        post_push_doc = _make_doc_response(
+            "Push Test",
+            [
+                (
+                    "Tab1",
+                    [
+                        _make_empty_para(1),
+                        _make_paragraph(2, "New content after push"),
+                    ],
+                ),
+            ],
+        )
+        post_push_doc["revisionId"] = "rev-after-push"
+        service = _make_mock_service(post_push_doc)
+
+        # --- Refresh ---
+        _refresh_baseline_after_push(
+            tab_file, "doc-push-1", "Tab1", docs_service=service
+        )
+
+        # --- Assert frontmatter updated ---
+        updated = parse_multipart(tab_file.read_text(encoding="utf-8"))
+        assert len(updated) == 1
+        assert updated[0].revision == "rev-after-push"
+        assert updated[0].baseline.startswith("sha256-")
+        assert updated[0].baseline != "sha256-old-placeholder"
+
+        # --- Assert baseline blob is retrievable ---
+        blob = load_baseline(updated[0].baseline)
+        assert blob is not None
+        body_content = blob["body"]["content"]
+        # Should contain the post-push paragraph
+        texts = []
+        for elem in body_content:
+            para = elem.get("paragraph", {})
+            for el in para.get("elements", []):
+                texts.append(el.get("textRun", {}).get("content", ""))
+        assert any("New content after push" in t for t in texts)
+
+    def test_push_preserves_other_frontmatter_fields(self, tmp_path):
+        """Baseline refresh preserves title, source, tab, content, etc."""
+        from gax.gdoc.doc import (
+            _refresh_baseline_after_push,
+            parse_multipart,
+        )
+
+        initial_section = DocSection(
+            title="Preserve Test",
+            source="https://docs.google.com/document/d/doc-p2/edit",
+            time="2026-07-26T01:00:00Z",
+            section=1,
+            section_title="Details",
+            content="User edited content\n",
+            baseline="sha256-placeholder",
+            revision="rev-old",
+        )
+        tab_file = tmp_path / "Details.doc.gax.md"
+        tab_file.write_text(format_section(initial_section), encoding="utf-8")
+
+        post_push_doc = _make_doc_response(
+            "Preserve Test",
+            [
+                (
+                    "Details",
+                    [
+                        _make_empty_para(1),
+                        _make_paragraph(2, "Remote version"),
+                    ],
+                ),
+            ],
+        )
+        post_push_doc["revisionId"] = "rev-new"
+        service = _make_mock_service(post_push_doc)
+
+        _refresh_baseline_after_push(
+            tab_file, "doc-p2", "Details", docs_service=service
+        )
+
+        updated = parse_multipart(tab_file.read_text(encoding="utf-8"))
+        assert updated[0].title == "Preserve Test"
+        assert "doc-p2" in updated[0].source
+        assert updated[0].section_title == "Details"
+        # Content should be the user's local content, not re-pulled remote
+        assert "User edited content" in updated[0].content
+
+    def test_push_refresh_tab_not_found_is_nonfatal(self, tmp_path):
+        """If post-push tab lookup fails, it logs but doesn't crash."""
+        from gax.gdoc.doc import (
+            _refresh_baseline_after_push,
+            parse_multipart,
+        )
+
+        initial_section = DocSection(
+            title="Missing Tab",
+            source="https://docs.google.com/document/d/doc-m1/edit",
+            time="2026-07-26T00:00:00Z",
+            section=1,
+            section_title="TabX",
+            content="Content\n",
+            baseline="sha256-orig",
+            revision="rev-orig",
+        )
+        tab_file = tmp_path / "TabX.doc.gax.md"
+        tab_file.write_text(format_section(initial_section), encoding="utf-8")
+
+        # Doc response has no matching tab name
+        post_push_doc = _make_doc_response(
+            "Missing Tab",
+            [("OtherTab", [_make_empty_para(1)])],
+        )
+        post_push_doc["revisionId"] = "rev-new"
+        service = _make_mock_service(post_push_doc)
+
+        # Should not raise
+        _refresh_baseline_after_push(
+            tab_file, "doc-m1", "TabX", docs_service=service
+        )
+
+        # Frontmatter should be unchanged
+        updated = parse_multipart(tab_file.read_text(encoding="utf-8"))
+        assert updated[0].baseline == "sha256-orig"
+        assert updated[0].revision == "rev-orig"
+
+
 class TestFormatMultipart:
     """Tests for multipart format output."""
 

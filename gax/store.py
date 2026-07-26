@@ -125,8 +125,11 @@ def store_baseline(tab_json: dict) -> str:
 def load_baseline(content_hash: str) -> Optional[dict]:
     """Load a baseline blob by its content hash.
 
-    Returns the parsed tab JSON dict, or None if the blob is not found.
+    Returns the parsed tab JSON dict, or None if the blob is not found
+    or the hash is empty/invalid.
     """
+    if not content_hash:
+        return None
     data = get_blob(content_hash)
     if data is None:
         return None

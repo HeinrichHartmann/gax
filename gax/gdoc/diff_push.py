@@ -313,12 +313,49 @@ def diff_to_mutations(
     return requests
 
 
+def _normalize_spans(spans: list[Span]) -> list[Span]:
+    """Merge adjacent spans with identical formatting into one.
+
+    Makes run boundaries non-semantic: different splits of same text+style
+    produce identical normalized form, avoiding spurious diffs.
+    """
+    if not spans:
+        return []
+    result: list[Span] = []
+    cur = spans[0]
+    for s in spans[1:]:
+        if (
+            s.bold == cur.bold
+            and s.italic == cur.italic
+            and s.strikethrough == cur.strikethrough
+            and s.url == cur.url
+        ):
+            cur = Span(
+                text=cur.text + s.text,
+                bold=cur.bold,
+                italic=cur.italic,
+                strikethrough=cur.strikethrough,
+                url=cur.url,
+            )
+        else:
+            result.append(cur)
+            cur = s
+    result.append(cur)
+    return result
+
+
 def _update_paragraph_requests(
     base: Block,
     new_block: Block,
     tab_id: str,
 ) -> list[dict]:
-    """Generate requests to update a paragraph/heading/list_item in place."""
+    """Generate requests to update a paragraph/heading/list_item in place.
+
+    Uses run-level splicing: character-level diff within the paragraph
+    so that sibling runs (bold, link, color) survive word edits.
+    Two-pass style application: text mutations first, then style updates
+    on newly inserted text whose intended style differs from context.
+    """
     requests: list[dict] = []
 
     if not base.doc_range:
@@ -330,32 +367,29 @@ def _update_paragraph_requests(
     if end <= start:
         return requests
 
-    # Step 1: Delete existing text
-    requests.append(
-        {
-            "deleteContentRange": {
-                "range": {"startIndex": start, "endIndex": end, "tabId": tab_id}
-            }
-        }
-    )
-
-    # Step 2: Insert new text
-    if isinstance(new_block, (Heading, Paragraph, ListItem)):
-        new_text = new_block.text
-        spans = new_block.spans
-    else:
+    if not isinstance(new_block, (Heading, Paragraph, ListItem)):
+        return requests
+    if not isinstance(base, (Heading, Paragraph, ListItem)):
         return requests
 
-    requests.append(
-        {
-            "insertText": {
-                "text": new_text,
-                "location": {"index": start, "tabId": tab_id},
-            }
-        }
-    )
+    base_text = base.text
+    new_text = new_block.text
+    new_spans = new_block.spans
 
-    # Step 3: Apply paragraph style (heading level or reset to normal)
+    # --- Pass 1: Text splicing (character-level diff) ---
+    if base_text != new_text:
+        requests.extend(
+            _splice_text_requests(base_text, new_text, start, tab_id)
+        )
+    # After text splice, the paragraph text is new_text starting at `start`.
+
+    # --- Pass 2: Style application on the resulting text ---
+    # Apply formatting for all spans in the new block.
+    # When text changed, inserted characters inherit the style at the
+    # insertion point; we must explicitly set any differing styles.
+    requests.extend(_span_style_requests(new_spans, start, tab_id))
+
+    # --- Paragraph style (heading level changes) ---
     if isinstance(new_block, Heading):
         named_style = HEADING_STYLE_MAP.get(new_block.level, "HEADING_1")
     elif isinstance(base, Heading):
@@ -379,8 +413,79 @@ def _update_paragraph_requests(
             }
         )
 
-    # Step 4: Apply inline formatting
-    requests.extend(_span_style_requests(spans, start, tab_id))
+    return requests
+
+
+def _splice_text_requests(
+    base_text: str,
+    new_text: str,
+    block_start: int,
+    tab_id: str,
+) -> list[dict]:
+    """Character-level diff producing minimal deleteContentRange/insertText.
+
+    Uses SequenceMatcher to find the minimal set of text edits.
+    All index math uses UTF-16 offsets (Google Docs API convention).
+
+    Opcodes are iterated in REVERSE order (descending base index) so that
+    each mutation only shifts content below the regions already processed.
+    This matches ADR 034's requirement that mutations be applied in reverse
+    index order, and makes the function self-contained (no external sort
+    needed for correctness within a single paragraph's splice requests).
+    """
+    sm = difflib.SequenceMatcher(None, base_text, new_text)
+    opcodes = [oc for oc in sm.get_opcodes() if oc[0] != "equal"]
+    requests: list[dict] = []
+
+    for tag, i1, i2, j1, j2 in reversed(opcodes):
+        if tag == "replace":
+            del_start = block_start + _utf16_len(base_text[:i1])
+            del_end = block_start + _utf16_len(base_text[:i2])
+            ins_text = new_text[j1:j2]
+            requests.append(
+                {
+                    "deleteContentRange": {
+                        "range": {
+                            "startIndex": del_start,
+                            "endIndex": del_end,
+                            "tabId": tab_id,
+                        }
+                    }
+                }
+            )
+            requests.append(
+                {
+                    "insertText": {
+                        "text": ins_text,
+                        "location": {"index": del_start, "tabId": tab_id},
+                    }
+                }
+            )
+        elif tag == "delete":
+            del_start = block_start + _utf16_len(base_text[:i1])
+            del_end = block_start + _utf16_len(base_text[:i2])
+            requests.append(
+                {
+                    "deleteContentRange": {
+                        "range": {
+                            "startIndex": del_start,
+                            "endIndex": del_end,
+                            "tabId": tab_id,
+                        }
+                    }
+                }
+            )
+        elif tag == "insert":
+            ins_point = block_start + _utf16_len(base_text[:i1])
+            ins_text = new_text[j1:j2]
+            requests.append(
+                {
+                    "insertText": {
+                        "text": ins_text,
+                        "location": {"index": ins_point, "tabId": tab_id},
+                    }
+                }
+            )
 
     return requests
 
@@ -510,9 +615,17 @@ def _update_table_requests(
             if "paragraph" not in para_wrapper:
                 continue
 
-            para = para_wrapper["paragraph"]
-            cell_start = para.get("startIndex")
-            cell_end = para.get("endIndex")
+            # startIndex/endIndex live on the structural element wrapper,
+            # not inside the "paragraph" dict (same as from_doc_json reads).
+            cell_start = para_wrapper.get("startIndex")
+            cell_end = para_wrapper.get("endIndex")
+            if cell_start is None or cell_end is None:
+                # Fallback: try elements inside the paragraph
+                para = para_wrapper["paragraph"]
+                elements = para.get("elements", [])
+                if elements:
+                    cell_start = elements[0].get("startIndex")
+                    cell_end = elements[-1].get("endIndex")
             if cell_start is None or cell_end is None:
                 continue
 
@@ -802,3 +915,224 @@ def diff_push(
     ).execute()
 
     return warnings
+
+
+# =============================================================================
+# Three-way plan (ADR 034 §2 — baseline-aware diff)
+# =============================================================================
+
+
+@dataclass
+class ThreeWayPlan:
+    """Result of a three-way diff computation.
+
+    User edits are computed as diff(base, local) instead of diff(remote, local).
+    Mutations are mapped onto remote block ranges for correct index resolution.
+    """
+
+    ops: list[EditOp]
+    mutations: list[dict]
+    summary_lines: list[str]
+    drift_blocks: list[int] = field(default_factory=list)  # remote-changed block indices
+    error: str | None = None
+    revision_changed: bool = False  # True if remote revisionId differs from stored
+
+    @property
+    def is_empty(self) -> bool:
+        return len(self.ops) == 0
+
+
+def compute_three_way_plan(
+    baseline_hash: str,
+    local_markdown: str,
+    remote_body: list[dict],
+    remote_revision: str,
+    stored_revision: str,
+    tab_id: str,
+    *,
+    lists: dict | None = None,
+) -> ThreeWayPlan:
+    """Compute a three-way plan: base vs local, mapped onto remote ranges.
+
+    ADR 034 §2: user edits = diff(base-rendered md, working md).
+    Mutations resolve indices from the remote blocks (current document state).
+
+    Args:
+        baseline_hash: CAS hash of the stored baseline tab JSON.
+        local_markdown: The user's edited markdown.
+        remote_body: Current remote tab body content (from documents().get()).
+        remote_revision: Current remote revisionId.
+        stored_revision: revisionId stored at pull time.
+        tab_id: Google Docs tab ID for mutation targeting.
+        lists: Lists metadata from the document.
+
+    Returns:
+        ThreeWayPlan with ops, mutations, and drift information.
+    """
+    from ..store import load_baseline
+    from .ir import render_markdown
+
+    # --- Revision gate ---
+    revision_changed = bool(
+        stored_revision and remote_revision and stored_revision != remote_revision
+    )
+
+    # --- Load baseline ---
+    baseline_json = load_baseline(baseline_hash)
+    if baseline_json is None:
+        # No baseline: degrade to stateless diff (current behavior)
+        remote_blocks = from_doc_json(remote_body, lists=lists)
+        local_blocks = from_markdown(local_markdown)
+        ops = ast_diff(remote_blocks, local_blocks)
+        error = None
+        try:
+            mutations = diff_to_mutations(ops, remote_blocks, tab_id) if ops else []
+        except ValueError as e:
+            mutations = []
+            error = str(e)
+        summary = _build_summary(ops)
+        return ThreeWayPlan(
+            ops=ops,
+            mutations=mutations,
+            summary_lines=["(no baseline — stateless fallback)"] + summary,
+            error=error,
+            revision_changed=revision_changed,
+        )
+
+    # --- Render base markdown from stored JSON ---
+    base_body = baseline_json.get("body", {}).get("content", [])
+    base_lists = baseline_json.get("lists")
+    base_blocks = from_doc_json(base_body, lists=base_lists)
+    base_md = render_markdown(base_blocks)
+
+    # --- Parse local markdown ---
+    local_blocks = from_markdown(local_markdown)
+
+    # --- Compute user edits: diff(base, local) ---
+    ops = ast_diff(base_blocks, local_blocks)
+
+    if not ops:
+        return ThreeWayPlan(
+            ops=[],
+            mutations=[],
+            summary_lines=[],
+            revision_changed=revision_changed,
+        )
+
+    # --- Drift detection (if revision changed) ---
+    drift_blocks: list[int] = []
+    if revision_changed:
+        # Compare base-rendered md vs remote-rendered md to find drifted blocks
+        remote_blocks_for_drift = from_doc_json(remote_body, lists=lists)
+        remote_md = render_markdown(remote_blocks_for_drift)
+        remote_reparsed = from_markdown(remote_md)
+        base_reparsed = from_markdown(base_md)
+        drift_ops = ast_diff(base_reparsed, remote_reparsed)
+        drift_blocks = [
+            op.base_idx for op in drift_ops if op.base_idx is not None
+        ]
+
+        # Check for overlap between user edits and drift
+        user_edit_indices = {
+            op.base_idx for op in ops if op.base_idx is not None
+        }
+        overlap = user_edit_indices & set(drift_blocks)
+        if overlap:
+            return ThreeWayPlan(
+                ops=ops,
+                mutations=[],
+                summary_lines=[],
+                drift_blocks=drift_blocks,
+                error=(
+                    f"Remote changed since pull (rev {stored_revision} → {remote_revision}). "
+                    f"Conflicting blocks: {sorted(overlap)}. Pull first to resolve."
+                ),
+                revision_changed=True,
+            )
+
+    # --- Alignment-based doc_range transfer ---
+    # Use SequenceMatcher to align base↔remote blocks so that doc_range
+    # is transferred to the correct base block even when remote drift
+    # inserted or deleted blocks (replaces broken positional transfer).
+    remote_blocks = from_doc_json(remote_body, lists=lists)
+
+    base_keys = [_block_key(b) for b in base_blocks]
+    remote_keys = [_block_key(b) for b in remote_blocks]
+    align_sm = difflib.SequenceMatcher(None, base_keys, remote_keys)
+
+    base_to_remote: dict[int, int] = {}
+    unmapped_base: set[int] = set()
+
+    for atag, ai1, ai2, aj1, aj2 in align_sm.get_opcodes():
+        if atag == "equal":
+            for bi, ri in zip(range(ai1, ai2), range(aj1, aj2)):
+                base_to_remote[bi] = ri
+        elif atag == "replace":
+            pairs = min(ai2 - ai1, aj2 - aj1)
+            for k in range(pairs):
+                base_to_remote[ai1 + k] = aj1 + k
+            for k in range(pairs, ai2 - ai1):
+                unmapped_base.add(ai1 + k)
+        elif atag == "delete":
+            for k in range(ai1, ai2):
+                unmapped_base.add(k)
+
+    # Transfer doc_range for aligned pairs only
+    for bi, ri in base_to_remote.items():
+        base_blocks[bi].doc_range = remote_blocks[ri].doc_range
+
+    # User-edited blocks that have no remote match → conflict
+    user_edit_indices = {op.base_idx for op in ops if op.base_idx is not None}
+    unmapped_edits = user_edit_indices & unmapped_base
+    if unmapped_edits:
+        return ThreeWayPlan(
+            ops=ops,
+            mutations=[],
+            summary_lines=[],
+            drift_blocks=drift_blocks,
+            error=(
+                f"Cannot map user edits to remote document: base blocks "
+                f"{sorted(unmapped_edits)} no longer exist in remote. "
+                f"Pull first to resolve."
+            ),
+            revision_changed=revision_changed,
+        )
+
+    error = None
+    try:
+        mutations = diff_to_mutations(ops, base_blocks, tab_id)
+    except ValueError as e:
+        mutations = []
+        error = str(e)
+
+    summary = _build_summary(ops)
+    return ThreeWayPlan(
+        ops=ops,
+        mutations=mutations,
+        summary_lines=summary,
+        drift_blocks=drift_blocks,
+        error=error,
+        revision_changed=revision_changed,
+    )
+
+
+def _build_summary(ops: list[EditOp]) -> list[str]:
+    """Build human-readable summary lines from edit ops."""
+    updates = [op for op in ops if op.type == "update"]
+    inserts = [op for op in ops if op.type == "insert"]
+    deletes = [op for op in ops if op.type == "delete"]
+
+    summary: list[str] = []
+    if updates:
+        summary.append(f"{len(updates)} update(s):")
+        for op in updates:
+            summary.append(_op_summary(op))
+    if inserts:
+        summary.append(f"{len(inserts)} insert(s):")
+        for op in inserts:
+            summary.append(_op_summary(op))
+    if deletes:
+        summary.append(f"{len(deletes)} delete(s):")
+        for op in deletes:
+            summary.append(_op_summary(op))
+    return summary

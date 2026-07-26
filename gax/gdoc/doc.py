@@ -257,6 +257,81 @@ def _tab_content_to_markdown(doc: dict, tab: dict) -> tuple[str, str]:
     return md, baseline_hash
 
 
+def _build_baseline_json(doc: dict, tab: dict) -> dict:
+    """Build the baseline JSON dict from a fetched doc/tab pair.
+
+    Same structure stored by _tab_content_to_markdown during pull.
+    """
+    doc_tab = tab.get("documentTab", {})
+    body = doc_tab.get("body", {}).get("content", [])
+    lists = doc_tab.get("lists") or doc.get("lists")
+    inline_objects = doc_tab.get("inlineObjects")
+    baseline_json: dict = {"body": {"content": body}}
+    if lists:
+        baseline_json["lists"] = lists
+    if inline_objects:
+        baseline_json["inlineObjects"] = inline_objects
+    footnotes = doc_tab.get("footnotes")
+    if footnotes:
+        baseline_json["footnotes"] = footnotes
+    return baseline_json
+
+
+def _refresh_baseline_after_push(
+    path: Path,
+    document_id: str,
+    tab_name: str,
+    *,
+    docs_service=None,
+) -> None:
+    """Re-fetch tab JSON after a successful push, store new baseline.
+
+    Updates the tracking file's baseline: and revision: frontmatter so the
+    next three-way diff uses the post-push state as its base (ADR 034 §1).
+    """
+    from ..store import store_baseline
+
+    doc = _fetch_doc(document_id, docs_service=docs_service)
+    revision_id = doc.get("revisionId", "")
+
+    # Find the matching tab
+    flat = _flatten_tabs(doc.get("tabs", []))
+    matched_tab = None
+    for tab, info in flat:
+        if info.title == tab_name:
+            matched_tab = tab
+            break
+    if matched_tab is None:
+        logger.warning(f"Post-push baseline refresh: tab '{tab_name}' not found")
+        return
+
+    baseline_json = _build_baseline_json(doc, matched_tab)
+    baseline_hash = store_baseline(baseline_json)
+
+    # Update the tracking file's frontmatter
+    raw = path.read_text(encoding="utf-8")
+    sections_raw = gaxfile.parse_multipart(raw)
+    if not sections_raw:
+        return
+
+    sections_raw[0].headers["baseline"] = baseline_hash
+    sections_raw[0].headers["revision"] = revision_id
+    # Also update sync header if present (section == 1)
+    if "sync" in sections_raw[0].headers:
+        sections_raw[0].headers = write_sync_header(
+            sections_raw[0].headers, rev=revision_id
+        )
+
+    if len(sections_raw) > 1:
+        text = gaxfile.format_multipart(sections_raw)
+    else:
+        text = gaxfile.format_section(
+            sections_raw[0].headers, sections_raw[0].content
+        )
+    path.write_text(text, encoding="utf-8")
+    logger.info(f"Post-push baseline refresh: {baseline_hash[:20]}… rev={revision_id}")
+
+
 def _flatten_tabs(tabs: list[dict], depth: int = 0) -> list[tuple[dict, TabInfo]]:
     """Recursively flatten a nested tabs structure from the Docs API.
 
@@ -1278,6 +1353,9 @@ class Tab(Resource):
         else:
             logger.info(f"Pushing to tab '{tab_name}'...")
             update_tab_content(document_id, tab_name, content_to_push)
+
+        # Refresh baseline after successful push (ADR 034 §1)
+        _refresh_baseline_after_push(self.path, document_id, tab_name)
 
 
 # =============================================================================
