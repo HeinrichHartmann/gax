@@ -10,16 +10,12 @@ from . import Tab, Doc
 
 
 def _compute_plan(file: Path, content: str):
-    """Compute three-way plan for a tab file.
+    """Compute push plan for a tab file.
 
     Returns (plan, section) tuple.
 
     Revision guard (ADR 037): if the remote revisionId differs from the
-    stored one, refuse immediately — the user must pull first. No drift
-    classification or conflict-block analysis is attempted.
-
-    When no baseline exists, the plan degrades to stateless diff (remote
-    vs local) with a warning.
+    stored one, refuse immediately — the user must pull first.
     """
     from .doc import parse_multipart, extract_doc_id, _fetch_doc, _flatten_tabs
     from .diff_push import compute_three_way_plan, ThreeWayPlan
@@ -50,7 +46,6 @@ def _compute_plan(file: Path, content: str):
     lists = doc_tab.get("lists") or doc.get("lists")
     remote_revision = doc.get("revisionId", "")
 
-    baseline_hash = section.baseline
     stored_revision = section.revision
     tab_id = doc_tab.get("tabProperties", {}).get("tabId", "")
 
@@ -64,15 +59,7 @@ def _compute_plan(file: Path, content: str):
         )
         sys.exit(1)
 
-    if not baseline_hash:
-        click.echo(
-            "Warning: no baseline stored — using stateless diff. "
-            "Run 'gax pull' to enable three-way merge.",
-            err=True,
-        )
-
     plan = compute_three_way_plan(
-        baseline_hash=baseline_hash or "",
         local_markdown=content,
         remote_body=body,
         remote_revision=remote_revision,
@@ -125,7 +112,7 @@ def _do_plan_push(
     content: str,
     yes: bool,
 ) -> None:
-    """Plan-driven (three-way) push for a single tab."""
+    """Plan-driven push for a single tab."""
     plan, _section = _compute_plan(file, content)
 
     if plan.is_empty:
@@ -360,9 +347,8 @@ def doc_tab_pull(file: Path, yes: bool, force: bool):
 def doc_tab_diff(file: Path, show_text: bool):
     """Show diff between local file and remote tab.
 
-    By default shows the same plan that ``push`` would apply (three-way
-    when baseline exists, stateless otherwise). Use ``--text`` for a
-    traditional unified diff.
+    By default shows the same plan that ``push`` would apply (remote vs
+    local diff). Use ``--text`` for a traditional unified diff.
     """
     if show_text:
         diff_text = Tab.from_file(file).diff()
@@ -415,15 +401,18 @@ def doc_tab_diff(file: Path, show_text: bool):
 def doc_tab_push(file: Path, yes: bool, force_replace: bool, bulk: bool, body: Path | None):
     """Push local changes to a single tab.
 
-    Uses a three-way plan (baseline vs local vs remote) to compute minimal
-    patches that preserve collaborator formatting, comments, and suggestions.
+    Computes a minimal diff (remote vs local) and applies run-level
+    patches that preserve non-markdown formatting (colors, fonts,
+    alignment, comments, suggestions, images).
+
+    A revision guard refuses the push when the remote has changed since
+    your last pull — run ``gax pull`` first in that case.
 
     Use ``--force-replace`` to force a full-replace push (faster, but destroys
     all non-markdown formatting).
 
-    When patch cannot be applied (e.g. structural changes or missing baseline),
-    gax offers to fall back to full-replace. With ``-y`` the fallback happens
-    silently.
+    When patch cannot be applied (e.g. structural changes), gax offers to
+    fall back to full-replace. With ``-y`` the fallback happens silently.
 
     Use ``--body`` to push content from an external markdown file. The tracking
     file is updated in place so subsequent ``pull`` round-trips stay consistent.
@@ -456,7 +445,7 @@ def doc_tab_push(file: Path, yes: bool, force_replace: bool, bulk: bool, body: P
         _do_force_replace_push(t, file, body, yes)
         return
 
-    # PATCH path (default) — plan-driven three-way diff
+    # PATCH path (default) — plan-driven diff
     _do_plan_push(t, file, content, yes)
 
 
@@ -545,8 +534,8 @@ def doc_pull(file: Path, with_comments: bool, yes: bool, force: bool):
 def doc_push(folder: Path, yes: bool, force_replace: bool, bulk: bool):
     """Push all changed tabs in a checkout folder to Google Docs.
 
-    Uses a three-way plan (baseline vs local vs remote) to compute minimal
-    patches per tab, preserving collaborator formatting.
+    Computes a minimal diff (remote vs local) per tab and applies
+    run-level patches that preserve non-markdown formatting.
 
     Use ``--force-replace`` to force full-replace for all tabs (destroys
     non-markdown formatting).

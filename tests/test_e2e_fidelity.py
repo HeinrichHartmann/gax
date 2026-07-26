@@ -40,7 +40,6 @@ from gax.gdoc.diff_push import (
     compute_three_way_plan,
     diff_to_mutations,
 )
-from gax.store import store_baseline
 
 
 # =============================================================================
@@ -1469,11 +1468,6 @@ class TestLiveRevisionGuard:
             body, lists, tab_id = _doc_body_and_meta(doc)
             stored_rev = doc.get("revisionId", "")
 
-            # Store baseline (CAS blob) for the three-way pipeline
-            tab = doc.get("tabs", [{}])[0]
-            tab_json = tab.get("documentTab", {})
-            baseline_hash = store_baseline(tab_json)
-
             # Local edit: rename the heading
             base_blocks = from_doc_json(body, lists=lists)
             md = render_markdown(base_blocks)
@@ -1497,16 +1491,16 @@ class TestLiveRevisionGuard:
             new_rev = doc_after.get("revisionId", "")
             assert new_rev != stored_rev, "Remote edit should change revisionId"
 
-            # Three-way plan should detect the conflict and refuse
+            # Push plan should detect the revision mismatch and refuse
             plan = compute_three_way_plan(
-                baseline_hash, edited_md, new_body,
+                edited_md, new_body,
                 new_rev, stored_rev, tab_id, lists=new_lists,
             )
             assert plan.revision_changed is True, (
-                "Plan should detect revision change"
+                "Plan should detect revision mismatch"
             )
             assert plan.error is not None, (
-                "Plan should report an error for overlapping edits"
+                "Revision mismatch should produce an error"
             )
             assert "Pull first" in plan.error, (
                 f"Error should say 'Pull first', got: {plan.error}"

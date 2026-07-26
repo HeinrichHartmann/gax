@@ -1,19 +1,11 @@
-"""Diff-based push for Google Docs tabs (experimental).
+"""Diff-based push for Google Docs tabs.
 
-Gated behind ``gax doc tab push --patch``. See ADR 027 and ADR 030.
+See ADR 034 (run-level splicing) and ADR 037 (single-editor sync).
 
-Strategy
-========
+Pipeline (ADR 037)
+==================
 
-Full-replace push destroys all non-markdown formatting on every push.
-Diff-based push computes the minimal set of Docs API mutations needed
-to turn the live document into the edited markdown, so collaborator
-formatting, comments, suggestions, etc. survive.
-
-Pipeline
---------
-
-    1. Pull remote  — ``ir.from_doc_json(tab_body)`` produces a Block
+    1. Fetch remote — ``ir.from_doc_json(tab_body)`` produces a Block
                       list where every block carries ``doc_range``
                       (Google Docs ``startIndex``/``endIndex``).
 
@@ -29,6 +21,11 @@ Pipeline
 
     5. Apply        — ``batchUpdate`` call.
 
+Under the single-editor model (ADR 037) a revision guard ensures the
+remote has not moved since the last pull, so the remote blocks carry
+the correct indices for mutation — no baseline load, no alignment, no
+drift detection.
+
 Key invariants
 ==============
 
@@ -40,11 +37,6 @@ Key invariants
 
 * **Mutations applied in reverse index order.** Each request only
   shifts indices below the ones already processed.
-
-* **No alignment step.** Unlike ADR 027's original approach, we read
-  the remote state directly from Doc JSON via ``ir.from_doc_json``,
-  which populates ``doc_range`` on every block. No fuzzy alignment
-  between Drive API markdown and Doc JSON is needed.
 """
 
 import difflib
@@ -918,22 +910,24 @@ def diff_push(
 
 
 # =============================================================================
-# Three-way plan (ADR 034 §2 — baseline-aware diff)
+# Push plan (ADR 037 — single-editor sync)
 # =============================================================================
 
 
 @dataclass
 class ThreeWayPlan:
-    """Result of a three-way diff computation.
+    """Result of a push-plan computation.
 
-    User edits are computed as diff(base, local) instead of diff(remote, local).
-    Mutations are mapped onto remote block ranges for correct index resolution.
+    Under ADR 037 (single-editor sync) the push path diffs remote vs
+    local directly — the remote IS the state you pulled when the
+    revision guard passes.  No baseline load, no drift detection, no
+    alignment.  The name ``ThreeWayPlan`` is retained for API
+    compatibility with the tree-plan front-end.
     """
 
     ops: list[EditOp]
     mutations: list[dict]
     summary_lines: list[str]
-    drift_blocks: list[int] = field(default_factory=list)  # remote-changed block indices
     error: str | None = None
     revision_changed: bool = False  # True if remote revisionId differs from stored
 
@@ -943,7 +937,6 @@ class ThreeWayPlan:
 
 
 def compute_three_way_plan(
-    baseline_hash: str,
     local_markdown: str,
     remote_body: list[dict],
     remote_revision: str,
@@ -952,13 +945,14 @@ def compute_three_way_plan(
     *,
     lists: dict | None = None,
 ) -> ThreeWayPlan:
-    """Compute a three-way plan: base vs local, mapped onto remote ranges.
+    """Compute a push plan: diff remote vs local, produce mutations.
 
-    ADR 034 §2: user edits = diff(base-rendered md, working md).
-    Mutations resolve indices from the remote blocks (current document state).
+    ADR 037 (single-editor sync): under the revision guard the remote
+    IS the state you pulled, so diffing against it gives exactly your
+    edits with correct indices.  One code path — no baseline, no drift
+    detection, no alignment.
 
     Args:
-        baseline_hash: CAS hash of the stored baseline tab JSON.
         local_markdown: The user's edited markdown.
         remote_body: Current remote tab body content (from documents().get()).
         remote_revision: Current remote revisionId.
@@ -967,140 +961,40 @@ def compute_three_way_plan(
         lists: Lists metadata from the document.
 
     Returns:
-        ThreeWayPlan with ops, mutations, and drift information.
+        ThreeWayPlan with ops and mutations.
     """
-    from ..store import load_baseline
-    from .ir import render_markdown
-
-    # --- Revision gate ---
+    # --- Revision guard (ADR 037: mismatch = refuse) ---
     revision_changed = bool(
         stored_revision and remote_revision and stored_revision != remote_revision
     )
-
-    # --- Load baseline ---
-    baseline_json = load_baseline(baseline_hash)
-    if baseline_json is None:
-        # No baseline: degrade to stateless diff (current behavior)
-        remote_blocks = from_doc_json(remote_body, lists=lists)
-        local_blocks = from_markdown(local_markdown)
-        ops = ast_diff(remote_blocks, local_blocks)
-        error = None
-        try:
-            mutations = diff_to_mutations(ops, remote_blocks, tab_id) if ops else []
-        except ValueError as e:
-            mutations = []
-            error = str(e)
-        summary = _build_summary(ops)
+    if revision_changed:
         return ThreeWayPlan(
-            ops=ops,
-            mutations=mutations,
-            summary_lines=["(no baseline — stateless fallback)"] + summary,
-            error=error,
-            revision_changed=revision_changed,
+            ops=[],
+            mutations=[],
+            summary_lines=[],
+            error=(
+                f"Remote changed since pull "
+                f"(rev {stored_revision} -> {remote_revision}). "
+                f"Pull first."
+            ),
+            revision_changed=True,
         )
 
-    # --- Render base markdown from stored JSON ---
-    base_body = baseline_json.get("body", {}).get("content", [])
-    base_lists = baseline_json.get("lists")
-    base_blocks = from_doc_json(base_body, lists=base_lists)
-    base_md = render_markdown(base_blocks)
-
-    # --- Parse local markdown ---
+    # --- Diff remote vs local ---
+    remote_blocks = from_doc_json(remote_body, lists=lists)
     local_blocks = from_markdown(local_markdown)
-
-    # --- Compute user edits: diff(base, local) ---
-    ops = ast_diff(base_blocks, local_blocks)
+    ops = ast_diff(remote_blocks, local_blocks)
 
     if not ops:
         return ThreeWayPlan(
             ops=[],
             mutations=[],
             summary_lines=[],
-            revision_changed=revision_changed,
-        )
-
-    # --- Drift detection (if revision changed) ---
-    drift_blocks: list[int] = []
-    if revision_changed:
-        # Compare base-rendered md vs remote-rendered md to find drifted blocks
-        remote_blocks_for_drift = from_doc_json(remote_body, lists=lists)
-        remote_md = render_markdown(remote_blocks_for_drift)
-        remote_reparsed = from_markdown(remote_md)
-        base_reparsed = from_markdown(base_md)
-        drift_ops = ast_diff(base_reparsed, remote_reparsed)
-        drift_blocks = [
-            op.base_idx for op in drift_ops if op.base_idx is not None
-        ]
-
-        # Check for overlap between user edits and drift
-        user_edit_indices = {
-            op.base_idx for op in ops if op.base_idx is not None
-        }
-        overlap = user_edit_indices & set(drift_blocks)
-        if overlap:
-            return ThreeWayPlan(
-                ops=ops,
-                mutations=[],
-                summary_lines=[],
-                drift_blocks=drift_blocks,
-                error=(
-                    f"Remote changed since pull (rev {stored_revision} → {remote_revision}). "
-                    f"Conflicting blocks: {sorted(overlap)}. Pull first to resolve."
-                ),
-                revision_changed=True,
-            )
-
-    # --- Alignment-based doc_range transfer ---
-    # Use SequenceMatcher to align base↔remote blocks so that doc_range
-    # is transferred to the correct base block even when remote drift
-    # inserted or deleted blocks (replaces broken positional transfer).
-    remote_blocks = from_doc_json(remote_body, lists=lists)
-
-    base_keys = [_block_key(b) for b in base_blocks]
-    remote_keys = [_block_key(b) for b in remote_blocks]
-    align_sm = difflib.SequenceMatcher(None, base_keys, remote_keys)
-
-    base_to_remote: dict[int, int] = {}
-    unmapped_base: set[int] = set()
-
-    for atag, ai1, ai2, aj1, aj2 in align_sm.get_opcodes():
-        if atag == "equal":
-            for bi, ri in zip(range(ai1, ai2), range(aj1, aj2)):
-                base_to_remote[bi] = ri
-        elif atag == "replace":
-            pairs = min(ai2 - ai1, aj2 - aj1)
-            for k in range(pairs):
-                base_to_remote[ai1 + k] = aj1 + k
-            for k in range(pairs, ai2 - ai1):
-                unmapped_base.add(ai1 + k)
-        elif atag == "delete":
-            for k in range(ai1, ai2):
-                unmapped_base.add(k)
-
-    # Transfer doc_range for aligned pairs only
-    for bi, ri in base_to_remote.items():
-        base_blocks[bi].doc_range = remote_blocks[ri].doc_range
-
-    # User-edited blocks that have no remote match → conflict
-    user_edit_indices = {op.base_idx for op in ops if op.base_idx is not None}
-    unmapped_edits = user_edit_indices & unmapped_base
-    if unmapped_edits:
-        return ThreeWayPlan(
-            ops=ops,
-            mutations=[],
-            summary_lines=[],
-            drift_blocks=drift_blocks,
-            error=(
-                f"Cannot map user edits to remote document: base blocks "
-                f"{sorted(unmapped_edits)} no longer exist in remote. "
-                f"Pull first to resolve."
-            ),
-            revision_changed=revision_changed,
         )
 
     error = None
     try:
-        mutations = diff_to_mutations(ops, base_blocks, tab_id)
+        mutations = diff_to_mutations(ops, remote_blocks, tab_id)
     except ValueError as e:
         mutations = []
         error = str(e)
@@ -1110,9 +1004,7 @@ def compute_three_way_plan(
         ops=ops,
         mutations=mutations,
         summary_lines=summary,
-        drift_blocks=drift_blocks,
         error=error,
-        revision_changed=revision_changed,
     )
 
 

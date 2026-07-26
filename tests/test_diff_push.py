@@ -460,35 +460,21 @@ class TestTableUpdates:
 
 
 # =============================================================================
-# Three-way plan (ADR 034 §2)
+# Push plan (ADR 037 — single-editor sync)
 # =============================================================================
 
 
-class TestThreeWayPlan:
-    """Tests for compute_three_way_plan (baseline-aware diff)."""
-
-    def _store_baseline(self, body, lists=None):
-        """Helper: store a baseline and return its hash."""
-        from gax.store import store_baseline
-
-        baseline_json = {"body": {"content": body}}
-        if lists:
-            baseline_json["lists"] = lists
-        return store_baseline(baseline_json)
+class TestPushPlan:
+    """Tests for compute_three_way_plan (ADR 037: remote vs local, revision guard)."""
 
     def test_no_edit_produces_empty_plan(self):
-        """No edits (local == base rendered) → empty plan."""
+        """No edits (local matches remote rendered) → empty plan."""
         from gax.gdoc.ir import render_markdown
 
         body = [_make_paragraph(1, "Hello world")]
-        baseline_hash = self._store_baseline(body)
-
-        # Render base to get local_markdown (no edits)
-        base_blocks = from_doc_json(body)
-        local_md = render_markdown(base_blocks)
+        local_md = render_markdown(from_doc_json(body))
 
         plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
             local_markdown=local_md,
             remote_body=body,
             remote_revision="rev1",
@@ -503,13 +489,9 @@ class TestThreeWayPlan:
     def test_user_edit_produces_mutations(self):
         """User edits → plan has mutations."""
         body = [_make_paragraph(1, "Original text")]
-        baseline_hash = self._store_baseline(body)
-
-        # User edits the markdown
         local_md = "Changed text\n"
 
         plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
             local_markdown=local_md,
             remote_body=body,
             remote_revision="rev1",
@@ -522,15 +504,13 @@ class TestThreeWayPlan:
         assert plan.error is None
 
     def test_revision_gate_same_rev(self):
-        """Same revision → no conflict flag."""
+        """Same revision → no refusal."""
         from gax.gdoc.ir import render_markdown
 
         body = [_make_paragraph(1, "Content")]
-        baseline_hash = self._store_baseline(body)
         local_md = render_markdown(from_doc_json(body))
 
         plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
             local_markdown=local_md,
             remote_body=body,
             remote_revision="rev1",
@@ -539,240 +519,26 @@ class TestThreeWayPlan:
         )
 
         assert not plan.revision_changed
-
-    def test_revision_gate_different_rev_no_conflict(self):
-        """Different revision but disjoint changes → proceeds with warning."""
-        body = [
-            _make_paragraph(1, "First paragraph"),
-            _make_paragraph(18, "Second paragraph"),
-        ]
-        baseline_hash = self._store_baseline(body)
-
-        # User edits first paragraph
-        local_md = "Edited first\n\nSecond paragraph\n"
-
-        # Remote is unchanged (same body), but revision moved
-        plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
-            local_markdown=local_md,
-            remote_body=body,
-            remote_revision="rev2",
-            stored_revision="rev1",
-            tab_id="t.1",
-        )
-
-        assert plan.revision_changed
-        # No error because remote content didn't actually change
-        # (remote renders same as base)
         assert plan.error is None
-        assert not plan.is_empty
 
-    def test_revision_gate_overlapping_conflict(self):
-        """Overlapping remote change → error with conflict info."""
-        body = [_make_paragraph(1, "Shared paragraph")]
-        baseline_hash = self._store_baseline(body)
-
-        # User edits the paragraph
-        local_md = "User edited this\n"
-
-        # Remote ALSO changed (different body content)
-        remote_body = [_make_paragraph(1, "Collaborator changed this")]
-
-        plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
-            local_markdown=local_md,
-            remote_body=remote_body,
-            remote_revision="rev2",
-            stored_revision="rev1",
-            tab_id="t.1",
-        )
-
-        assert plan.revision_changed
-        assert plan.error is not None
-        assert "Conflicting" in plan.error or "Remote changed" in plan.error
-        assert len(plan.mutations) == 0
-
-    def test_missing_baseline_falls_back_to_stateless(self):
-        """Missing baseline → degrades to stateless diff."""
+    def test_revision_mismatch_refuses(self):
+        """Revision mismatch → immediate refusal, no mutations (ADR 037)."""
         body = [_make_paragraph(1, "Some content")]
-        local_md = "Different content\n"
+        local_md = "Edited content\n"
 
         plan = compute_three_way_plan(
-            baseline_hash="sha256-nonexistent",
             local_markdown=local_md,
             remote_body=body,
-            remote_revision="rev1",
-            stored_revision="rev1",
-            tab_id="t.1",
-        )
-
-        # Should still produce a plan (stateless fallback)
-        assert not plan.is_empty
-        assert "stateless fallback" in plan.summary_lines[0]
-
-    def test_empty_baseline_hash_falls_back(self):
-        """Empty baseline hash → stateless fallback."""
-        body = [_make_paragraph(1, "Some content")]
-        local_md = "Different content\n"
-
-        plan = compute_three_way_plan(
-            baseline_hash="",
-            local_markdown=local_md,
-            remote_body=body,
-            remote_revision="rev1",
-            stored_revision="rev1",
-            tab_id="t.1",
-        )
-
-        # Empty hash → load_baseline returns None → fallback
-        assert not plan.is_empty
-
-    def test_drift_insert_above_shifts_range(self):
-        """Remote inserted a block above the user's edit → mutation targets shifted range."""
-        # Base: two paragraphs
-        base_body = [
-            _make_paragraph(1, "First paragraph"),
-            _make_paragraph(18, "Second paragraph"),
-        ]
-        baseline_hash = self._store_baseline(base_body)
-
-        # User edited the second paragraph
-        local_md = "First paragraph\n\nEdited second\n"
-
-        # Remote inserted a new block ABOVE the user's edit
-        remote_body = [
-            _make_paragraph(1, "First paragraph"),
-            _make_paragraph(18, "Inserted by collaborator"),
-            _make_paragraph(44, "Second paragraph"),
-        ]
-
-        plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
-            local_markdown=local_md,
-            remote_body=remote_body,
             remote_revision="rev2",
             stored_revision="rev1",
             tab_id="t.1",
         )
 
-        # Should produce mutations targeting the SHIFTED range (index 44+),
-        # not the original range (index 18+)
-        assert not plan.is_empty
-        assert plan.error is None
-        assert len(plan.mutations) > 0
-        # Verify the mutation targets the correct (shifted) range
-        for req in plan.mutations:
-            if "deleteContentRange" in req:
-                r = req["deleteContentRange"]["range"]
-                # Must target the third paragraph's range (44+), not second (18+)
-                assert r["startIndex"] >= 44, (
-                    f"Mutation at {r['startIndex']} targets wrong range "
-                    f"(should be >= 44, the shifted position)"
-                )
-
-    def test_drift_delete_above_shifts_range(self):
-        """Remote deleted a block above the user's edit → mutation targets collapsed range."""
-        # Base: three paragraphs
-        base_body = [
-            _make_paragraph(1, "First paragraph"),
-            _make_paragraph(18, "Middle paragraph"),
-            _make_paragraph(36, "Third paragraph"),
-        ]
-        baseline_hash = self._store_baseline(base_body)
-
-        # User edited the third paragraph
-        local_md = "First paragraph\n\nMiddle paragraph\n\nEdited third\n"
-
-        # Remote deleted the middle paragraph — third moves up
-        remote_body = [
-            _make_paragraph(1, "First paragraph"),
-            _make_paragraph(18, "Third paragraph"),
-        ]
-
-        plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
-            local_markdown=local_md,
-            remote_body=remote_body,
-            remote_revision="rev2",
-            stored_revision="rev1",
-            tab_id="t.1",
-        )
-
-        # Should produce mutations at the collapsed range (18+),
-        # not the original (36+)
-        assert not plan.is_empty
-        assert plan.error is None
-        assert len(plan.mutations) > 0
-        for req in plan.mutations:
-            if "deleteContentRange" in req:
-                r = req["deleteContentRange"]["range"]
-                assert r["startIndex"] >= 18, (
-                    f"Mutation at {r['startIndex']} targets wrong range"
-                )
-
-    def test_drift_unmapped_user_edit_aborts(self):
-        """User edited a block that is missing from remote → conflict abort.
-
-        Uses same revision to bypass drift detection and exercise the
-        alignment-based unmapped-edit guard directly.
-        """
-        # Base: two paragraphs
-        base_body = [
-            _make_paragraph(1, "First paragraph"),
-            _make_paragraph(18, "Second paragraph"),
-        ]
-        baseline_hash = self._store_baseline(base_body)
-
-        # User edited the second paragraph
-        local_md = "First paragraph\n\nEdited second\n"
-
-        # Remote has the second paragraph removed (structural mismatch)
-        remote_body = [
-            _make_paragraph(1, "First paragraph"),
-        ]
-
-        plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
-            local_markdown=local_md,
-            remote_body=remote_body,
-            remote_revision="rev1",
-            stored_revision="rev1",
-            tab_id="t.1",
-        )
-
-        # Alignment cannot map user-edited block 1 → abort
-        assert plan.error is not None
-        assert "no longer exist" in plan.error
-        assert len(plan.mutations) == 0
-
-    def test_overlap_conflict_via_drift_detection(self):
-        """User edited a block that remote also changed → drift conflict."""
-        base_body = [
-            _make_paragraph(1, "First paragraph"),
-            _make_paragraph(18, "Second paragraph"),
-        ]
-        baseline_hash = self._store_baseline(base_body)
-
-        local_md = "First paragraph\n\nEdited second\n"
-
-        # Remote changed the same block (revision differs)
-        remote_body = [
-            _make_paragraph(1, "First paragraph"),
-            _make_paragraph(18, "Remote edited second"),
-        ]
-
-        plan = compute_three_way_plan(
-            baseline_hash=baseline_hash,
-            local_markdown=local_md,
-            remote_body=remote_body,
-            remote_revision="rev2",
-            stored_revision="rev1",
-            tab_id="t.1",
-        )
-
-        assert plan.error is not None
-        assert "Conflicting blocks" in plan.error
         assert plan.revision_changed
+        assert plan.error is not None
+        assert "Pull first" in plan.error
+        assert len(plan.mutations) == 0
+        assert plan.is_empty
 
 
 # =============================================================================
