@@ -92,3 +92,42 @@ def get_metadata(content_hash: str) -> Optional[dict]:
     if meta_path.exists():
         return json.loads(meta_path.read_text())
     return None
+
+
+# =============================================================================
+# Baseline storage (ADR 034 — pull-time baseline for three-way diff)
+# =============================================================================
+
+
+def store_baseline(tab_json: dict) -> str:
+    """Store raw tab JSON as a CAS blob for baseline comparison.
+
+    The tab JSON should include the body content, lists, inlineObjects,
+    and footnotes — everything needed to deterministically render
+    the tab's markdown at pull time.
+
+    Returns the content hash (e.g. "sha256-ab12...").
+    """
+    # Deterministic serialization: sorted keys, no ensure_ascii
+    data = json.dumps(tab_json, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    content_hash = compute_hash(data)
+
+    store_dir = get_store_dir()
+    blob_path = store_dir / "blob" / content_hash
+
+    # Deduplicate: only write if new
+    if not blob_path.exists():
+        blob_path.write_bytes(data)
+
+    return content_hash
+
+
+def load_baseline(content_hash: str) -> Optional[dict]:
+    """Load a baseline blob by its content hash.
+
+    Returns the parsed tab JSON dict, or None if the blob is not found.
+    """
+    data = get_blob(content_hash)
+    if data is None:
+        return None
+    return json.loads(data.decode("utf-8"))
