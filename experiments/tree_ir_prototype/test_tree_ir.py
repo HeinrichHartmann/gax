@@ -900,6 +900,110 @@ class TestEmojiEdit:
 
 
 # =============================================================================
+# Scenario 12: Comment anchor survival (gax-7sp)
+# =============================================================================
+
+
+@pytest.mark.e2e
+class TestCommentAnchorSurvival:
+    """Scenario 12: comment stays anchored after editing same paragraph.
+
+    Stretch scenario from gax-jdz: add a comment via Drive API on a word
+    in a paragraph, then edit a DIFFERENT word in that same paragraph via
+    the Tree IR pipeline, and assert the comment still exists and is not
+    deleted.
+    """
+
+    def test_comment_anchor_survival(self, docs_service, drive_service, scratch_doc):
+        """Add comment, edit word in same paragraph, comment survives."""
+        doc_id = scratch_doc
+        doc = populate_rich_doc(docs_service, doc_id)
+
+        # Create a comment on "plain text" (appears in the rich paragraph).
+        # We comment before making any edits so the anchor exists in the
+        # original doc position.
+        comment = drive_service.comments().create(
+            fileId=doc_id,
+            body={
+                "content": "Scenario 12 test comment",
+                "quotedFileContent": {
+                    "mimeType": "text/plain",
+                    "value": "plain text",
+                },
+            },
+            fields="id,content,quotedFileContent",
+        ).execute()
+        comment_id = comment["id"]
+        assert comment_id, "Comment should be created with an id"
+
+        # Re-fetch after comment creation so we get current doc state.
+        doc = _fetch_doc(docs_service, doc_id)
+        body_content = _get_body_content(doc)
+        lists = _get_lists(doc)
+        tab_id = _get_tab_id(doc)
+
+        base_blocks = from_doc_json(body_content, lists=lists)
+        yaml_str = serialize_tree(base_blocks)
+        local_blocks = parse_tree(yaml_str)
+
+        # Edit "see more" → "learn more" in the SAME paragraph that has the
+        # comment anchor ("plain text" is earlier in the same sentence).
+        edit_found = False
+        for block in local_blocks:
+            if isinstance(block, Paragraph) and "plain text" in block.text:
+                for i, span in enumerate(block.spans):
+                    if "see more" in span.text:
+                        block.spans[i] = Span(
+                            text=span.text.replace("see more", "learn more"),
+                            style=span.style,
+                        )
+                        edit_found = True
+                        break
+                break
+        assert edit_found, "Should find paragraph containing both 'plain text' and 'see more'"
+
+        # Apply the plan.
+        plan = compute_plan(base_blocks, local_blocks, tab_id)
+        assert not plan.is_empty, "Edit should produce at least one mutation"
+        requests = _apply_plan(docs_service, doc_id, plan, tab_id)
+
+        # ASSERT 1: the text edit landed.
+        doc_after = _fetch_doc(docs_service, doc_id)
+        blocks_after = from_doc_json(
+            _get_body_content(doc_after), lists=_get_lists(doc_after)
+        )
+        edit_verified = False
+        for block in blocks_after:
+            if isinstance(block, Paragraph) and "plain text" in block.text:
+                assert "learn more" in block.text, (
+                    f"Expected 'learn more' in paragraph, got: {block.text}"
+                )
+                edit_verified = True
+                break
+        assert edit_verified, "Edited paragraph must exist in re-fetched doc"
+
+        # ASSERT 2: the comment still exists and is not deleted.
+        comments_response = drive_service.comments().list(
+            fileId=doc_id,
+            fields="comments(id,content,deleted)",
+            includeDeleted=False,
+        ).execute()
+        live_ids = {
+            c["id"] for c in comments_response.get("comments", [])
+            if not c.get("deleted")
+        }
+        assert comment_id in live_ids, (
+            f"Comment {comment_id!r} should survive edit to same paragraph; "
+            f"live comment ids: {live_ids}"
+        )
+
+        print(
+            f"\n  Scenario 12: comment {comment_id!r} survived "
+            f"{len(requests)} mutation(s) to same paragraph"
+        )
+
+
+# =============================================================================
 # Token measurement
 # =============================================================================
 
