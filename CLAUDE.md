@@ -58,6 +58,14 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 <!-- END BEADS INTEGRATION -->
 
 
+## Knowledge Wiki
+
+`wiki/` is the current-state knowledge base (llm-wiki pattern). To get
+up to speed, read `wiki/index.md` and drill into relevant pages. When
+editing the wiki, obey `wiki/schema.md` (the discipline; validated by
+the librarian agent) and run `direnv exec . scripts/wikilint.py`
+before finishing. Precedence on conflict: code > accepted ADR > wiki.
+
 ## Multi-Agent Workflow
 
 Agent roles are defined in `.agents/profiles/` and spawned with
