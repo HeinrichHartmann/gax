@@ -1321,3 +1321,77 @@ class TestDocCloneNested:
             assert (folder / "Design" / "Frontend.doc.gax.md").exists()
         finally:
             doc_module._fetch_doc = original_fetch
+
+
+# =============================================================================
+# Pull guard: _has_unpushed_edits (ADR 037)
+# =============================================================================
+
+
+class TestHasUnpushedEdits:
+    """Unit tests for the pull guard that detects unpushed local edits."""
+
+    def _write_tab_file(self, path, content, baseline_hash=""):
+        """Write a minimal .doc.gax.md tab file."""
+        header = (
+            "---\n"
+            "type: gax/doc\n"
+            "title: Test\n"
+            "source: https://docs.google.com/document/d/fake/edit\n"
+            "time: '2026-01-01T00:00:00Z'\n"
+            "tab: Tab1\n"
+        )
+        if baseline_hash:
+            header += f"baseline: {baseline_hash}\n"
+        header += "---\n"
+        path.write_text(header + content, encoding="utf-8")
+
+    def test_no_baseline_returns_none(self, tmp_path):
+        """No baseline hash → no guard (degrade gracefully)."""
+        from gax.gdoc.cli import _has_unpushed_edits
+
+        f = tmp_path / "test.doc.gax.md"
+        self._write_tab_file(f, "Hello world\n")
+        assert _has_unpushed_edits(f) is None
+
+    def test_clean_file_returns_none(self, tmp_path):
+        """Local matches baseline → no unpushed edits."""
+        from gax.gdoc.cli import _has_unpushed_edits
+        from gax.store import store_baseline
+
+        # Create a baseline with known content
+        body = [_make_paragraph(1, "Hello world")]
+        baseline_json = {"body": {"content": body}}
+        baseline_hash = store_baseline(baseline_json)
+
+        # Render baseline to get expected content
+        base_md = render_baseline(baseline_hash)
+        assert base_md is not None
+
+        f = tmp_path / "test.doc.gax.md"
+        self._write_tab_file(f, base_md, baseline_hash=baseline_hash)
+        assert _has_unpushed_edits(f) is None
+
+    def test_edited_file_returns_message(self, tmp_path):
+        """Local differs from baseline → unpushed edits detected."""
+        from gax.gdoc.cli import _has_unpushed_edits
+        from gax.store import store_baseline
+
+        body = [_make_paragraph(1, "Hello world")]
+        baseline_json = {"body": {"content": body}}
+        baseline_hash = store_baseline(baseline_json)
+
+        f = tmp_path / "test.doc.gax.md"
+        self._write_tab_file(f, "Modified content\n", baseline_hash=baseline_hash)
+        result = _has_unpushed_edits(f)
+        assert result is not None
+        assert "unpushed" in result.lower()
+        assert "--force" in result
+
+    def test_missing_baseline_blob_returns_none(self, tmp_path):
+        """Baseline hash present but blob missing → degrade gracefully."""
+        from gax.gdoc.cli import _has_unpushed_edits
+
+        f = tmp_path / "test.doc.gax.md"
+        self._write_tab_file(f, "Hello\n", baseline_hash="nonexistent_hash_abc123")
+        assert _has_unpushed_edits(f) is None

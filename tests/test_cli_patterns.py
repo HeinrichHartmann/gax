@@ -556,3 +556,46 @@ class TestDocForceReplaceFlag:
         assert has_option(cmd, "show_text", "--text", is_flag=True), (
             "'doc tab diff' missing --text flag"
         )
+
+
+# =============================================================================
+# Doc pull guard: --force flag (ADR 037 symmetry)
+# =============================================================================
+
+
+class TestDocPullGuardFlag:
+    """doc tab pull and doc pull must expose --force for unpushed-edit override."""
+
+    def test_doc_tab_pull_has_force(self):
+        """doc tab pull must have --force flag."""
+        cmd = get_command(["doc", "tab", "pull"])
+        assert cmd is not None
+        assert has_option(cmd, "force", "--force", is_flag=True), (
+            "'doc tab pull' missing --force flag"
+        )
+
+    def test_doc_pull_has_force(self):
+        """doc pull must have --force flag."""
+        cmd = get_command(["doc", "pull"])
+        assert cmd is not None
+        assert has_option(cmd, "force", "--force", is_flag=True), (
+            "'doc pull' missing --force flag"
+        )
+
+    def test_doc_tab_pull_help_mentions_unpushed(self):
+        """doc tab pull help text must mention unpushed edits."""
+        cmd = get_command(["doc", "tab", "pull"])
+        assert cmd is not None
+        assert cmd.help is not None
+        assert "unpushed" in cmd.help.lower(), (
+            "'doc tab pull' help should mention unpushed local edits"
+        )
+
+    def test_doc_pull_help_mentions_unpushed(self):
+        """doc pull help text must mention unpushed edits."""
+        cmd = get_command(["doc", "pull"])
+        assert cmd is not None
+        assert cmd.help is not None
+        assert "unpushed" in cmd.help.lower(), (
+            "'doc pull' help should mention unpushed local edits"
+        )

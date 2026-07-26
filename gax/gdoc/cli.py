@@ -246,6 +246,34 @@ def _push_tab_plan_or_force(
     return True
 
 
+def _has_unpushed_edits(file: Path) -> str | None:
+    """Check if a doc tab file has unpushed local edits.
+
+    Compares local content against render_baseline(baseline_hash).
+    Returns a description of the situation, or None if clean / no baseline.
+    """
+    from .doc import parse_multipart, render_baseline
+
+    section = parse_multipart(file.read_text(encoding="utf-8"))[0]
+    baseline_hash = section.baseline
+
+    if not baseline_hash:
+        return None  # no baseline — can't check, caller warns separately
+
+    base_md = render_baseline(baseline_hash)
+    if base_md is None:
+        return None  # baseline blob missing from store — degrade gracefully
+
+    local_content = section.content
+    if local_content.rstrip() != base_md.rstrip():
+        return (
+            "You have unpushed local edits. "
+            "Push first, or pull --force to discard."
+        )
+
+    return None  # clean — local matches baseline
+
+
 @docs.section("resource")
 @click.group()
 def doc():
@@ -302,9 +330,21 @@ def doc_tab_clone(url: str, tab_name: str, output: Path | None):
 @doc_tab.command("pull")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
+@click.option("--force", is_flag=True, help="Discard unpushed local edits and pull anyway")
 @gax_command
-def doc_tab_pull(file: Path, yes: bool):
-    """Pull latest content for a single tab."""
+def doc_tab_pull(file: Path, yes: bool, force: bool):
+    """Pull latest content for a single tab.
+
+    Refuses if you have unpushed local edits (local content differs from
+    the stored baseline). Use ``--force`` to discard local edits and pull
+    anyway.
+    """
+    edit_msg = _has_unpushed_edits(file)
+    if edit_msg and not force:
+        click.echo(edit_msg, err=True)
+        sys.exit(1)
+    if edit_msg and force:
+        click.echo("Warning: discarding unpushed local edits.", err=True)
     confirm_and_pull(Tab.from_file(file), yes=yes)
 
 
@@ -469,9 +509,21 @@ def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
     help="Include document comments as separate sections",
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
+@click.option("--force", is_flag=True, help="Discard unpushed local edits and pull anyway")
 @gax_command
-def doc_pull(file: Path, with_comments: bool, yes: bool):
-    """Pull latest content from Google Docs to local file."""
+def doc_pull(file: Path, with_comments: bool, yes: bool, force: bool):
+    """Pull latest content from Google Docs to local file.
+
+    Refuses if you have unpushed local edits (local content differs from
+    the stored baseline). Use ``--force`` to discard local edits and pull
+    anyway.
+    """
+    edit_msg = _has_unpushed_edits(file)
+    if edit_msg and not force:
+        click.echo(edit_msg, err=True)
+        sys.exit(1)
+    if edit_msg and force:
+        click.echo("Warning: discarding unpushed local edits.", err=True)
     confirm_and_pull(Tab.from_file(file), yes=yes, with_comments=with_comments)
 
 
