@@ -19,11 +19,31 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import secrets
 import subprocess
 import sys
 from pathlib import Path
+
+# Permissions granted to forked agent worktrees via .claude/settings.local.json
+# (per-checkout, never committed — dies with the worktree).
+WORKTREE_PERMISSIONS = {
+    "permissions": {
+        "allow": [
+            "Edit",
+            "Write",
+            "Bash(direnv exec:*)",
+            "Bash(git status:*)",
+            "Bash(git diff:*)",
+            "Bash(git log:*)",
+            "Bash(git add:*)",
+            "Bash(git commit:*)",
+            "Bash(git rebase main)",
+            "Bash(bd:*)",
+        ]
+    }
+}
 
 
 def sh(*cmd: str, cwd: Path | None = None) -> str:
@@ -46,6 +66,7 @@ def main() -> None:
         help='bead IDs or label to scope the agent to, e.g. "gax-cvi.1 gax-75t" or "gdoc"',
     )
     ap.add_argument("--extra-prompt", default="", help="appended to the system prompt")
+    ap.add_argument("--title", default="", help="cmux tab title (default: <profile>: <beads>)")
     ap.add_argument(
         "--no-fork",
         action="store_true",
@@ -78,6 +99,12 @@ def main() -> None:
         worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
         sh("git", "worktree", "add", str(worktree), "-b", branch, "main", cwd=repo)
         cwd = worktree
+        # Grant edit/test/git permissions scoped to this worktree only
+        claude_dir = worktree / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        (claude_dir / "settings.local.json").write_text(
+            json.dumps(WORKTREE_PERMISSIONS, indent=2) + "\n", encoding="utf-8"
+        )
         workspace_note = (
             f"Your worktree is already created: {worktree} on branch {branch} "
             f"(forked from main). You are running inside it. Skip any worktree "
@@ -97,10 +124,14 @@ def main() -> None:
         parts.append(args.extra_prompt)
     full_prompt = "\n".join(parts)
 
-    # cmux / terminal tab headline (OSC 0 = icon + title, OSC 2 = title)
-    title = f"{profile_name}: {args.beads or 'ready'}"
-    sys.stdout.write(f"\033]0;{title}\007\033]2;{title}\007")
-    sys.stdout.flush()
+    # cmux tab title
+    title = args.title or f"{profile_name}: {args.beads or 'ready'}"
+    try:
+        subprocess.run(["cmux", "rename-tab", title], capture_output=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        # Fallback to OSC escape for plain terminals
+        sys.stdout.write(f"\033]0;{title}\007")
+        sys.stdout.flush()
 
     print(f"profile:   {profile_name} ({profile_path.relative_to(repo)})")
     print(f"model:     {args.model}")
