@@ -95,6 +95,7 @@ class DraftHeader:
     bcc: str = ""
     thread_id: str = ""
     in_reply_to: str = ""
+    references: str = ""  # space-separated ancestor Message-IDs
     source: str = ""
     time: str = ""
     attachments: list[str] = field(default_factory=list)
@@ -132,6 +133,7 @@ def parse_draft(content: str) -> tuple[DraftHeader, str]:
         bcc=h.get("bcc", ""),
         thread_id=h.get("thread_id", ""),
         in_reply_to=h.get("in_reply_to", ""),
+        references=h.get("references", ""),
         source=h.get("source", ""),
         time=h.get("time", ""),
         attachments=attachments,
@@ -152,6 +154,8 @@ def format_draft(header: DraftHeader, body: str) -> str:
         h["thread_id"] = header.thread_id
     if header.in_reply_to:
         h["in_reply_to"] = header.in_reply_to
+    if header.references:
+        h["references"] = header.references
 
     h["subject"] = header.subject
     h["to"] = header.to
@@ -240,7 +244,7 @@ def build_message(
         message["bcc"] = header.bcc
     if header.in_reply_to:
         message["In-Reply-To"] = header.in_reply_to
-        message["References"] = header.in_reply_to
+        message["References"] = header.references or header.in_reply_to
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 

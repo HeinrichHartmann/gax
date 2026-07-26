@@ -61,6 +61,7 @@ class MailSection:
     date: str
     content: str
     attachments: list[Attachment] = field(default_factory=list)
+    message_id: str = ""  # RFC 2822 Message-ID header value
 
 
 # =============================================================================
@@ -82,6 +83,8 @@ def _mail_section_to_multipart(section: MailSection) -> gaxfile.Section:
         "to": section.to_addr,
         "date": section.date,
     }
+    if section.message_id:
+        headers["message_id"] = section.message_id
     if section.attachments:
         headers["attachments"] = [
             {"name": att.name, "size": att.size, "url": att.url}
@@ -274,6 +277,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
         from_addr = _get_header(headers, "From")
         to_addr = _get_header(headers, "To")
         date_str = _get_header(headers, "Date")
+        rfc_message_id = _get_header(headers, "Message-Id")
         msg_id = msg.get("id", "")
 
         try:
@@ -303,6 +307,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
                 date=date_iso,
                 content=body.strip(),
                 attachments=attachments,
+                message_id=rfc_message_id,
             )
         )
 

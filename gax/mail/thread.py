@@ -237,19 +237,28 @@ class Thread(Resource):
             thread_id = last_section.headers.get("thread_id", "")
             subject = last_section.headers.get("title", "")
             from_addr = last_section.headers.get("from", "")
-            in_reply_to = ""
+            # Collect message_ids from all sections for References chain
+            all_message_ids = [
+                s.headers.get("message_id", "")
+                for s in sections
+                if s.headers.get("message_id", "")
+            ]
+            in_reply_to = all_message_ids[-1] if all_message_ids else ""
+            references = " ".join(all_message_ids)
         else:
             thread_id = extract_thread_id(self.url)
             logger.info(f"Fetching thread: {thread_id}")
 
-            sections = pull_thread(thread_id)
-            if not sections:
+            mail_sections = pull_thread(thread_id)
+            if not mail_sections:
                 raise ValueError("No messages found in thread")
 
-            last_section = sections[-1]
-            subject = last_section.title
-            from_addr = last_section.from_addr
-            in_reply_to = ""
+            last_mail = mail_sections[-1]
+            subject = last_mail.title
+            from_addr = last_mail.from_addr
+            all_message_ids = [s.message_id for s in mail_sections if s.message_id]
+            in_reply_to = all_message_ids[-1] if all_message_ids else ""
+            references = " ".join(all_message_ids)
 
         if not subject.lower().startswith("re:"):
             subject = f"Re: {subject}"
@@ -259,6 +268,7 @@ class Thread(Resource):
             to=from_addr,
             thread_id=thread_id,
             in_reply_to=in_reply_to,
+            references=references,
             time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
 
