@@ -98,6 +98,10 @@ class TestTopLevelCommands:
         cmd = get_command(["pull"])
         assert has_option(cmd, "yes", "-y", "--yes", is_flag=True)
 
+    def test_pull_has_recursive_flag(self):
+        cmd = get_command(["pull"])
+        assert has_option(cmd, "recursive", "-r", "--recursive", is_flag=True)
+
     def test_push_has_yes_flag(self):
         cmd = get_command(["push"])
         assert has_option(cmd, "yes", "-y", "--yes", is_flag=True)

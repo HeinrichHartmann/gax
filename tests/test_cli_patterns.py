@@ -11,7 +11,7 @@ Validates that gax commands follow consistent design patterns:
 import click
 import pytest
 
-from gax.cli import main as cli
+from gax.cli import main as cli, _collect_recursive
 
 
 # =============================================================================
@@ -447,3 +447,48 @@ class TestCrossCuttingConsistency:
             "Apply commands missing or incorrect -y/--yes flag:\n"
             + "\n".join(apply_violations)
         )
+
+
+# =============================================================================
+# _collect_recursive tree-walking logic
+# =============================================================================
+
+
+class TestCollectRecursive:
+    """Unit tests for the _collect_recursive tree-walking helper (no API calls)."""
+
+    def test_collects_gax_md_files(self, tmp_path):
+        (tmp_path / "a.doc.gax.md").write_text("x")
+        (tmp_path / "b.sheet.gax.md").write_text("x")
+        (tmp_path / "ignore.txt").write_text("x")
+        result = {p.name for p in _collect_recursive(tmp_path)}
+        assert result == {"a.doc.gax.md", "b.sheet.gax.md"}
+
+    def test_collects_gax_md_d_folders_as_units(self, tmp_path):
+        folder = tmp_path / "checkout.doc.gax.md.d"
+        folder.mkdir()
+        (folder / "page1.md").write_text("x")
+        result = [p for p in _collect_recursive(tmp_path)]
+        assert len(result) == 1
+        assert result[0].name == "checkout.doc.gax.md.d"
+
+    def test_does_not_descend_into_gax_md_d(self, tmp_path):
+        folder = tmp_path / "checkout.doc.gax.md.d"
+        folder.mkdir()
+        # A .gax.md file inside the checkout folder — should NOT be collected
+        (folder / "nested.gax.md").write_text("x")
+        result = _collect_recursive(tmp_path)
+        names = {p.name for p in result}
+        assert "nested.gax.md" not in names
+        assert "checkout.doc.gax.md.d" in names
+
+    def test_collects_from_nested_subdirectories(self, tmp_path):
+        sub = tmp_path / "subdir"
+        sub.mkdir()
+        (sub / "deep.doc.gax.md").write_text("x")
+        (tmp_path / "top.doc.gax.md").write_text("x")
+        result = {p.name for p in _collect_recursive(tmp_path)}
+        assert result == {"deep.doc.gax.md", "top.doc.gax.md"}
+
+    def test_empty_tree_returns_empty(self, tmp_path):
+        assert _collect_recursive(tmp_path) == []
