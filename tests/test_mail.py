@@ -80,6 +80,17 @@ class TestExtractThreadId:
         with pytest.raises(ValueError, match="client-side Gmail token"):
             extract_thread_id("FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV")
 
+    def test_inbox_url_ktbx_rejected(self):
+        """KtbxL tokens in modern Gmail URLs are rejected with helpful error."""
+        url = "https://mail.google.com/mail/u/0/#inbox/KtbxLxgZbrvgbMkfHnHzKHBctNFGpVQtFL"
+        with pytest.raises(ValueError, match="client-side Gmail token"):
+            extract_thread_id(url)
+
+    def test_raw_ktbx_token_rejected(self):
+        """Raw KtbxL tokens are rejected."""
+        with pytest.raises(ValueError, match="client-side Gmail token"):
+            extract_thread_id("KtbxLxgZbrvgbMkfHnHzKHBctNFGpVQtFL")
+
     def test_raw_numeric_id(self):
         """Test raw numeric thread ID."""
         thread_id = "1859907402038417535"
@@ -407,9 +418,9 @@ class TestExtractTextBody:
         assert result == ""
 
 
-# 20+ alphanumeric chars pass _is_thread_id validation
-THREAD_ID = "TestThread00000000001"
-THREAD_ID_2 = "TestThread00000000002"
+# 16-char hex IDs — the standard Gmail API thread ID format
+THREAD_ID = "1a2b3c4d5e6f7890"
+THREAD_ID_2 = "2a3b4c5d6e7f8901"
 
 
 # =============================================================================
@@ -544,15 +555,90 @@ class TestIsThreadId:
     def test_numeric_id(self):
         assert _is_thread_id("1859907402038417535") is True
 
-    def test_long_alphanumeric_non_fmfcg(self):
-        """Non-FMfcg long alphanumeric strings are still accepted."""
-        assert _is_thread_id("ABCDEFghijklmnopqrstu") is True
+    def test_long_alphanumeric_rejected_as_opaque(self):
+        """Long alnum strings with letters are opaque tokens, not thread IDs."""
+        assert _is_thread_id("ABCDEFghijklmnopqrstu") is False
+
+    def test_ktbx_token_rejected(self):
+        """KtbxL tokens from modern Gmail URLs are rejected."""
+        assert _is_thread_id("KtbxLxgZbrvgbMkfHnHzKHBctNFGpVQtFL") is False
 
     def test_search_query(self):
         assert _is_thread_id("from:alice subject:hello") is False
 
     def test_short_string(self):
         assert _is_thread_id("hello") is False
+
+
+# =============================================================================
+# Thread.get tests
+# =============================================================================
+
+
+class TestThreadGet:
+    """Tests for Thread.get() — read-only stdout output."""
+
+    def test_get_from_url(self, monkeypatch):
+        """get() from a Gmail URL returns full multipart markdown."""
+        sections = [
+            _make_section(section_num=1, from_addr="Alice <alice@test.com>"),
+            _make_section(
+                section_num=2,
+                from_addr="Bob <bob@test.com>",
+                content="Got it, thanks!",
+            ),
+        ]
+        monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
+
+        url = f"https://mail.google.com/mail/u/0/#inbox/{THREAD_ID}"
+        content = Thread(url=url).get()
+
+        # Full multipart format with YAML headers per message
+        assert "thread_id:" in content
+        assert "from: Alice" in content
+        assert "from: Bob" in content
+        assert "date:" in content
+        assert "section: 1" in content
+        assert "section: 2" in content
+        assert "Hello there." in content
+        assert "Got it, thanks!" in content
+
+    def test_get_from_file(self, tmp_path, monkeypatch):
+        """get() from a .mail.gax.md file reads thread_id and fetches fresh content."""
+        sections = [_make_section(section_num=1, content="Original")]
+        monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
+
+        # Now get() should fetch fresh remote content (could differ from file)
+        updated = [
+            _make_section(section_num=1, content="Original"),
+            _make_section(section_num=2, content="New reply!"),
+        ]
+        monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: updated)
+
+        content = Thread(path=path).get()
+        assert "section: 2" in content
+        assert "New reply!" in content
+        # File itself is untouched (read-only)
+        assert "New reply!" not in path.read_text()
+
+    def test_get_no_side_effects(self, tmp_path, monkeypatch):
+        """get() does not create or modify any files."""
+        sections = [_make_section()]
+        monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
+
+        url = f"https://mail.google.com/mail/u/0/#inbox/{THREAD_ID}"
+        before = set(tmp_path.iterdir())
+        Thread(url=url).get()
+        after = set(tmp_path.iterdir())
+        assert before == after, "get() created files"
+
+    def test_get_missing_thread_id_in_file_raises(self, tmp_path):
+        """get() raises ValueError if file has no thread_id header."""
+        file = tmp_path / "bad.mail.gax.md"
+        file.write_text("---\ntype: gax/mail\n---\nno thread id\n")
+        with pytest.raises(ValueError, match="No thread_id"):
+            Thread(path=file).get()
 
 
 # =============================================================================

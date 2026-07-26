@@ -147,6 +147,188 @@ DIFFABLE_RESOURCES = PUSHABLE_RESOURCES | {
 }
 
 
+GETTABLE_RESOURCES = {
+    "thread",       # Thread.get() — print thread markdown to stdout
+    "doc-tab",      # Tab.get() — print remote doc content
+    "doc",          # Doc.get() — print all tabs
+}
+
+
+class TestResourceGetMethod:
+    """Resources that support get() must override the base NotImplementedError."""
+
+    @pytest.mark.parametrize("cls", _concrete_resources(), ids=lambda c: c.name)
+    def test_get_not_base_notimplemented(self, cls):
+        """Resources in GETTABLE_RESOURCES must override get()."""
+        if cls.name not in GETTABLE_RESOURCES:
+            pytest.skip(f"{cls.name} not expected to have get")
+        assert cls.get is not Resource.get, (
+            f"{cls.__name__} (name={cls.name}) does not override get() — "
+            f"base Resource.get raises NotImplementedError"
+        )
+
+
+class TestMailUrlDispatch:
+    """Resource.from_url must route Gmail thread URLs to Thread."""
+
+    def test_inbox_url_dispatches_to_thread(self):
+        url = "https://mail.google.com/mail/u/0/#inbox/19f9a81e022b5536"
+        r = Resource.from_url(url)
+        assert r.__class__.__name__ == "Thread"
+
+    def test_sent_url_dispatches_to_thread(self):
+        url = "https://mail.google.com/mail/u/0/#sent/19f9a81e022b5536"
+        r = Resource.from_url(url)
+        assert r.__class__.__name__ == "Thread"
+
+    def test_draft_url_does_not_dispatch_to_thread(self):
+        """#drafts/ URLs go to Draft, not Thread."""
+        url = "https://mail.google.com/mail/u/0/#drafts/r-123456789"
+        # Should either dispatch to Draft or raise — not Thread
+        try:
+            r = Resource.from_url(url)
+            assert r.__class__.__name__ != "Thread"
+        except ValueError:
+            pass  # Also acceptable if no handler matches
+
+    def test_opaque_token_url_raises_clean_error(self):
+        """KtbxL token URLs raise ValueError, not raw HttpError."""
+        url = "https://mail.google.com/mail/u/0/#inbox/KtbxLxgZbrvgbMkfHnHzKHBctNFGpVQtFL"
+        # Thread.from_url succeeds (it's a valid Gmail URL), but extract_thread_id
+        # at clone/get time will raise. Verify from_url at least doesn't crash.
+        r = Resource.from_url(url)
+        assert r.__class__.__name__ == "Thread"
+
+
+class TestGetCommandDispatch:
+    """gax get must dispatch bare IDs and show helpful errors for opaque tokens."""
+
+    def test_bare_hex_id_dispatches_to_thread(self):
+        """gax get <16-hex> should resolve to Thread via from_id."""
+        from gax.mail.thread import Thread
+
+        r = Thread.from_id("19f9a81e022b5536")
+        assert r.__class__.__name__ == "Thread"
+
+    def test_bare_decimal_id_dispatches_to_thread(self):
+        """gax get <large-decimal> should resolve to Thread via from_id."""
+        from gax.mail.thread import Thread
+
+        r = Thread.from_id("1859907402038417535")
+        assert r.__class__.__name__ == "Thread"
+
+    def test_opaque_token_not_dispatched_as_id(self):
+        """FMfcg/KtbxL tokens should not resolve via from_id."""
+        from gax.mail.thread import Thread
+
+        with pytest.raises(ValueError):
+            Thread.from_id("KtbxLxgZbrvgbMkfHnHzKHBctNFGpVQtFL")
+
+    def test_thread_a_not_dispatched_as_id(self):
+        """thread-a:r IDs should not resolve via from_id."""
+        from gax.mail.thread import Thread
+
+        with pytest.raises(ValueError):
+            Thread.from_id("thread-a:r95077152518394753")
+
+    def test_get_command_invokes_resource_get(self, tmp_path, monkeypatch):
+        """gax get <file> calls resource.get(), not clone-and-print."""
+        from click.testing import CliRunner
+        from gax.cli import main as cli
+
+        # Create a .mail.gax.md file
+        mail_file = tmp_path / "test.mail.gax.md"
+        mail_file.write_text(
+            "---\ntype: gax/mail\nthread_id: abc123\nsection: 1\n---\ncontent\n"
+        )
+
+        # Mock pull_thread to return known sections
+        from gax.mail.shared import MailSection
+
+        sections = [
+            MailSection(
+                title="Test",
+                source="https://mail.google.com/mail/u/0/#inbox/abc123",
+                time="2025-01-01T00:00:00Z",
+                thread_id="abc123",
+                section=1,
+                section_title="From Alice",
+                from_addr="Alice <alice@test.com>",
+                to_addr="Bob <bob@test.com>",
+                date="2025-01-01T00:00:00Z",
+                content="Hello world.",
+            )
+        ]
+        monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get", str(mail_file)])
+        assert result.exit_code == 0, result.output
+        # Should include YAML headers (from resource.get), not just body
+        assert "thread_id:" in result.output
+        assert "from:" in result.output
+        assert "Hello world." in result.output
+
+    def test_get_bare_id_invokes_thread_get(self, monkeypatch):
+        """gax get <16-hex-id> dispatches to Thread.get()."""
+        from click.testing import CliRunner
+        from gax.cli import main as cli
+        from gax.mail.shared import MailSection
+
+        sections = [
+            MailSection(
+                title="Test",
+                source="https://mail.google.com/mail/u/0/#inbox/19f9a81e022b5536",
+                time="2025-01-01T00:00:00Z",
+                thread_id="19f9a81e022b5536",
+                section=1,
+                section_title="From Alice",
+                from_addr="Alice <alice@test.com>",
+                to_addr="Bob <bob@test.com>",
+                date="2025-01-01T00:00:00Z",
+                content="Thread content here.",
+            )
+        ]
+        monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get", "19f9a81e022b5536"])
+        assert result.exit_code == 0, result.output
+        assert "thread_id:" in result.output
+        assert "Thread content here." in result.output
+
+    def test_get_opaque_token_shows_guidance(self):
+        """gax get <opaque-token> exits with helpful mailbox -q guidance."""
+        from click.testing import CliRunner
+        from gax.cli import main as cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get", "KtbxLxgZbrvgbMkfHnHzKHBctNFGpVQtFL"])
+        assert result.exit_code == 1
+        assert "gax mailbox -q" in result.output
+
+    def test_get_thread_a_shows_guidance(self):
+        """gax get <thread-a:r-id> exits with helpful mailbox -q guidance."""
+        from click.testing import CliRunner
+        from gax.cli import main as cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get", "thread-a:r95077152518394753"])
+        assert result.exit_code == 1
+        assert "gax mailbox -q" in result.output
+
+    def test_get_popout_url_with_thread_a_shows_guidance(self):
+        """gax get <popout-url-with-thread-a:r> exits with helpful guidance."""
+        from click.testing import CliRunner
+        from gax.cli import main as cli
+
+        url = "https://mail.google.com/mail/u/0/popout?ver=1&th=%23thread-a%3Ar95077152518394753&cvid=1"
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get", url])
+        assert result.exit_code == 1
+        assert "gax mailbox -q" in result.output
+
+
 class TestResourceDiffMethod:
     """Every resource with push or meaningful pull must implement diff()."""
 

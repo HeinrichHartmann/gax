@@ -49,8 +49,13 @@ logger = logging.getLogger(__name__)
 def _is_thread_id(value: str) -> bool:
     """Check if value looks like a thread ID (vs a search query).
 
-    Rejects opaque client-side tokens (FMfcg...) and thread-a:r IDs that
-    cannot be resolved to API thread IDs.
+    Accepts:
+      - Gmail URLs (mail.google.com)
+      - 16-char hex IDs (e.g. 19f9a81e022b5536)
+      - Large decimal IDs (15+ digits, from thread-f: URLs)
+
+    Rejects opaque client-side tokens (FMfcg…, KtbxL…, etc.) and
+    thread-a:r IDs that cannot be resolved to API thread IDs.
     """
     from .shared import _is_opaque_gmail_token, _is_thread_a_id
 
@@ -61,8 +66,6 @@ def _is_thread_id(value: str) -> bool:
     if _is_opaque_gmail_token(value):
         return False
     if re.fullmatch(r"[0-9a-f]{16}", value):
-        return True
-    if re.fullmatch(r"[A-Za-z0-9]{20,}", value):
         return True
     if re.fullmatch(r"\d{15,}", value):
         return True
@@ -126,6 +129,29 @@ class Thread(Resource):
         safe = re.sub(r'[<>:"/\\|?*]', "-", subject or "untitled")
         safe = re.sub(r"\s+", "_", safe)[:50]
         return Path(f"{safe}_{thread_id}.mail.gax.md")
+
+    def get(self, **kw) -> str:
+        """Fetch thread content and return as string. Read-only, no side effects.
+
+        Returns the same multipart markdown that clone writes to a file —
+        YAML headers with From/Date per message, body content below each.
+
+        Works from URL (thread ID or Gmail URL) or from a .mail.gax.md file
+        (reads thread_id from the YAML header).
+        """
+        if self.path.name.endswith(".mail.gax.md") and self.path.exists():
+            # File-based: read thread_id from YAML header
+            content = self.path.read_text(encoding="utf-8")
+            match = re.search(r"^thread_id:\s*(\S+)", content, re.MULTILINE)
+            if not match:
+                raise ValueError(f"No thread_id found in {self.path}")
+            thread_id = match.group(1)
+        else:
+            # URL-based: extract thread_id from URL or raw ID
+            thread_id = extract_thread_id(self.url)
+
+        sections = pull_thread(thread_id)
+        return format_multipart(sections)
 
     def clone(self, output: Path | None = None, **kw) -> Path:
         """Clone a single email thread to a local file. Returns path created."""

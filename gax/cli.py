@@ -82,22 +82,57 @@ def unified_get(target: str, tab: str | None, as_json: bool):
         gax get report.doc.gax.md --json    # Print raw Docs API JSON
         gax get Budget.sheet.gax.md.d/      # Print all remote tabs
         gax get Budget.sheet.gax.md.d/ --tab Revenue  # Single tab
+        gax get 19f9a81e022b5536            # Print thread by hex ID
+        gax get https://mail.google.com/... # Print thread by URL
     """
     from .ui import error as ui_error
 
     path = Path(target)
-    if not path.exists():
-        # Try as URL
-        try:
-            resource = Resource.from_url(target)
-        except ValueError:
-            ui_error(f"Not found: {target}")
-            sys.exit(1)
-    else:
+    resource = None
+
+    if path.exists():
         try:
             resource = Resource.from_file(path)
         except ValueError:
             ui_error(f"Unsupported file: {target}")
+            sys.exit(1)
+    else:
+        # Check for opaque tokens early — they should never dispatch
+        from .mail.shared import (
+            _is_opaque_gmail_token,
+            _is_thread_a_id,
+            _OPAQUE_TOKEN_MSG,
+        )
+
+        if _is_opaque_gmail_token(target) or _is_thread_a_id(target):
+            ui_error(_OPAQUE_TOKEN_MSG)
+            sys.exit(1)
+
+        # Try as URL first
+        try:
+            resource = Resource.from_url(target)
+        except ValueError:
+            pass
+
+        # Try as bare ID (e.g. 16-hex thread ID)
+        # Prefer subclasses that implement get() over those that don't.
+        if resource is None:
+            fallback = None
+            for sub in Resource._subclasses:
+                try:
+                    candidate = sub.from_id(target)
+                    if sub.get is not Resource.get:
+                        resource = candidate
+                        break
+                    elif fallback is None:
+                        fallback = candidate
+                except ValueError:
+                    continue
+            if resource is None:
+                resource = fallback
+
+        if resource is None:
+            ui_error(f"Not found: {target}")
             sys.exit(1)
 
     try:
@@ -389,90 +424,6 @@ def unified_push(files: tuple[str, ...], yes: bool, values: bool):
     if len(all_paths) > 1:
         click.echo(f"Done: {success_count}/{len(all_paths)} pushed")
 
-
-@docs.section("main")
-@main.command("get")
-@click.argument("source")
-@click.option("--json", "as_json", is_flag=True, help="Output raw API JSON (docs only)")
-@gax_command
-def get_cmd(source: str, as_json: bool):
-    """Fetch remote resource and print content to stdout.
-
-    Accepts a URL or a local .gax.md/.gax.yaml tracking file (reads the
-    source URL from its header). Content goes to stdout; progress goes to
-    stderr. No files are created or modified.
-
-    Use ``--json`` to output raw Docs API JSON for a Google Doc file.
-
-    \b
-    Examples:
-        gax get https://docs.google.com/document/d/abc123 | less
-        gax get report.doc.gax.md | grep TODO
-        gax get report.doc.gax.md --json | jq '.body'
-        diff <(gax get https://docs.google.com/...) local.md
-    """
-    import tempfile
-
-    # --json path: use Resource.from_file().get(json=True)
-    if as_json:
-        from .ui import error as ui_error
-
-        path = Path(source)
-        if not path.exists():
-            ui_error("--json requires a local file, not a URL")
-            sys.exit(1)
-        try:
-            resource = Resource.from_file(path)
-        except ValueError:
-            ui_error(f"Unsupported file: {source}")
-            sys.exit(1)
-        try:
-            content = resource.get(json=True)
-            click.echo(content, nl=False)
-        except NotImplementedError:
-            ui_error(f"get --json not supported for: {source}")
-            sys.exit(1)
-        except Exception as e:
-            ui_error(str(e))
-            sys.exit(1)
-        return
-
-    def _print_file(file_path: Path, first_ref: list) -> None:
-        sections = _parse(file_path.read_text(encoding="utf-8"))
-        for section in sections:
-            if not first_ref[0]:
-                sys.stdout.write("\n---\n\n")
-            sys.stdout.write(section.content)
-            if section.content and not section.content.endswith("\n"):
-                sys.stdout.write("\n")
-            first_ref[0] = False
-
-    def _print_folder(folder: Path, first_ref: list) -> None:
-        tab_files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix == ".md")
-        for tab_file in tab_files:
-            _print_file(tab_file, first_ref)
-
-    from .gaxfile import parse_multipart as _parse
-
-    path = Path(source)
-    if path.exists():
-        # Read source URL from file header, fetch remote
-        sections = _parse(path.read_text(encoding="utf-8"))
-        src_url = sections[0].headers.get("source", "") if sections else ""
-        if not src_url:
-            click.echo(f"Error: no source URL in {path}", err=True)
-            sys.exit(1)
-        resource = Resource.from_url(src_url)
-    else:
-        resource = Resource.from_url(source)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = resource.clone(output=Path(tmpdir) / "_get_tmp")
-        first_ref = [True]
-        if tmp_path.is_dir():
-            _print_folder(tmp_path, first_ref)
-        else:
-            _print_file(tmp_path, first_ref)
 
 
 @docs.section("main")

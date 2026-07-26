@@ -117,12 +117,24 @@ def format_multipart(sections: list[MailSection]) -> str:
 
 
 def _is_opaque_gmail_token(value: str) -> bool:
-    """Return True if value is an opaque client-side Gmail token (FMfcg...).
+    """Return True if value is an opaque client-side Gmail token.
 
-    These tokens appear in new-style Gmail URLs (#inbox/FMfcg...) but cannot
-    be mapped to API thread IDs without a search.
+    Modern Gmail URLs use encrypted per-account tokens (FMfcg…, KtbxL…, etc.)
+    that cannot be mapped to API thread IDs (googleworkspace/cli#858).
+
+    Detection: any alphanumeric token >= 20 chars that contains at least one
+    letter. Pure-digit strings are excluded because they may be valid decimal
+    thread IDs (thread-f:<digits>).  Shorter strings are excluded because
+    16-hex thread IDs are exactly 16 chars.
     """
-    return bool(re.fullmatch(r"FMfcg[A-Za-z0-9]{10,}", value))
+    if len(value) < 20:
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9]+", value):
+        return False
+    # Pure digits could be valid decimal thread IDs
+    if re.fullmatch(r"\d+", value):
+        return False
+    return True
 
 
 def _is_thread_a_id(value: str) -> bool:
@@ -132,8 +144,10 @@ def _is_thread_a_id(value: str) -> bool:
 
 _OPAQUE_TOKEN_MSG = (
     "This URL contains a client-side Gmail token that cannot be resolved to an "
-    "API thread ID.\nUse 'gax mailbox fetch -q <subject or search>' to find the "
-    "thread by content."
+    "API thread ID. Google encrypts these per-account with no public mapping "
+    "(googleworkspace/cli#858).\n"
+    "Use: gax mailbox -q '<search terms>' to locate the thread, "
+    "then: gax get <hex thread_id>"
 )
 
 
