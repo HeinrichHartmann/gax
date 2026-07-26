@@ -361,7 +361,7 @@ class TestContactsCheckout:
 
         meta = yaml.safe_load((output / ".gax.yaml").read_text())
         assert meta["type"] == "gax/contacts-checkout"
-        assert "checked_out" in meta
+        assert "sync" in meta
 
     @patch.object(
         Contacts, "_fetch_and_normalize", return_value=(SAMPLE_NORMALIZED, {})

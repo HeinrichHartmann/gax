@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..gaxfile import GaxFile, parse as gaxfile_parse, format_single
+from ..syncstate import write_sync_header
 
 
 @dataclass
@@ -59,4 +60,5 @@ def format_content(config: SheetConfig, data: str) -> str:
     if config.separator:
         headers["separator"] = config.separator
 
+    headers = write_sync_header(headers)
     return format_single(headers, data)

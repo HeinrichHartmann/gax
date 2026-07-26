@@ -46,6 +46,7 @@ from googleapiclient.discovery import build
 from ..gaxfile import GaxFile, format_single
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
+from ..syncstate import write_sync_header
 
 logger = logging.getLogger(__name__)
 
@@ -357,11 +358,12 @@ def format_markdown(contacts: list[dict]) -> str:
 
 def contact_to_yaml(contact: dict) -> str:
     """Serialize a normalized contact dict to split YAML (header + body)."""
-    header: dict = {
-        "type": "gax/contact",
-        "resourceName": contact.get("resourceName", ""),
-        "synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
+    header: dict = write_sync_header(
+        {
+            "type": "gax/contact",
+            "resourceName": contact.get("resourceName", ""),
+        }
+    )
 
     body: dict = {}
     for field in CONTACT_BODY_FIELDS:
@@ -698,10 +700,7 @@ class Contacts(Resource):
         folder.mkdir(parents=True, exist_ok=True)
 
         # Write .gax.yaml metadata
-        meta = {
-            "type": "gax/contacts-checkout",
-            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+        meta = write_sync_header({"type": "gax/contacts-checkout"})
         (folder / ".gax.yaml").write_text(
             yaml.dump(meta, default_flow_style=False, sort_keys=False)
         )
@@ -792,10 +791,7 @@ class Contacts(Resource):
                 logger.info(f"Added: {filename}")
 
         # Update metadata
-        meta = {
-            "type": "gax/contacts-checkout",
-            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+        meta = write_sync_header({"type": "gax/contacts-checkout"})
         (folder / ".gax.yaml").write_text(
             yaml.dump(meta, default_flow_style=False, sort_keys=False)
         )

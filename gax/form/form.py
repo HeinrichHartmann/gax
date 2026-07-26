@@ -42,6 +42,7 @@ from googleapiclient.discovery import build
 from ..gaxfile import GaxFile, format_single
 from ..auth import get_authenticated_credentials
 from ..resource import Resource
+from ..syncstate import read_sync, write_sync_header
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +77,12 @@ def parse_form_file(file_path: Path) -> tuple[FormHeader, str]:
     gf = GaxFile.from_path(file_path, multipart=False)
     h = gf.headers
 
+    _sync = read_sync(h)
     header = FormHeader(
         id=h.get("id", ""),
         title=h.get("title", ""),
         source=h.get("source", ""),
-        synced=h.get("synced", ""),
+        synced=_sync.time.strftime("%Y-%m-%dT%H:%M:%SZ") if _sync.time else "",
         content_type=h.get("content-type", "text/markdown"),
     )
 
@@ -106,9 +108,8 @@ def format_form_file(header: FormHeader, body_str: str) -> str:
         h["title"] = header.title
     if header.source:
         h["source"] = header.source
-    if header.synced:
-        h["synced"] = header.synced
 
+    h = write_sync_header(h)
     h["content-type"] = header.content_type
 
     return format_single(h, body_str)

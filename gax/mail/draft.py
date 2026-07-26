@@ -75,6 +75,7 @@ import mistune
 from ..auth import get_service, CONFIG_DIR
 from .. import gaxfile
 from ..resource import Resource
+from ..syncstate import write_sync_header
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,7 @@ def format_draft(header: DraftHeader, body: str) -> str:
     if header.attachments:
         h["attachments"] = header.attachments
 
+    h = write_sync_header(h)
     return gaxfile.format_section(h, body)
 
 

@@ -48,6 +48,7 @@ import yaml
 from ..auth import get_service
 from .. import gaxfile
 from .native_md import extract_images_to_store, inline_images_from_store
+from ..syncstate import write_sync_header
 from ..ui import operation
 from ..resource import Resource
 
@@ -125,6 +126,8 @@ def _doc_section_to_multipart(section: DocSection) -> gaxfile.Section:
     }
     if section.section_type:
         headers["tab_type"] = section.section_type
+    if section.section == 1:
+        headers = write_sync_header(headers)
     return gaxfile.Section(headers=headers, content=section.content)
 
 
@@ -1276,14 +1279,15 @@ class Doc(Resource):
                 }
             )
 
-        metadata = {
-            "type": "gax/doc-checkout",
-            "document_id": document_id,
-            "url": source_url,
-            "title": title,
-            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "tabs": tab_tree,
-        }
+        metadata = write_sync_header(
+            {
+                "type": "gax/doc-checkout",
+                "document_id": document_id,
+                "url": source_url,
+                "title": title,
+                "tabs": tab_tree,
+            }
+        )
         metadata_path = folder / ".gax.yaml"
         with open(metadata_path, "w") as f:
             yaml.dump(
@@ -1380,9 +1384,7 @@ class Doc(Resource):
             )
 
         # Update metadata
-        metadata["checked_out"] = datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        metadata = write_sync_header(metadata)
         metadata["title"] = sections[0].title if sections else metadata.get("title", "")
         metadata["tabs"] = tab_tree
         with open(metadata_path, "w") as f:
