@@ -6,16 +6,20 @@ pages. Maintenance rules: [schema.md](schema.md). Change history:
 
 ## Product
 
-_No pages yet._
+- [Positioning](product/positioning.md) — What gax is, the problem it solves, and who it is for
 
 ## Solution
 
-_No pages yet._
+- [CLI Model](solution/cli-model.md) — Command structure, operation patterns, and resource dispatch
+- [File Conventions](solution/file-conventions.md) — The .gax.md file format, extensions, and checkout folder structure
 
 ## Technical
 
-_No pages yet._
+- [Architecture](technical/architecture.md) — Module structure, key abstractions, and how resource implementations plug in
+- [ADR Map](technical/adr-map.md) — Status and grouping of all Architecture Decision Records
+- [Resource Types](technical/resource-types.md) — All resource types with supported operations, file extensions, and maturity
 
 ## Implementation
 
-_No pages yet._
+- [Docs Push Pipeline](implementation/docs-push-pipeline.md) — How gax pushes edits to Google Docs — IR, patch vs bulk, UTF-16 indexing, tables
+- [Mail Parsing](implementation/mail-parsing.md) — Email body extraction, quoted-text stripping, HTML conversion, and attachment handling
