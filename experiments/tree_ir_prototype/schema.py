@@ -13,8 +13,8 @@ Design goals (from gax-75t / ADR 035):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 
 # =============================================================================
@@ -93,13 +93,6 @@ _TABLE_CELL_KEYS = {"t", "runs", "style"}
 # =============================================================================
 # YAML implicit type coercion
 # =============================================================================
-
-# Values that YAML parses as bool but should be strings in text positions
-_YAML_BOOL_STRINGS = {
-    True: "true", False: "false",
-    # PyYAML also maps these, but after safe_load they're already True/False
-}
-
 
 def _coerce_to_str(value: Any) -> str:
     """Coerce a YAML-parsed value back to its string representation.
