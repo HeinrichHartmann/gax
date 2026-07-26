@@ -231,8 +231,37 @@ def _hex_to_color(hex_str: str) -> dict:
     return {"color": {"rgbColor": {"red": r, "green": g, "blue": b}}}
 
 
+# Link-blue RGB (gax-tvv / gax-q5m): #1155cc = (17, 85, 204)
+_LINK_BLUE_RGB = (17, 85, 204)
+
+
+def _is_link_blue(hex_color: str) -> bool:
+    """True if hex_color is approximately the link-default blue (#1155cc ± 2/channel).
+
+    Google Docs sets foregroundColor to this value on every linked textRun.
+    The ±2 tolerance absorbs float-to-int rounding in the Docs API response.
+    """
+    if not hex_color or not hex_color.startswith("#") or len(hex_color) != 7:
+        return False
+    try:
+        r = int(hex_color[1:3], 16)
+        g = int(hex_color[3:5], 16)
+        b = int(hex_color[5:7], 16)
+        lr, lg, lb = _LINK_BLUE_RGB
+        return abs(r - lr) <= 2 and abs(g - lg) <= 2 and abs(b - lb) <= 2
+    except (ValueError, IndexError):
+        return False
+
+
 def _extract_text_style(style_dict: dict) -> TextStyle:
-    """Extract a TextStyle from a Docs API textStyle dict."""
+    """Extract a TextStyle from a Docs API textStyle dict.
+
+    Link-implied attributes are suppressed at extraction time (gax-tvv/gax-q5m):
+    when a link is present the API always reports underline=True and
+    foregroundColor≈#1155cc. Clearing them here ensures that both the base
+    IR (from_doc_json) and the local IR (parse_tree) agree after a
+    serialize→parse round-trip, preventing spurious updateTextStyle mutations.
+    """
     if not style_dict:
         return TextStyle()
 
@@ -260,13 +289,24 @@ def _extract_text_style(style_dict: dict) -> TextStyle:
     if baseline == "NONE":
         baseline = None
 
+    url = style_dict.get("link", {}).get("url") if "link" in style_dict else None
+    underline = style_dict.get("underline", False)
+    fg_color = _color_to_hex(style_dict.get("foregroundColor"))
+
+    # Suppress link-implied attributes at extraction so both diff sides agree.
+    if url:
+        if underline:
+            underline = False
+        if fg_color and _is_link_blue(fg_color):
+            fg_color = None
+
     return TextStyle(
         bold=style_dict.get("bold", False),
         italic=style_dict.get("italic", False),
         strikethrough=style_dict.get("strikethrough", False),
-        underline=style_dict.get("underline", False),
-        url=style_dict.get("link", {}).get("url") if "link" in style_dict else None,
-        foreground_color=_color_to_hex(style_dict.get("foregroundColor")),
+        underline=underline,
+        url=url,
+        foreground_color=fg_color,
         background_color=_color_to_hex(style_dict.get("backgroundColor")),
         font_family=font_family,
         font_size=font_size,

@@ -1042,6 +1042,108 @@ class TestYamlSerializerSuppression:
         assert inner.get("style", {}).get("align") == "center", "alignment must be kept"
         assert "indent_start" not in inner.get("style", {}), "indent must be suppressed"
 
+    # ------------------------------------------------------------------
+    # Offline round-trip regression test (gax-q5m)
+    # NOT @e2e — runs in the default suite so skipping live tests cannot
+    # mask this class of bug again.
+    # ------------------------------------------------------------------
+
+    def test_linked_run_round_trip_style_equal(self):
+        """from_doc_json → serialize → parse preserves style_equal for linked runs.
+
+        Regression for gax-q5m: the original gax-tvv impl suppressed
+        link-implied underline/color only in the serializer, not at
+        extraction. That left base.underline=True / #1155cc while local
+        (post-parse) had False/None → spurious diff on every linked run.
+        """
+        from .enriched_ir import Paragraph, from_doc_json
+        from .yaml_serializer import parse_tree, serialize_tree
+
+        # Synthetic body content: one paragraph with three runs where the
+        # middle run has a link (with API-injected underline + link-blue color).
+        link_blue = {"color": {"rgbColor": {"red": 0.067, "green": 0.333, "blue": 0.8}}}
+        body_content = [{
+            "startIndex": 1,
+            "endIndex": 50,
+            "paragraph": {
+                "elements": [
+                    {
+                        "startIndex": 1,
+                        "endIndex": 6,
+                        "textRun": {"content": "See ", "textStyle": {}},
+                    },
+                    {
+                        "startIndex": 6,
+                        "endIndex": 20,
+                        "textRun": {
+                            "content": "this article",
+                            "textStyle": {
+                                "link": {"url": "https://example.com"},
+                                "underline": True,
+                                "foregroundColor": link_blue,
+                            },
+                        },
+                    },
+                    {
+                        "startIndex": 20,
+                        "endIndex": 50,
+                        "textRun": {"content": " for more details.\n", "textStyle": {}},
+                    },
+                ],
+                "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            },
+        }]
+
+        # Base IR from raw JSON
+        base_blocks = from_doc_json(body_content)
+        assert base_blocks, "Should parse to at least one block"
+
+        # Find the linked span in base blocks and confirm link-implied styles
+        # are already cleared at extraction time.
+        linked_base = None
+        for block in base_blocks:
+            if isinstance(block, Paragraph):
+                for span in block.spans:
+                    if span.style.url:
+                        linked_base = span
+                        break
+        assert linked_base is not None, "Should find a linked span in base blocks"
+        assert not linked_base.style.underline, (
+            "underline must be cleared at extraction (link-implied)"
+        )
+        assert linked_base.style.foreground_color is None, (
+            "link-blue foreground_color must be cleared at extraction"
+        )
+
+        # Serialize → parse round-trip
+        yaml_str = serialize_tree(base_blocks)
+        local_blocks = parse_tree(yaml_str)
+
+        # Every span must have style_equal between base and local.
+        base_spans = [
+            span
+            for block in base_blocks
+            if isinstance(block, Paragraph)
+            for span in block.spans
+        ]
+        local_spans = [
+            span
+            for block in local_blocks
+            if isinstance(block, Paragraph)
+            for span in block.spans
+        ]
+        assert len(base_spans) == len(local_spans), (
+            f"Span count mismatch: base={len(base_spans)} local={len(local_spans)}"
+        )
+        for i, (b, lo) in enumerate(zip(base_spans, local_spans)):
+            assert b.style.style_equal(lo.style), (
+                f"Span {i} ({b.text!r}): style_equal=False\n"
+                f"  base:  url={b.style.url!r} u={b.style.underline} "
+                f"color={b.style.foreground_color!r}\n"
+                f"  local: url={lo.style.url!r} u={lo.style.underline} "
+                f"color={lo.style.foreground_color!r}"
+            )
+
 
 def _dict_diff(a: dict, b: dict, path: str = "") -> str:
     """Find first difference between two nested dicts."""
