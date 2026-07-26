@@ -9,50 +9,208 @@ from .. import docs
 from . import Tab, Doc
 
 
-def _push_tab_patch_or_bulk(
+def _compute_plan(file: Path, content: str):
+    """Compute three-way plan for a tab file.
+
+    Returns (plan, section) tuple.
+
+    Revision guard (ADR 037): if the remote revisionId differs from the
+    stored one, refuse immediately — the user must pull first. No drift
+    classification or conflict-block analysis is attempted.
+
+    When no baseline exists, the plan degrades to stateless diff (remote
+    vs local) with a warning.
+    """
+    from .doc import parse_multipart, extract_doc_id, _fetch_doc, _flatten_tabs
+    from .diff_push import compute_three_way_plan, ThreeWayPlan
+
+    section = parse_multipart(file.read_text(encoding="utf-8"))[0]
+    document_id = extract_doc_id(section.source)
+    tab_name = section.section_title
+
+    doc = _fetch_doc(document_id)
+    flat = _flatten_tabs(doc.get("tabs", []))
+
+    matched_tab = None
+    for tab, info in flat:
+        if info.title == tab_name:
+            matched_tab = tab
+            break
+
+    if matched_tab is None:
+        return ThreeWayPlan(
+            ops=[],
+            mutations=[],
+            summary_lines=[],
+            error=f"Tab '{tab_name}' not found in document",
+        ), section
+
+    doc_tab = matched_tab.get("documentTab", {})
+    body = doc_tab.get("body", {}).get("content", [])
+    lists = doc_tab.get("lists") or doc.get("lists")
+    remote_revision = doc.get("revisionId", "")
+
+    baseline_hash = section.baseline
+    stored_revision = section.revision
+    tab_id = doc_tab.get("tabProperties", {}).get("tabId", "")
+
+    # --- Revision guard (ADR 037) ---
+    # Revision mismatch = immediate refusal; no drift/conflict analysis.
+    if stored_revision and remote_revision and stored_revision != remote_revision:
+        click.echo(
+            f"Remote changed (rev {stored_revision} → {remote_revision}). "
+            f"Pull first.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if not baseline_hash:
+        click.echo(
+            "Warning: no baseline stored — using stateless diff. "
+            "Run 'gax pull' to enable three-way merge.",
+            err=True,
+        )
+
+    plan = compute_three_way_plan(
+        baseline_hash=baseline_hash or "",
+        local_markdown=content,
+        remote_body=body,
+        remote_revision=remote_revision,
+        stored_revision=stored_revision,
+        tab_id=tab_id,
+        lists=lists,
+    )
+
+    return plan, section
+
+
+def _do_force_replace_push(
+    t: "Tab",
+    file: Path,
+    body: "Path | None",
+    yes: bool,
+) -> None:
+    """Full-replace push for a single tab."""
+    from .doc import parse_multipart
+    from .ir import from_markdown, check_unsupported
+
+    diff_text = t.diff(body=body)
+    if diff_text is None:
+        click.echo("No differences to push.")
+        return
+    if not yes:
+        click.echo("Changes to push (full-replace):")
+        click.echo("-" * 40)
+        click.echo(diff_text)
+        click.echo("-" * 40)
+        raw_for_warn = body.read_text(encoding="utf-8") if body else (
+            parse_multipart(file.read_text(encoding="utf-8"))[0].content
+        )
+        for w in check_unsupported(from_markdown(raw_for_warn)):
+            click.echo(f"  Warning: {w.feature}: {w.detail}")
+        click.echo(
+            "Warning: full-replace destroys all non-markdown formatting "
+            "(colors, fonts, alignment, comments, suggestions, images)."
+        )
+        if not click.confirm("Push these changes?"):
+            click.echo("Aborted.")
+            return
+    t.push(body=body)
+    success("Pushed successfully (full-replace).")
+
+
+def _do_plan_push(
+    t: "Tab",
+    file: Path,
+    content: str,
+    yes: bool,
+) -> None:
+    """Plan-driven (three-way) push for a single tab."""
+    plan, _section = _compute_plan(file, content)
+
+    if plan.is_empty:
+        click.echo("No differences to push.")
+        return
+
+    if plan.error:
+        # Offer full-replace fallback with explicit destructiveness warning
+        click.echo(f"Patch cannot be applied: {plan.error}")
+        click.echo(
+            "Warning: falling back to full-replace will destroy all "
+            "non-markdown formatting (colors, fonts, alignment, comments, "
+            "suggestions, images)."
+        )
+        if not yes:
+            if not click.confirm("Fall back to full-replace?", default=False):
+                click.echo("Aborted.")
+                return
+        # Full-replace fallback
+        if t.diff() is None:
+            click.echo("No differences to push.")
+            return
+        if not yes:
+            if not click.confirm("Push these changes?"):
+                click.echo("Aborted.")
+                return
+        t.push()
+        success("Pushed successfully (full-replace fallback).")
+        return
+
+    # Clean patch — show plan summary and confirm
+    click.echo("Patch operations:")
+    click.echo("-" * 40)
+    for line in plan.summary_lines:
+        click.echo(line)
+    click.echo("-" * 40)
+    if not yes:
+        if not click.confirm("Apply patch?"):
+            click.echo("Aborted.")
+            return
+    t.push(patch=True)
+    success("Patched successfully.")
+
+
+def _push_tab_plan_or_force(
     t: "Tab",
     content: str,
     yes: bool,
-    bulk: bool,
+    force_replace: bool,
     label: str = "",
 ) -> bool:
-    """Patch-first push for one tab. Returns True if pushed, False if no diff."""
-    from .doc import parse_multipart, extract_doc_id
+    """Plan-driven push for one tab in a folder. Returns True if pushed."""
+    from .doc import parse_multipart
     from .ir import from_markdown, check_unsupported
 
     prefix = f"[{label}] " if label else ""
 
-    if not bulk:
-        from .diff_push import preview_diff
+    if not force_replace:
+        plan, section = _compute_plan(t.path, content)
 
-        section = parse_multipart(t.path.read_text(encoding="utf-8"))[0]
-        document_id = extract_doc_id(section.source)
-        tab_name = section.section_title
-
-        preview = preview_diff(document_id, tab_name, content)
-
-        if not preview.ops:
+        if plan.is_empty:
             return False  # no differences
 
-        if preview.error:
-            if preview.fatal:
-                click.echo(f"{prefix}Error: {preview.error}", err=True)
-                sys.exit(1)
-            # Non-fatal: offer bulk fallback
-            click.echo(f"{prefix}Patch cannot be applied: {preview.error}")
+        if plan.error:
+            # Non-fatal: offer full-replace fallback
+            click.echo(f"{prefix}Patch cannot be applied: {plan.error}")
+            click.echo(
+                f"{prefix}Warning: full-replace will destroy all non-markdown "
+                "formatting (colors, fonts, alignment, comments, suggestions, images)."
+            )
             if yes:
-                bulk = True  # silent fallback
+                force_replace = True  # silent fallback
             else:
-                if not click.confirm(f"{prefix}Fall back to bulk push?", default=False):
+                if not click.confirm(
+                    f"{prefix}Fall back to full-replace?", default=False
+                ):
                     click.echo("Aborted.")
                     sys.exit(1)
-                bulk = True
+                force_replace = True
 
-        if not bulk:
+        if not force_replace:
             # Clean patch — show summary and confirm
             click.echo(f"{prefix}Patch operations:")
             click.echo("-" * 40)
-            for line in preview.summary_lines:
+            for line in plan.summary_lines:
                 click.echo(line)
             click.echo("-" * 40)
             if not yes:
@@ -62,13 +220,13 @@ def _push_tab_patch_or_bulk(
             t.push(patch=True)
             return True
 
-    # BULK path
+    # FULL-REPLACE path
     diff_text = t.diff()
     if diff_text is None:
         return False  # no differences
 
-    if not (bulk and yes):
-        click.echo(f"{prefix}Changes to push:")
+    if not (force_replace and yes):
+        click.echo(f"{prefix}Changes to push (full-replace):")
         click.echo("-" * 40)
         click.echo(diff_text)
         click.echo("-" * 40)
@@ -76,9 +234,8 @@ def _push_tab_patch_or_bulk(
         for w in check_unsupported(from_markdown(section.content)):
             click.echo(f"  Warning: {w.feature}: {w.detail}")
         click.echo(
-            "Warning: markdown cannot faithfully represent a Google Doc. "
-            "Non-markdown formatting (colors, fonts, alignment, comments, "
-            "suggestions, images) may be lost."
+            "Warning: full-replace destroys all non-markdown formatting "
+            "(colors, fonts, alignment, comments, suggestions, images)."
         )
         if not yes:
             if not click.confirm("Push these changes?"):
@@ -153,20 +310,61 @@ def doc_tab_pull(file: Path, yes: bool):
 
 @doc_tab.command("diff")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--text",
+    "show_text",
+    is_flag=True,
+    help="Show unified text diff instead of plan summary.",
+)
 @gax_command
-def doc_tab_diff(file: Path):
-    """Show diff between local file and remote tab."""
-    diff_text = Tab.from_file(file).diff()
-    if diff_text is None:
+def doc_tab_diff(file: Path, show_text: bool):
+    """Show diff between local file and remote tab.
+
+    By default shows the same plan that ``push`` would apply (three-way
+    when baseline exists, stateless otherwise). Use ``--text`` for a
+    traditional unified diff.
+    """
+    if show_text:
+        diff_text = Tab.from_file(file).diff()
+        if diff_text is None:
+            click.echo("No differences.")
+        else:
+            click.echo(diff_text)
+        return
+
+    from .doc import parse_multipart
+    from . import native_md as _native_md
+
+    section = parse_multipart(file.read_text(encoding="utf-8"))[0]
+    content = _native_md.inline_images_from_store(section.content)
+
+    plan_result, _ = _compute_plan(file, content)
+
+    if plan_result.is_empty:
         click.echo("No differences.")
-    else:
-        click.echo(diff_text)
+        return
+
+    if plan_result.error:
+        click.echo(f"Plan error: {plan_result.error}")
+
+    for line in plan_result.summary_lines:
+        click.echo(line)
 
 
 @doc_tab.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-@click.option("--bulk", is_flag=True, help="Full-replace push, skipping patch attempt")
+@click.option(
+    "--force-replace",
+    is_flag=True,
+    help="Full-replace push (destroys all non-markdown formatting). Skips patch attempt.",
+)
+@click.option(
+    "--bulk",
+    is_flag=True,
+    hidden=True,
+    help="Deprecated: use --force-replace instead.",
+)
 @click.option(
     "--body",
     type=click.Path(exists=True, path_type=Path),
@@ -174,28 +372,38 @@ def doc_tab_diff(file: Path):
     help="Push content from this external markdown file instead of the tracking file.",
 )
 @gax_command
-def doc_tab_push(file: Path, yes: bool, bulk: bool, body: Path | None):
+def doc_tab_push(file: Path, yes: bool, force_replace: bool, bulk: bool, body: Path | None):
     """Push local changes to a single tab.
 
-    Patch is the default: applies only changed elements, preserving collaborator
-    formatting, comments, and suggestions. Use ``--bulk`` to force a full-replace
-    push (faster, but destroys all non-markdown formatting).
+    Uses a three-way plan (baseline vs local vs remote) to compute minimal
+    patches that preserve collaborator formatting, comments, and suggestions.
 
-    When patch cannot be applied (e.g. structural changes like adding a table),
-    gax offers to fall back to bulk. With ``-y`` the fallback happens silently.
+    Use ``--force-replace`` to force a full-replace push (faster, but destroys
+    all non-markdown formatting).
+
+    When patch cannot be applied (e.g. structural changes or missing baseline),
+    gax offers to fall back to full-replace. With ``-y`` the fallback happens
+    silently.
 
     Use ``--body`` to push content from an external markdown file. The tracking
     file is updated in place so subsequent ``pull`` round-trips stay consistent.
-    ``--body`` is only supported with the bulk path.
+    ``--body`` is only supported with the full-replace path.
     """
-    from .doc import parse_multipart, extract_doc_id
+    from .doc import parse_multipart
     from . import native_md as _native_md
+
+    if bulk:
+        click.echo(
+            "Warning: --bulk is deprecated, use --force-replace instead.",
+            err=True,
+        )
+        force_replace = True
 
     t = Tab.from_file(file)
 
     if body:
-        # TODO: --body with patch
-        bulk = True
+        # --body only supported with force-replace
+        force_replace = True
 
     # Resolve content
     if body:
@@ -204,81 +412,12 @@ def doc_tab_push(file: Path, yes: bool, bulk: bool, body: Path | None):
         raw = parse_multipart(file.read_text(encoding="utf-8"))[0].content
     content = _native_md.inline_images_from_store(raw)
 
-    if bulk:
-        diff_text = t.diff(body=body)
-        if diff_text is None:
-            click.echo("No differences to push.")
-            return
-        if not (bulk and yes):
-            from .ir import from_markdown, check_unsupported
-            click.echo("Changes to push:")
-            click.echo("-" * 40)
-            click.echo(diff_text)
-            click.echo("-" * 40)
-            raw_for_warn = body.read_text(encoding="utf-8") if body else (
-                parse_multipart(file.read_text(encoding="utf-8"))[0].content
-            )
-            for w in check_unsupported(from_markdown(raw_for_warn)):
-                click.echo(f"  Warning: {w.feature}: {w.detail}")
-            click.echo(
-                "Warning: markdown cannot faithfully represent a Google Doc. "
-                "Non-markdown formatting (colors, fonts, alignment, comments, "
-                "suggestions, images) may be lost."
-            )
-            if not yes:
-                if not click.confirm("Push these changes?"):
-                    click.echo("Aborted.")
-                    return
-        t.push(body=body)
-        success("Pushed successfully.")
+    if force_replace:
+        _do_force_replace_push(t, file, body, yes)
         return
 
-    # PATCH path (default)
-    from .diff_push import preview_diff
-
-    section = parse_multipart(file.read_text(encoding="utf-8"))[0]
-    document_id = extract_doc_id(section.source)
-    tab_name = section.section_title
-
-    preview = preview_diff(document_id, tab_name, content)
-
-    if not preview.ops:
-        click.echo("No differences to push.")
-        return
-
-    if preview.error:
-        if preview.fatal:
-            click.echo(f"Error: {preview.error}", err=True)
-            sys.exit(1)
-        click.echo(f"Patch cannot be applied: {preview.error}")
-        if not yes:
-            if not click.confirm("Fall back to bulk push?", default=False):
-                click.echo("Aborted.")
-                return
-        # Bulk fallback
-        if t.diff(body=body) is None:
-            click.echo("No differences to push.")
-            return
-        if not yes:
-            if not click.confirm("Push these changes?"):
-                click.echo("Aborted.")
-                return
-        t.push(body=body)
-        success("Pushed successfully (bulk fallback).")
-        return
-
-    # Clean patch
-    click.echo("Patch operations:")
-    click.echo("-" * 40)
-    for line in preview.summary_lines:
-        click.echo(line)
-    click.echo("-" * 40)
-    if not yes:
-        if not click.confirm("Apply patch?"):
-            click.echo("Aborted.")
-            return
-    t.push(patch=True)
-    success("Patched successfully.")
+    # PATCH path (default) — plan-driven three-way diff
+    _do_plan_push(t, file, content, yes)
 
 
 @doc.command("clone")
@@ -339,19 +478,40 @@ def doc_pull(file: Path, with_comments: bool, yes: bool):
 @doc.command("push")
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
-@click.option("--bulk", is_flag=True, help="Full-replace push for all tabs")
+@click.option(
+    "--force-replace",
+    is_flag=True,
+    help="Full-replace push for all tabs (destroys non-markdown formatting).",
+)
+@click.option(
+    "--bulk",
+    is_flag=True,
+    hidden=True,
+    help="Deprecated: use --force-replace instead.",
+)
 @gax_command
-def doc_push(folder: Path, yes: bool, bulk: bool):
+def doc_push(folder: Path, yes: bool, force_replace: bool, bulk: bool):
     """Push all changed tabs in a checkout folder to Google Docs.
 
-    Patch is the default: applies only changed elements per tab, preserving
-    collaborator formatting. Use ``--bulk`` to force full-replace for all tabs.
+    Uses a three-way plan (baseline vs local vs remote) to compute minimal
+    patches per tab, preserving collaborator formatting.
 
-    When patch cannot be applied for a tab, gax offers to fall back to bulk
-    for that tab individually. With ``-y`` the fallback happens silently.
+    Use ``--force-replace`` to force full-replace for all tabs (destroys
+    non-markdown formatting).
+
+    When patch cannot be applied for a tab, gax offers to fall back to
+    full-replace for that tab individually. With ``-y`` the fallback
+    happens silently.
     """
     from .doc import parse_multipart, _known_tab_files, _read_checkout_metadata
     from . import native_md as _native_md
+
+    if bulk:
+        click.echo(
+            "Warning: --bulk is deprecated, use --force-replace instead.",
+            err=True,
+        )
+        force_replace = True
 
     metadata = _read_checkout_metadata(folder)
     tab_files = list(_known_tab_files(folder, metadata))
@@ -366,7 +526,9 @@ def doc_push(folder: Path, yes: bool, bulk: bool):
         label = tab_file.relative_to(folder).as_posix()
         section = parse_multipart(tab_file.read_text(encoding="utf-8"))[0]
         content = _native_md.inline_images_from_store(section.content)
-        did_push = _push_tab_patch_or_bulk(t, content=content, yes=yes, bulk=bulk, label=label)
+        did_push = _push_tab_plan_or_force(
+            t, content=content, yes=yes, force_replace=force_replace, label=label,
+        )
         if did_push:
             pushed += 1
 

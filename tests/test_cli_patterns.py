@@ -492,3 +492,67 @@ class TestCollectRecursive:
 
     def test_empty_tree_returns_empty(self, tmp_path):
         assert _collect_recursive(tmp_path) == []
+
+
+# =============================================================================
+# Doc push: --force-replace (replaces --bulk)
+# =============================================================================
+
+
+class TestDocForceReplaceFlag:
+    """doc tab push and doc push must expose --force-replace and deprecate --bulk."""
+
+    def test_doc_tab_push_has_force_replace(self):
+        """doc tab push must have --force-replace flag."""
+        cmd = get_command(["doc", "tab", "push"])
+        assert cmd is not None
+        assert has_option(cmd, "force_replace", "--force-replace", is_flag=True), (
+            "'doc tab push' missing --force-replace flag"
+        )
+
+    def test_doc_tab_push_bulk_is_hidden(self):
+        """doc tab push --bulk must be hidden (deprecated alias)."""
+        cmd = get_command(["doc", "tab", "push"])
+        assert cmd is not None
+        bulk_param = next(
+            (p for p in cmd.params if p.name == "bulk" and isinstance(p, click.Option)),
+            None,
+        )
+        assert bulk_param is not None, "'doc tab push' missing --bulk alias"
+        assert bulk_param.hidden, "'doc tab push' --bulk should be hidden (deprecated)"
+
+    def test_doc_push_has_force_replace(self):
+        """doc push must have --force-replace flag."""
+        cmd = get_command(["doc", "push"])
+        assert cmd is not None
+        assert has_option(cmd, "force_replace", "--force-replace", is_flag=True), (
+            "'doc push' missing --force-replace flag"
+        )
+
+    def test_doc_push_bulk_is_hidden(self):
+        """doc push --bulk must be hidden (deprecated alias)."""
+        cmd = get_command(["doc", "push"])
+        assert cmd is not None
+        bulk_param = next(
+            (p for p in cmd.params if p.name == "bulk" and isinstance(p, click.Option)),
+            None,
+        )
+        assert bulk_param is not None, "'doc push' missing --bulk alias"
+        assert bulk_param.hidden, "'doc push' --bulk should be hidden (deprecated)"
+
+    def test_doc_tab_push_help_documents_destructiveness(self):
+        """doc tab push help text must mention destructiveness of force-replace."""
+        cmd = get_command(["doc", "tab", "push"])
+        assert cmd is not None
+        assert cmd.help is not None
+        assert "destroy" in cmd.help.lower() or "non-markdown" in cmd.help.lower(), (
+            "'doc tab push' help should document that --force-replace destroys formatting"
+        )
+
+    def test_doc_tab_diff_has_text_option(self):
+        """doc tab diff must have --text flag for unified text diff."""
+        cmd = get_command(["doc", "tab", "diff"])
+        assert cmd is not None
+        assert has_option(cmd, "show_text", "--text", is_flag=True), (
+            "'doc tab diff' missing --text flag"
+        )
