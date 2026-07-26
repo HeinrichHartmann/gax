@@ -383,9 +383,26 @@ def _parse_block(d: dict) -> Optional[Block]:
     return None
 
 
-def parse_tree(yaml_str: str) -> list[Block]:
-    """Parse YAML tree string back to a list of enriched IR blocks."""
-    doc = yaml.safe_load(yaml_str)
+def parse_tree(yaml_str: str, *, validate: bool = True) -> list[Block]:
+    """Parse YAML tree string back to a list of enriched IR blocks.
+
+    When validate=True (default), the YAML is parsed with BaseLoader
+    (lossless — No stays "No", 3.10 stays "3.10"), validated against
+    the doc-tree/v1 schema, and typed attributes are converted. This
+    catches LLM errors (invented attributes, malformed structure) early
+    — before any diff/plan computation runs on the data.
+
+    Raises SchemaValidationError if validation fails.
+    """
+    if validate:
+        from .schema import validated_parse
+
+        doc = validated_parse(yaml_str)
+    else:
+        doc = yaml.safe_load(yaml_str)
+        if not doc or "body" not in doc:
+            return []
+
     if not doc or "body" not in doc:
         return []
 
