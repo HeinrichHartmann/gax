@@ -1,20 +1,29 @@
-"""End-to-end fidelity spec suite for doc push (ADR 034 / gax-cvi).
+"""Fidelity spec suite for doc push (ADR 034 / gax-cvi).
 
-These tests define the acceptance criteria for faithful surgical push.
-They drive the REAL gax product code paths (gax.gdoc.ir, gax.gdoc.diff_push)
-against mock doc JSON fixtures.
+Offline tests (no marker)
+    Structural assertions against mock doc JSON fixtures. Fast (<1s),
+    run in the default ``pytest`` invocation.
 
-Phase 0 lands these tests with xfail/skip markers referencing the phase
-bead that will remove them. The suite runs green in CI immediately.
+Live API tests (@pytest.mark.e2e)
+    Hit the real Google Docs API with scratch documents: create →
+    pull via product IR → edit → push mutations → re-fetch → assert
+    untouched blocks are index-stripped identical and no-op pushes
+    produce zero mutations.
 
 Run:
-    direnv exec . python -m pytest tests/test_e2e_fidelity.py --collect-only
-    direnv exec . python -m pytest tests/test_e2e_fidelity.py -v
+    direnv exec . python -m pytest tests/test_e2e_fidelity.py -v       # offline only
+    direnv exec . python -m pytest tests/test_e2e_fidelity.py -m e2e   # live only
 """
 
 from __future__ import annotations
 
+import json
+import uuid
+
 import pytest
+from googleapiclient.discovery import build
+
+from gax.auth import get_authenticated_credentials, is_authenticated
 
 from gax.gdoc.ir import (
     Block,
@@ -28,8 +37,10 @@ from gax.gdoc.ir import (
 )
 from gax.gdoc.diff_push import (
     ast_diff,
+    compute_three_way_plan,
     diff_to_mutations,
 )
+from gax.store import store_baseline
 
 
 # =============================================================================
@@ -309,7 +320,6 @@ def _render_and_reparse(blocks: list[Block]) -> list[Block]:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestNoOpPush:
     """Scenario 1: pull → render → re-parse → diff = zero mutations."""
 
@@ -405,7 +415,6 @@ class TestNoOpPush:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestWordEditPreservesSiblings:
     """Scenario 2: change one word in a paragraph; unedited blocks are unchanged."""
 
@@ -481,7 +490,6 @@ class TestWordEditPreservesSiblings:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestStyleSurvivalUntouched:
     """Scenario 3: editing one block does not affect other blocks' structure."""
 
@@ -548,7 +556,6 @@ class TestStyleSurvivalUntouched:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestInsertParagraph:
     """Scenario 4: insert a paragraph between existing blocks."""
 
@@ -616,7 +623,6 @@ class TestInsertParagraph:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestDeleteParagraph:
     """Scenario 5: delete a paragraph; other blocks remain."""
 
@@ -668,7 +674,6 @@ class TestDeleteParagraph:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestHeadingRename:
     """Scenario 6: rename heading text + change level."""
 
@@ -728,7 +733,6 @@ class TestHeadingRename:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestTableCellEdit:
     """Scenario 7: edit one table cell; other cells unchanged."""
 
@@ -781,7 +785,6 @@ class TestTableCellEdit:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestEmojiUtf16:
     """Scenario 8: edits around emoji must use correct UTF-16 indices."""
 
@@ -1057,7 +1060,6 @@ class TestAdversarialAlignment:
 # =============================================================================
 
 
-@pytest.mark.e2e
 class TestMutationGeneration:
     """Verify mutation translation produces valid API request structures."""
 
@@ -1132,3 +1134,385 @@ class TestMutationGeneration:
                         assert r.get("tabId") == tab_id, (
                             f"Missing/wrong tabId in mutation: {m}"
                         )
+
+
+# =============================================================================
+# Live API fidelity tests (require auth + real Google Docs API)
+#
+# These tests create scratch Google Docs, exercise the product IR pipeline
+# against real API JSON, apply mutations, and verify invariants by
+# re-fetching the document.  Marked @pytest.mark.e2e — skipped without auth.
+# =============================================================================
+
+
+_FIDELITY_PREFIX = "gaxe2e_fid"
+
+
+def _skip_if_no_auth():
+    """Skip if Google auth is not available."""
+    if not is_authenticated():
+        pytest.skip("Not authenticated. Run 'gax auth login' first.")
+
+
+def _make_services():
+    """Create authenticated Docs + Drive API services."""
+    creds = get_authenticated_credentials()
+    docs = build("docs", "v1", credentials=creds)
+    drive = build("drive", "v3", credentials=creds)
+    return docs, drive
+
+
+def _create_scratch_doc(drive_svc) -> str:
+    """Create a scratch Google Doc and return its document ID."""
+    uid = uuid.uuid4().hex[:8]
+    f = drive_svc.files().create(
+        body={
+            "name": f"{_FIDELITY_PREFIX}_{uid}",
+            "mimeType": "application/vnd.google-apps.document",
+        },
+        fields="id",
+    ).execute()
+    return f["id"]
+
+
+def _delete_scratch_doc(drive_svc, doc_id: str):
+    """Best-effort deletion of a scratch doc."""
+    try:
+        drive_svc.files().delete(fileId=doc_id).execute()
+    except Exception as exc:
+        print(f"Warning: could not delete scratch doc {doc_id}: {exc}")
+
+
+def _fetch_full_doc(docs_svc, doc_id: str) -> dict:
+    """Fetch the full document JSON (with tabs content)."""
+    return docs_svc.documents().get(
+        documentId=doc_id, includeTabsContent=True
+    ).execute()
+
+
+def _doc_body_and_meta(doc: dict):
+    """Return (body_content, lists, tab_id) from document JSON."""
+    tab = doc.get("tabs", [{}])[0]
+    dt = tab.get("documentTab", {})
+    body = dt.get("body", {}).get("content", [])
+    lists = dt.get("lists", {})
+    tab_id = tab.get("tabProperties", {}).get("tabId", "")
+    return body, lists, tab_id
+
+
+def _structural_elements(doc: dict) -> list[dict]:
+    """Return body elements that are paragraphs or tables (skip section breaks)."""
+    body, _, _ = _doc_body_and_meta(doc)
+    return [e for e in body if "paragraph" in e or "table" in e]
+
+
+def _populate_md_safe_doc(docs_svc, doc_id: str) -> dict:
+    """Populate a scratch doc with markdown-representable content.
+
+    Creates four structural blocks (no colors/fonts/alignment — only
+    features that round-trip through markdown):
+
+        Block 0: HEADING_1  "Test Heading"
+        Block 1: Paragraph  "Normal and **bold** text follows."
+        Block 2: Paragraph  "Plain second paragraph."
+        Block 3: Paragraph  "Plain third paragraph."
+
+    Returns the full document JSON after population.
+    """
+    # No trailing \\n on last line — the doc's implicit final newline
+    # becomes the paragraph terminator, avoiding an empty trailing block.
+    text = (
+        "Test Heading\n"              # 13 chars → [1, 14)
+        "Normal and bold text follows.\n"  # 30 chars → [14, 44)
+        "Plain second paragraph.\n"   # 24 chars → [44, 68)
+        "Plain third paragraph."      # 22 chars → [68, 90) + doc \\n → [68, 91)
+    )
+    requests = [
+        {"insertText": {"text": text, "location": {"index": 1}}},
+        # Heading style on first paragraph
+        {
+            "updateParagraphStyle": {
+                "range": {"startIndex": 1, "endIndex": 14},
+                "paragraphStyle": {"namedStyleType": "HEADING_1"},
+                "fields": "namedStyleType",
+            }
+        },
+        # Bold on "bold" (indices 25-29 within the second paragraph)
+        {
+            "updateTextStyle": {
+                "range": {"startIndex": 25, "endIndex": 29},
+                "textStyle": {"bold": True},
+                "fields": "bold",
+            }
+        },
+    ]
+    docs_svc.documents().batchUpdate(
+        documentId=doc_id, body={"requests": requests}
+    ).execute()
+    return _fetch_full_doc(docs_svc, doc_id)
+
+
+def _assert_untouched_identical(
+    doc_before: dict,
+    doc_after: dict,
+    edited_indices: set[int],
+    label: str = "",
+):
+    """Assert every non-edited block is index-stripped identical.
+
+    Mirrors the prototype helper (ADR 034 invariant 2).
+    """
+    before = _structural_elements(doc_before)
+    after = _structural_elements(doc_after)
+    for i in range(min(len(before), len(after))):
+        if i in edited_indices:
+            continue
+        b = _strip_index_fields(before[i])
+        a = _strip_index_fields(after[i])
+        assert b == a, (
+            f"[{label}] Block {i} not edited but differs after push.\n"
+            f"  Before: {json.dumps(b, sort_keys=True)[:300]}\n"
+            f"  After:  {json.dumps(a, sort_keys=True)[:300]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+#  Live test: no-op push ⇒ zero mutations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+class TestLiveNoOp:
+    """Live API: pull → no edit → diff against real API JSON = zero ops."""
+
+    def test_no_op_round_trip_zero_ops(self):
+        """Create a doc, fetch, IR round-trip through markdown → zero ops.
+
+        Validates the product ``from_doc_json → render_markdown →
+        from_markdown → ast_diff`` pipeline against real Docs API JSON.
+        """
+        _skip_if_no_auth()
+        docs_svc, drive_svc = _make_services()
+        doc_id = _create_scratch_doc(drive_svc)
+        try:
+            doc = _populate_md_safe_doc(docs_svc, doc_id)
+            body, lists, _tab_id = _doc_body_and_meta(doc)
+
+            base_blocks = from_doc_json(body, lists=lists)
+            md = render_markdown(base_blocks)
+            local_blocks = from_markdown(md)
+
+            ops = ast_diff(base_blocks, local_blocks)
+            assert len(ops) == 0, (
+                f"No-op round trip should produce zero ops against live API JSON, "
+                f"got {len(ops)}: {[op.type for op in ops]}"
+            )
+        finally:
+            _delete_scratch_doc(drive_svc, doc_id)
+
+    def test_no_op_zero_mutations(self):
+        """Zero ops ⇒ zero mutations (diff_to_mutations returns [])."""
+        _skip_if_no_auth()
+        docs_svc, drive_svc = _make_services()
+        doc_id = _create_scratch_doc(drive_svc)
+        try:
+            doc = _populate_md_safe_doc(docs_svc, doc_id)
+            body, lists, tab_id = _doc_body_and_meta(doc)
+
+            base_blocks = from_doc_json(body, lists=lists)
+            md = render_markdown(base_blocks)
+            local_blocks = from_markdown(md)
+
+            ops = ast_diff(base_blocks, local_blocks)
+            mutations = diff_to_mutations(ops, base_blocks, tab_id)
+            assert len(mutations) == 0, (
+                f"No-op should produce zero mutations, got {len(mutations)}"
+            )
+        finally:
+            _delete_scratch_doc(drive_svc, doc_id)
+
+
+# ---------------------------------------------------------------------------
+#  Live test: pull → edit → push → re-fetch → untouched blocks identical
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+class TestLiveSurgicalPush:
+    """Live API: edit one block, push mutations, verify untouched blocks."""
+
+    def test_heading_edit_untouched_identical(self):
+        """Rename heading → push → re-fetch: other blocks index-stripped identical.
+
+        Exercises the full product pipeline against a real Google Doc:
+        from_doc_json → render_markdown → edit → from_markdown → ast_diff →
+        diff_to_mutations → batchUpdate → re-fetch → compare.
+        """
+        _skip_if_no_auth()
+        docs_svc, drive_svc = _make_services()
+        doc_id = _create_scratch_doc(drive_svc)
+        try:
+            doc_before = _populate_md_safe_doc(docs_svc, doc_id)
+            body, lists, tab_id = _doc_body_and_meta(doc_before)
+
+            base_blocks = from_doc_json(body, lists=lists)
+            md = render_markdown(base_blocks)
+
+            # Edit: rename the heading
+            edited_md = md.replace("Test Heading", "Renamed Heading", 1)
+            assert edited_md != md, "Edit should change the markdown"
+
+            local_blocks = from_markdown(edited_md)
+            ops = ast_diff(base_blocks, local_blocks)
+            assert len(ops) > 0, "Should produce ops for heading edit"
+
+            mutations = diff_to_mutations(ops, base_blocks, tab_id)
+            assert len(mutations) > 0, "Should produce mutations"
+
+            # Apply mutations to the live document
+            docs_svc.documents().batchUpdate(
+                documentId=doc_id, body={"requests": mutations}
+            ).execute()
+
+            # Re-fetch and verify untouched blocks
+            doc_after = _fetch_full_doc(docs_svc, doc_id)
+
+            # Block 0 (heading) was edited; blocks 1-3 must be identical
+            _assert_untouched_identical(
+                doc_before, doc_after, edited_indices={0},
+                label="heading edit",
+            )
+
+            # Verify the edit actually landed
+            after_body, after_lists, _ = _doc_body_and_meta(doc_after)
+            after_blocks = from_doc_json(after_body, lists=after_lists)
+            heading = after_blocks[0]
+            assert isinstance(heading, Heading), "Block 0 should still be a heading"
+            assert "Renamed Heading" in heading.text, (
+                f"Heading should contain 'Renamed Heading', got {heading.text!r}"
+            )
+        finally:
+            _delete_scratch_doc(drive_svc, doc_id)
+
+    def test_paragraph_edit_untouched_identical(self):
+        """Edit a word in paragraph → push → re-fetch: heading + other paras unchanged.
+
+        Edits 'second' → 'modified' in block 2 and verifies blocks 0, 1, 3
+        are index-stripped identical in the re-fetched JSON.
+        """
+        _skip_if_no_auth()
+        docs_svc, drive_svc = _make_services()
+        doc_id = _create_scratch_doc(drive_svc)
+        try:
+            doc_before = _populate_md_safe_doc(docs_svc, doc_id)
+            body, lists, tab_id = _doc_body_and_meta(doc_before)
+
+            base_blocks = from_doc_json(body, lists=lists)
+            md = render_markdown(base_blocks)
+
+            # Edit: change word in third block (block index 2)
+            edited_md = md.replace("second paragraph", "modified paragraph", 1)
+            assert edited_md != md, "Edit should change the markdown"
+
+            local_blocks = from_markdown(edited_md)
+            ops = ast_diff(base_blocks, local_blocks)
+            assert len(ops) > 0, "Should produce ops for paragraph edit"
+
+            mutations = diff_to_mutations(ops, base_blocks, tab_id)
+            assert len(mutations) > 0
+
+            docs_svc.documents().batchUpdate(
+                documentId=doc_id, body={"requests": mutations}
+            ).execute()
+
+            doc_after = _fetch_full_doc(docs_svc, doc_id)
+
+            # Block 2 was edited; blocks 0, 1, 3 must be identical
+            _assert_untouched_identical(
+                doc_before, doc_after, edited_indices={2},
+                label="paragraph edit",
+            )
+
+            # Verify edit landed
+            after_body, after_lists, _ = _doc_body_and_meta(doc_after)
+            after_blocks = from_doc_json(after_body, lists=after_lists)
+            assert any(
+                isinstance(b, Paragraph) and "modified paragraph" in b.text
+                for b in after_blocks
+            ), "Edited text should appear in re-fetched document"
+        finally:
+            _delete_scratch_doc(drive_svc, doc_id)
+
+
+# ---------------------------------------------------------------------------
+#  Live test: revision guard refuses when remote changed same block
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+class TestLiveRevisionGuard:
+    """Live API: revision guard aborts push when remote changed same block."""
+
+    def test_guard_refuses_overlapping_remote_change(self):
+        """Edit heading locally + remotely → three-way plan refuses with error.
+
+        ADR 037 single-editor model: the revision guard detects that the
+        remote document changed since pull and the edit touches the same
+        block.  The plan must set ``revision_changed=True`` and return an
+        error containing 'Pull first'.
+        """
+        _skip_if_no_auth()
+        docs_svc, drive_svc = _make_services()
+        doc_id = _create_scratch_doc(drive_svc)
+        try:
+            doc = _populate_md_safe_doc(docs_svc, doc_id)
+            body, lists, tab_id = _doc_body_and_meta(doc)
+            stored_rev = doc.get("revisionId", "")
+
+            # Store baseline (CAS blob) for the three-way pipeline
+            tab = doc.get("tabs", [{}])[0]
+            tab_json = tab.get("documentTab", {})
+            baseline_hash = store_baseline(tab_json)
+
+            # Local edit: rename the heading
+            base_blocks = from_doc_json(body, lists=lists)
+            md = render_markdown(base_blocks)
+            edited_md = md.replace("Test Heading", "Local Edit", 1)
+            assert edited_md != md
+
+            # Remote edit: modify the same heading via the API
+            docs_svc.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": [
+                    {"insertText": {
+                        "text": "REMOTE ",
+                        "location": {"index": 1},
+                    }},
+                ]},
+            ).execute()
+
+            # Re-fetch: revision has changed, heading now "REMOTE Test Heading"
+            doc_after = _fetch_full_doc(docs_svc, doc_id)
+            new_body, new_lists, _ = _doc_body_and_meta(doc_after)
+            new_rev = doc_after.get("revisionId", "")
+            assert new_rev != stored_rev, "Remote edit should change revisionId"
+
+            # Three-way plan should detect the conflict and refuse
+            plan = compute_three_way_plan(
+                baseline_hash, edited_md, new_body,
+                new_rev, stored_rev, tab_id, lists=new_lists,
+            )
+            assert plan.revision_changed is True, (
+                "Plan should detect revision change"
+            )
+            assert plan.error is not None, (
+                "Plan should report an error for overlapping edits"
+            )
+            assert "Pull first" in plan.error, (
+                f"Error should say 'Pull first', got: {plan.error}"
+            )
+            assert len(plan.mutations) == 0, (
+                "No mutations should be generated when guard refuses"
+            )
+        finally:
+            _delete_scratch_doc(drive_svc, doc_id)
