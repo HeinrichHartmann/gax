@@ -58,15 +58,54 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 <!-- END BEADS INTEGRATION -->
 
 
-## Build & Test
+## Multi-Agent Workflow
 
-_Add your build and test commands here_
+Agent roles are defined in `.agents/profiles/` and spawned with
+`scripts/spawn.py` (uv self-running; `claude` has no `--profile` flag —
+the script passes the profile file as the system prompt).
+
+### Roles
+
+- **architect** (`architect.md`): owns ADRs, PRDs, and the beads
+  breakdown; writes tests and experiment specs, never implementation
+  code. Runs in the main checkout.
+- **worker** (`worker.md`): claims ready beads and implements them,
+  one bead per commit, in an isolated worktree.
+- **reviewer** (`reviewer.md`): reviews worker branches from `review`
+  beads; approves or files `revisions` beads. The architect merges
+  approved branches.
+
+### Spawning
 
 ```bash
-# Example:
-# npm install
-# npm test
+./scripts/spawn.py --profile worker --beads "gax-cvi.1 gax-75t"
+./scripts/spawn.py --profile worker --beads "gdoc"        # by label
+./scripts/spawn.py --profile reviewer --no-fork \
+  --extra-prompt "Review beads: bd list -l review"
 ```
+
+`spawn.py` forks a worktree `../gax-<profile>-<id>` on branch
+`<profile>/<id>` from `main` (skip with `--no-fork`), scopes the
+session to the given beads/label, and sets the cmux tab title.
+
+### Conventions
+
+- Workers see only committed state on `main` — commit profiles, ADRs,
+  and specs before spawning.
+- Experiments (`experiments/`) are always committed, one commit per
+  bead, referencing the bead ID.
+- Handoff between roles happens exclusively through beads
+  (`review`/`revisions`/`approved` labels); never through shared
+  uncommitted files.
+
+## Build & Test
+
+```bash
+direnv exec . python -m pytest tests/ -x --tb=short   # unit + surface
+direnv exec . python -m pytest tests/ -m e2e          # live-API e2e
+```
+
+All shell commands must be prefixed with `direnv exec .` (direnv/nix).
 
 ## Architecture Overview
 
