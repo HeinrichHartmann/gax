@@ -355,6 +355,34 @@ def _refresh_baseline_after_push(
     logger.info(f"Post-push baseline refresh: {baseline_hash[:20]}… rev={revision_id}")
 
 
+def _refresh_revision_in_file(path: Path, revision_id: str) -> None:
+    """Update only the revisionId in a tab file's frontmatter.
+
+    Used after a sibling tab in the same document is pushed: the push bumps
+    the document-level revisionId, so all sibling files need their stored
+    revision updated to prevent the ADR 037 revision guard from tripping
+    on our own push (gax-zo1).
+    """
+    raw = path.read_text(encoding="utf-8")
+    sections_raw = gaxfile.parse_multipart(raw)
+    if not sections_raw:
+        return
+
+    sections_raw[0].headers["revision"] = revision_id
+    if "sync" in sections_raw[0].headers:
+        sections_raw[0].headers = write_sync_header(
+            sections_raw[0].headers, rev=revision_id
+        )
+
+    if len(sections_raw) > 1:
+        text = gaxfile.format_multipart(sections_raw)
+    else:
+        text = gaxfile.format_section(
+            sections_raw[0].headers, sections_raw[0].content
+        )
+    path.write_text(text, encoding="utf-8")
+
+
 def _flatten_tabs(tabs: list[dict], depth: int = 0) -> list[tuple[dict, TabInfo]]:
     """Recursively flatten a nested tabs structure from the Docs API.
 

@@ -557,7 +557,10 @@ def doc_push(folder: Path, yes: bool, force_replace: bool, bulk: bool):
     full-replace for that tab individually. With ``-y`` the fallback
     happens silently.
     """
-    from .doc import parse_multipart, _known_tab_files, _read_checkout_metadata
+    from .doc import (
+        parse_multipart, _known_tab_files, _read_checkout_metadata,
+        _refresh_revision_in_file,
+    )
     from . import native_md as _native_md
 
     if bulk:
@@ -585,6 +588,16 @@ def doc_push(folder: Path, yes: bool, force_replace: bool, bulk: bool):
         )
         if did_push:
             pushed += 1
+            # After a successful push the document-level revisionId has
+            # changed.  Update the revision in all sibling tab files so the
+            # revision guard (ADR 037) doesn't trip on our own push (gax-zo1).
+            new_rev = parse_multipart(
+                tab_file.read_text(encoding="utf-8")
+            )[0].revision
+            if new_rev:
+                for sibling in tab_files:
+                    if sibling != tab_file:
+                        _refresh_revision_in_file(sibling, new_rev)
 
     if pushed == 0:
         click.echo("No differences to push.")

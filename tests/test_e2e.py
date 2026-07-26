@@ -76,20 +76,18 @@ def _get_test_sheet_id() -> str:
 def _run_gax(*args: str) -> subprocess.CompletedProcess:
     """Run gax CLI command and return result.
 
-    Runs ``python -m gax.cli`` with THIS checkout first on PYTHONPATH.
-    The bare ``gax`` entry point resolves through the shared venv's
-    editable install to the MAIN checkout — from a git worktree that
-    silently tests the wrong code (false pre-existing failures / false
-    passes).
+    Runs from the repo root that contains THIS test file so that
+    ``python -m gax.cli`` resolves to the code under test — not the
+    venv's editable install of the main checkout.  The key is ``cwd``:
+    Python puts '' (CWD) at sys.path[0], which is searched before
+    PYTHONPATH entries.
     """
     repo_root = str(Path(__file__).resolve().parent.parent)
-    env = os.environ.copy()
-    env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
     return subprocess.run(
         [sys.executable, "-m", "gax.cli", *args],
         capture_output=True,
         text=True,
-        env=env,
+        cwd=repo_root,
     )
 
 
@@ -323,6 +321,53 @@ class TestDocE2E:
         assert result.returncode == 0, f"Pull failed: {result.stderr}"
         final_content = tracking_file.read_text()
         assert "Updated Via Doc Push" in final_content
+
+    def test_checkout_double_push_cycle(self, check_auth, test_doc, temp_dir):
+        """Regression (gax-zo1): push->edit->push must not trip revision guard.
+
+        After pushing a tab in a checkout folder, the document revisionId
+        changes. A second push of the same (or different) tab must succeed
+        because the post-push revision refresh updates all sibling files.
+        """
+        uid = uuid.uuid4().hex[:8]
+        fixture_content = (FIXTURES_DIR / "e2e_test2.md").read_text()
+        test_file = temp_dir / f"{E2E_PREFIX}_dblpush_{uid}.md"
+        test_file.write_text(fixture_content)
+
+        # Import a tab
+        tracking_file = temp_dir / f"{E2E_PREFIX}_dblpush_{uid}.tab.gax.md"
+        result = _run_gax(
+            "doc", "tab", "import", test_doc["url"], str(test_file),
+            "-o", str(tracking_file),
+        )
+        assert result.returncode == 0, f"Import failed: {result.stderr}"
+
+        # Checkout the whole document
+        checkout_dir = temp_dir / f"{E2E_PREFIX}_dblpush_{uid}.doc.gax.md.d"
+        result = _run_gax("doc", "checkout", test_doc["url"], "-o", str(checkout_dir))
+        assert result.returncode == 0, f"Checkout failed: {result.stderr}"
+
+        tab_file = checkout_dir / f"{E2E_PREFIX}_dblpush_{uid}.doc.gax.md"
+        assert tab_file.exists(), f"Expected tab file: {tab_file}"
+
+        # First edit + push
+        content = tab_file.read_text()
+        tab_file.write_text(content.replace("Second Test Tab", "First Push"))
+        result = _run_gax("doc", "push", str(checkout_dir), "-y")
+        assert result.returncode == 0, f"First push failed: {result.stderr}"
+        assert "Pushed" in result.stdout
+
+        # Second edit + push (must not trip revision guard)
+        content = tab_file.read_text()
+        tab_file.write_text(content.replace("First Push", "Second Push"))
+        result = _run_gax("doc", "push", str(checkout_dir), "-y")
+        assert result.returncode == 0, f"Second push failed: {result.stderr}"
+        assert "Pushed" in result.stdout
+
+        # Verify final content landed
+        result = _run_gax("doc", "tab", "pull", str(tracking_file), "-y")
+        assert result.returncode == 0, f"Pull failed: {result.stderr}"
+        assert "Second Push" in tracking_file.read_text()
 
     def test_pull_after_tab_rename(self, check_auth, test_doc, temp_dir):
         """Regression: pull should succeed even when a tab is renamed on Google.

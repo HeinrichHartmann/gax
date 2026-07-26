@@ -17,6 +17,7 @@ from gax.gdoc.doc import (
     format_section,
     pull_single_tab,
     render_baseline,
+    _refresh_revision_in_file,
 )
 from gax.gdoc.doc import _flatten_tabs, _compute_tab_paths, DocSection
 
@@ -1395,3 +1396,93 @@ class TestHasUnpushedEdits:
         f = tmp_path / "test.doc.gax.md"
         self._write_tab_file(f, "Hello\n", baseline_hash="nonexistent_hash_abc123")
         assert _has_unpushed_edits(f) is None
+
+
+class TestRefreshRevisionInFile:
+    """Unit tests for _refresh_revision_in_file (gax-zo1).
+
+    After pushing one tab in a checkout folder, the document-level revisionId
+    changes. This helper updates sibling tab files so the revision guard
+    doesn't trip on our own push.
+    """
+
+    def _write_tab(self, path, *, section_num=1, revision="rev-old"):
+        """Write a tab file with the given revision."""
+        section = DocSection(
+            title="Test Doc",
+            source="https://docs.google.com/document/d/abc/edit",
+            time="2026-01-01T00:00:00Z",
+            section=section_num,
+            section_title=f"Tab {section_num}",
+            content="Hello world\n",
+            baseline="sha256:abc",
+            revision=revision,
+        )
+        path.write_text(format_section(section), encoding="utf-8")
+
+    def test_updates_frontmatter_revision(self, tmp_path):
+        """revision: field in frontmatter is updated."""
+        from gax.gdoc.doc import parse_multipart
+
+        f = tmp_path / "tab.doc.gax.md"
+        self._write_tab(f, section_num=2, revision="rev-old")
+        _refresh_revision_in_file(f, "rev-new")
+
+        section = parse_multipart(f.read_text())[0]
+        assert section.revision == "rev-new"
+
+    def test_preserves_sync_header_presence(self, tmp_path):
+        """sync header key is preserved (section 1 files have it)."""
+        from gax import gaxfile
+
+        f = tmp_path / "tab.doc.gax.md"
+        self._write_tab(f, section_num=1, revision="rev-old")
+
+        raw = gaxfile.parse_multipart(f.read_text())
+        assert "sync" in raw[0].headers
+
+        _refresh_revision_in_file(f, "rev-new")
+
+        raw = gaxfile.parse_multipart(f.read_text())
+        assert "sync" in raw[0].headers
+        # Also verify frontmatter revision is updated
+        assert raw[0].headers["revision"] == "rev-new"
+
+    def test_preserves_content(self, tmp_path):
+        """Content body is not altered by revision update."""
+        from gax.gdoc.doc import parse_multipart
+
+        f = tmp_path / "tab.doc.gax.md"
+        self._write_tab(f, section_num=2, revision="rev-old")
+
+        _refresh_revision_in_file(f, "rev-new")
+
+        section = parse_multipart(f.read_text())[0]
+        assert section.content == "Hello world\n"
+
+    def test_preserves_baseline(self, tmp_path):
+        """baseline: hash is not altered by revision update."""
+        from gax.gdoc.doc import parse_multipart
+
+        f = tmp_path / "tab.doc.gax.md"
+        self._write_tab(f, section_num=2, revision="rev-old")
+
+        _refresh_revision_in_file(f, "rev-new")
+
+        section = parse_multipart(f.read_text())[0]
+        assert section.baseline == "sha256:abc"
+
+    def test_no_sync_header_on_non_first_section(self, tmp_path):
+        """Non-first sections should not gain a sync header."""
+        from gax import gaxfile
+
+        f = tmp_path / "tab.doc.gax.md"
+        self._write_tab(f, section_num=2, revision="rev-old")
+
+        raw_before = gaxfile.parse_multipart(f.read_text())
+        assert "sync" not in raw_before[0].headers
+
+        _refresh_revision_in_file(f, "rev-new")
+
+        raw_after = gaxfile.parse_multipart(f.read_text())
+        assert "sync" not in raw_after[0].headers
