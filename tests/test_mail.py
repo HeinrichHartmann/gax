@@ -592,6 +592,81 @@ class TestDraftAttachments:
         assert b"multipart" in raw
         assert b"report.pdf" in raw
 
+    def test_build_message_attachment_mime_structure(self):
+        """Attachment has correct Content-Type, Content-Disposition, and base64 encoding."""
+        import base64
+        import email
+
+        header = DraftHeader(subject="Test", to="bob@test.com")
+        pdf_data = b"%PDF-1.4 fake content"
+        attachments = [("invoice.pdf", "application/pdf", pdf_data)]
+        msg = build_message(header, "Please find the invoice.", attachments)
+
+        raw = base64.urlsafe_b64decode(msg["raw"])
+        parsed = email.message_from_bytes(raw)
+
+        # Top-level must be multipart/mixed
+        assert parsed.get_content_type() == "multipart/mixed"
+
+        parts = parsed.get_payload()
+        assert len(parts) == 2, f"Expected 2 parts (alternative + attachment), got {len(parts)}"
+
+        # First part must be multipart/alternative (plain + html)
+        alt_part = parts[0]
+        assert alt_part.get_content_type() == "multipart/alternative"
+        alt_payloads = alt_part.get_payload()
+        content_types = {p.get_content_type() for p in alt_payloads}
+        assert "text/plain" in content_types
+        assert "text/html" in content_types
+
+        # Second part must be the attachment
+        att_part = parts[1]
+        assert att_part.get_content_type() == "application/pdf"
+        assert att_part.get("Content-Transfer-Encoding", "").lower() == "base64"
+        disposition = att_part.get("Content-Disposition", "")
+        assert "attachment" in disposition
+        assert "invoice.pdf" in disposition
+
+        # Verify the data round-trips correctly
+        decoded = base64.b64decode(att_part.get_payload())
+        assert decoded == pdf_data
+
+    def test_build_message_attachment_relative_path_via_push(self, tmp_path, monkeypatch):
+        """Push correctly encodes attachment from relative path in MIME output."""
+        import base64
+        import email
+
+        att_file = tmp_path / "contract.pdf"
+        att_file.write_bytes(b"%PDF-1.4 contract")
+
+        draft_file = tmp_path / "test.draft.gax.md"
+        hdr = DraftHeader(subject="Attached", to="bob@test.com", attachments=["contract.pdf"])
+        draft_file.write_text(format_draft(hdr, "See attachment.\n"))
+
+        captured: list[dict] = []
+        mock_service = MagicMock()
+
+        def _fake_create(**kwargs):
+            captured.append(kwargs)
+            mock = MagicMock()
+            mock.execute.return_value = {"id": "d1", "message": {"id": "m1"}}
+            return mock
+
+        mock_service.users().drafts().create.side_effect = _fake_create
+        monkeypatch.setattr("gax.mail.draft.get_service", lambda *a, **kw: mock_service)
+        monkeypatch.setattr("gax.mail.draft.CONFIG_DIR", tmp_path / "no-config")
+
+        Draft(path=draft_file).push()
+
+        assert captured, "Gmail API create was not called"
+        body_arg = captured[0]["body"]
+        raw = base64.urlsafe_b64decode(body_arg["message"]["raw"])
+        parsed = email.message_from_bytes(raw)
+        att = [p for p in parsed.walk() if p.get_filename() == "contract.pdf"]
+        assert att, "No attachment part named contract.pdf found in MIME"
+        decoded = base64.b64decode(att[0].get_payload())
+        assert decoded == b"%PDF-1.4 contract"
+
     def test_build_message_with_thread_id(self):
         """Thread ID and reply headers are set."""
         header = DraftHeader(
