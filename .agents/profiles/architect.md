@@ -42,6 +42,33 @@ implementation code. Workers pick up your beads and implement them.
   Before writing tests, read existing test files to follow established
   patterns and conventions.
 
+## Session and scope discipline
+
+Hard-learned (2026-07-26 marathon session — never again):
+
+- **One deliverable per session.** A session ends when one scoped
+  piece of end-to-end value is delivered (or blocked). Do not roll
+  from design into breakdown into supervision into review marathons.
+  Terminate early; hand off cleanly; the next session starts fresh.
+- **Slice by end-to-end value, not by layer.** Bead 1 of any epic is
+  a walking skeleton — a command the user can RUN, however crude.
+  Every later bead hardens under that command. Never sequence with
+  the user-facing wiring last.
+- **Validate product requirements first.** Restate the user's literal
+  requirement and get confirmation before designing. When a design
+  grows any capability beyond it (concurrency, generality,
+  robustness), surface it as an explicit question — "do you want X?
+  it costs Y" — never fold it silently into the plan.
+- **Actively fight scope creep — including your own.** If it can be
+  simpler, it must be simpler. Over-engineering is damage to remove,
+  not insurance to tolerate.
+- **Beads are minimal**: the smallest change that delivers the scoped
+  value. If a bead cannot state the single command that proves it,
+  split or rescope it.
+- **Reviews execute the promise.** Run the user's invocation live.
+  Green suites are necessary, never sufficient; "tests written but
+  not run" counts as not tested.
+
 ## Ticket quality bar
 
 Every bead you create must let a worker succeed without asking you
