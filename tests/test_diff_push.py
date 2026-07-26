@@ -17,6 +17,7 @@ from gax.gdoc.ir import (
 )
 from gax.gdoc.diff_push import (
     EditOp,
+    ThreeWayPlan,
     _splice_text_requests,
     _span_style_requests,
     ast_diff,
@@ -539,6 +540,86 @@ class TestPushPlan:
         assert "Pull first" in plan.error
         assert len(plan.mutations) == 0
         assert plan.is_empty
+
+
+class TestIsEmptySemantics:
+    """ThreeWayPlan.is_empty must check BOTH ops and mutations (gax-0uv)."""
+
+    def test_ops_only_not_empty(self):
+        """ops=[...], mutations=[] → not empty."""
+        plan = ThreeWayPlan(
+            ops=[EditOp("replace", 0, 0, 0, 0)],
+            mutations=[],
+            summary_lines=[],
+        )
+        assert not plan.is_empty
+
+    def test_mutations_only_not_empty(self):
+        """ops=[], mutations=[...] → not empty (style-only tree edits)."""
+        plan = ThreeWayPlan(
+            ops=[],
+            mutations=[{"updateTextStyle": {"range": {"startIndex": 1}}}],
+            summary_lines=[],
+        )
+        assert not plan.is_empty
+
+    def test_both_empty_is_empty(self):
+        """ops=[], mutations=[] → empty."""
+        plan = ThreeWayPlan(
+            ops=[],
+            mutations=[],
+            summary_lines=[],
+        )
+        assert plan.is_empty
+
+    def test_both_populated_not_empty(self):
+        """ops=[...], mutations=[...] → not empty."""
+        plan = ThreeWayPlan(
+            ops=[EditOp("replace", 0, 0, 0, 0)],
+            mutations=[{"deleteContentRange": {}}],
+            summary_lines=[],
+        )
+        assert not plan.is_empty
+
+
+class TestTreePlanRevisionGuard:
+    """compute_tree_plan must honour the revision guard (gax-0uv)."""
+
+    def test_revision_mismatch_refuses(self):
+        """Mismatched stored vs remote revision → error, no mutations."""
+        body = [_make_paragraph(1, "Hello world")]
+        from gax.gdoc.diff_push import compute_tree_plan
+
+        plan = compute_tree_plan(
+            local_tree_body=[{"p": "Hello world"}],
+            local_appendix=None,
+            remote_body=body,
+            remote_revision="rev-NEW",
+            stored_revision="rev-OLD",
+            tab_id="t.1",
+        )
+
+        assert plan.error is not None
+        assert "Pull first" in plan.error
+        assert plan.revision_changed is True
+        assert plan.is_empty
+
+    def test_same_revision_no_error(self):
+        """Same stored and remote revision → no error."""
+        body = [_make_paragraph(1, "Hello world")]
+        from gax.gdoc.diff_push import compute_tree_plan
+
+        plan = compute_tree_plan(
+            local_tree_body=[{"p": "Hello world"}],
+            local_appendix=None,
+            remote_body=body,
+            remote_revision="rev1",
+            stored_revision="rev1",
+            tab_id="t.1",
+        )
+
+        assert plan.error is None
+        assert plan.revision_changed is False
 
 
 # =============================================================================

@@ -354,6 +354,8 @@ class TestPushConfirmationConsistency:
 DISPATCHABLE_EXTENSIONS = [
     (".doc.gax.md",    "gax/doc",       "Tab"),
     (".tab.gax.md",    "gax/doc",       "Tab"),
+    (".doc.gax.yaml",  None,            "Tab"),
+    (".tab.gax.yaml",  None,            "Tab"),
     (".tab.sheet.gax.md", "gax/sheet",  "SheetTab"),
     (".draft.gax.md",  "gax/draft",     "Draft"),
     (".mail.gax.md",   "gax/mail",      "Thread"),
@@ -386,6 +388,12 @@ class TestFromFileDispatch:
             # SheetTab.from_file needs spreadsheet_id + tab in the header
             f.write_text(
                 "---\nspreadsheet_id: abc123\ntab: Sheet1\n---\ncontent\n"
+            )
+        elif file_type is None:
+            # Tree YAML files (no type: field, uses kind:)
+            f.write_text(
+                "kind: doc-tree/v1\nsource: https://example.com\n"
+                "body:\n- p: hello\n"
             )
         else:
             f.write_text(f"---\ntype: {file_type}\n---\ncontent\n")
@@ -505,3 +513,98 @@ class TestConfirmFlowSymmetry:
                     "only the prompt should be skipped with -y"
                 )
                 break
+
+
+# =============================================================================
+# Tree mode CLI surface (gax-cvi.8)
+# =============================================================================
+
+
+class TestTreeModeCLI:
+    """doc clone/checkout must accept --format=tree; gax get must accept --json."""
+
+    def test_doc_clone_has_format_option(self):
+        """doc clone must have -f/--format option with md/tree choices."""
+        cmd = get_command(["doc", "clone"])
+        assert cmd is not None
+        fmt_param = next(
+            (p for p in cmd.params if p.name == "fmt" and isinstance(p, click.Option)),
+            None,
+        )
+        assert fmt_param is not None, "'doc clone' missing -f/--format option"
+        assert set(fmt_param.opts) == {"-f", "--format"}, (
+            f"expected {{'-f', '--format'}}, got {fmt_param.opts}"
+        )
+        assert set(fmt_param.type.choices) == {"md", "tree"}, (
+            f"expected {{'md', 'tree'}}, got {fmt_param.type.choices}"
+        )
+
+    def test_doc_checkout_has_format_option(self):
+        """doc checkout must have -f/--format option with md/tree choices."""
+        cmd = get_command(["doc", "checkout"])
+        assert cmd is not None
+        fmt_param = next(
+            (p for p in cmd.params if p.name == "fmt" and isinstance(p, click.Option)),
+            None,
+        )
+        assert fmt_param is not None, "'doc checkout' missing -f/--format option"
+        assert set(fmt_param.opts) == {"-f", "--format"}, (
+            f"expected {{'-f', '--format'}}, got {fmt_param.opts}"
+        )
+        assert set(fmt_param.type.choices) == {"md", "tree"}, (
+            f"expected {{'md', 'tree'}}, got {fmt_param.type.choices}"
+        )
+
+    def test_unified_get_has_json_flag(self):
+        """gax get must have --json flag."""
+        cmd = get_command(["get"])
+        assert cmd is not None
+        assert has_option(cmd, "as_json", "--json", is_flag=True), (
+            "'gax get' missing --json flag"
+        )
+
+    def test_tree_yaml_dispatches_to_tab(self, tmp_path):
+        """A .doc.gax.yaml file must dispatch to Tab via Resource.from_file."""
+        f = tmp_path / "report.doc.gax.yaml"
+        f.write_text(
+            "kind: doc-tree/v1\nsource: https://docs.google.com/document/d/abc/edit\n"
+            "tab: Tab 1\nbody:\n- p: hello\n"
+        )
+        r = Resource.from_file(f)
+        assert r.__class__.__name__ == "Tab"
+
+    def test_tab_tree_yaml_dispatches_to_tab(self, tmp_path):
+        """A .tab.gax.yaml file must dispatch to Tab via Resource.from_file."""
+        f = tmp_path / "details.tab.gax.yaml"
+        f.write_text(
+            "kind: doc-tree/v1\nsource: https://docs.google.com/document/d/abc/edit\n"
+            "tab: Details\nbody:\n- p: world\n"
+        )
+        r = Resource.from_file(f)
+        assert r.__class__.__name__ == "Tab"
+
+    def test_toplevel_clone_has_tree_format(self):
+        """Top-level 'gax clone' must accept --format=tree (gax-cvi.18)."""
+        cmd = get_command(["clone"])
+        assert cmd is not None
+        fmt_param = next(
+            (p for p in cmd.params if p.name == "fmt" and isinstance(p, click.Option)),
+            None,
+        )
+        assert fmt_param is not None, "'gax clone' missing -f/--format option"
+        assert "tree" in set(fmt_param.type.choices), (
+            f"'gax clone' --format must include 'tree', got {fmt_param.type.choices}"
+        )
+
+    def test_toplevel_checkout_has_tree_format(self):
+        """Top-level 'gax checkout' must accept --format=tree (gax-cvi.18)."""
+        cmd = get_command(["checkout"])
+        assert cmd is not None
+        fmt_param = next(
+            (p for p in cmd.params if p.name == "fmt" and isinstance(p, click.Option)),
+            None,
+        )
+        assert fmt_param is not None, "'gax checkout' missing -f/--format option"
+        assert "tree" in set(fmt_param.type.choices), (
+            f"'gax checkout' --format must include 'tree', got {fmt_param.type.choices}"
+        )

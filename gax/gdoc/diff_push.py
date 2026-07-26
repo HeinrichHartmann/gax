@@ -933,7 +933,7 @@ class ThreeWayPlan:
 
     @property
     def is_empty(self) -> bool:
-        return len(self.ops) == 0
+        return not self.ops and not self.mutations
 
 
 def compute_three_way_plan(

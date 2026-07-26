@@ -468,15 +468,28 @@ def doc_tab_push(file: Path, yes: bool, force_replace: bool, bulk: bool, body: P
     is_flag=True,
     help="Suppress multi-tab status message",
 )
+@click.option(
+    "-f",
+    "--format",
+    "fmt",
+    type=click.Choice(["md", "tree"]),
+    default="md",
+    help="Output format: md (default) or tree (doc-tree/v1 YAML)",
+)
 @gax_command
-def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool):
-    """Clone a Google Doc to a local .doc.gax.md file.
+def doc_clone(url: str, output: Path | None, with_comments: bool, quiet: bool, fmt: str):
+    """Clone a Google Doc to a local file.
+
+    \b
+    Formats:
+        md   (default) — .doc.gax.md with YAML frontmatter + markdown body
+        tree           — .doc.gax.yaml with doc-tree/v1 compressed YAML
 
     Clones a single tab. For multi-tab documents, use 'gax doc checkout'.
     """
     from .doc import extract_doc_id, get_tabs_list
 
-    file_path = Tab.from_url(url).clone(output=output, with_comments=with_comments)
+    file_path = Tab.from_url(url).clone(output=output, with_comments=with_comments, fmt=fmt)
     success(f"Created: {file_path}")
 
     if not quiet:
@@ -592,11 +605,24 @@ def doc_push(folder: Path, yes: bool, force_replace: bool, bulk: bool):
     is_flag=True,
     help="Include document comments as a separate file",
 )
+@click.option(
+    "-f",
+    "--format",
+    "fmt",
+    type=click.Choice(["md", "tree"]),
+    default="md",
+    help="Output format: md (default) or tree (doc-tree/v1 YAML)",
+)
 @gax_command
-def doc_checkout(url: str, output: Path | None, with_comments: bool):
+def doc_checkout(url: str, output: Path | None, with_comments: bool, fmt: str):
     """Checkout all tabs to individual files in a folder.
 
-    Creates a folder with individual .doc.gax.md files for each tab.
+    \b
+    Formats:
+        md   (default) — .doc.gax.md.d/ folder with .doc.gax.md files
+        tree           — .doc.gax.yaml.d/ folder with .doc.gax.yaml files
+
+    Creates a folder with individual files for each tab.
     """
-    folder = Doc.from_url(url).checkout(output=output, with_comments=with_comments)
+    folder = Doc.from_url(url).checkout(output=output, with_comments=with_comments, fmt=fmt)
     success(f"Checked out to: {folder}")

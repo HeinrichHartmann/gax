@@ -257,6 +257,29 @@ def _tab_content_to_markdown(doc: dict, tab: dict) -> tuple[str, str]:
     return md, baseline_hash
 
 
+def _tab_content_to_tree_yaml(doc: dict, tab: dict, source_url: str) -> str:
+    """Convert a tab's body content to tree YAML via the tree IR.
+
+    Returns the doc-tree/v1 YAML string. Stamps ``revision:`` from
+    the document's ``revisionId`` so the ADR 037 push guard works.
+    """
+    from .tree import serialize_tree_yaml
+
+    doc_tab = tab.get("documentTab", {})
+    body = doc_tab.get("body", {}).get("content", [])
+    lists = doc_tab.get("lists") or doc.get("lists")
+    tab_title = tab.get("tabProperties", {}).get("title", "Tab")
+    revision_id = doc.get("revisionId", "")
+
+    return serialize_tree_yaml(
+        body,
+        source=source_url,
+        tab=tab_title,
+        revision=revision_id,
+        lists=lists,
+    )
+
+
 def _build_baseline_json(doc: dict, tab: dict) -> dict:
     """Build the baseline JSON dict from a fetched doc/tab pair.
 
@@ -1003,6 +1026,22 @@ def _add_comments_to_sections(
 # =============================================================================
 
 
+def _is_tree_file(path: Path) -> bool:
+    """Check if a path is a tree YAML file (.doc.gax.yaml or .tab.gax.yaml)."""
+    name = path.name.lower()
+    return name.endswith(".doc.gax.yaml") or name.endswith(".tab.gax.yaml")
+
+
+def _parse_tree_file(path: Path) -> dict:
+    """Read a .doc.gax.yaml or .tab.gax.yaml file and return parsed dict.
+
+    Returns dict with keys: source, kind, tab, body, appendix.
+    """
+    content = path.read_text(encoding="utf-8")
+    from .tree import validated_parse
+    return validated_parse(content)
+
+
 def _safe_filename(name: str) -> str:
     """Sanitize a string for use as a filename."""
     safe = re.sub(r'[<>:"/\\|?*]', "-", name)
@@ -1138,37 +1177,64 @@ class Tab(Resource):
     name = "doc-tab"
     URL_PATTERN = r"docs\.google\.com/document/d/"
     FILE_TYPE = "gax/doc"
-    FILE_EXTENSIONS = (".doc.gax.md", ".tab.gax.md")
+    FILE_EXTENSIONS = (".doc.gax.md", ".tab.gax.md", ".doc.gax.yaml", ".tab.gax.yaml")
     SCOPES = ("documents", "drive.readonly")
 
     def clone(self, output: Path | None = None, **kw) -> Path:
-        """Clone a single tab to a .doc.gax.md file.
+        """Clone a single tab to a .doc.gax.md or .doc.gax.yaml file.
 
         Keyword args:
             tab_name: specific tab to clone (default: first tab)
             with_comments: include comments section
             quiet: suppress multi-tab hint
+            fmt: "md" (default) or "tree" — output format
         """
         tab_name = kw.get("tab_name")
         with_comments = kw.get("with_comments", False)
+        fmt = kw.get("fmt", "md")
 
         document_id = extract_doc_id(self.url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
+        # Fetch doc (needed for both formats)
+        doc = _fetch_doc(document_id)
+        doc_title = doc.get("title", "Untitled")
+        flat = _flatten_tabs(doc.get("tabs", []))
+
+        if not flat:
+            raise ValueError("Document has no tabs")
+
         if tab_name:
-            # Clone specific tab
+            # Find matching tab
+            matched = [(t, i) for t, i in flat if i.title == tab_name]
+            if not matched:
+                raise ValueError(f"Tab not found: {tab_name}")
+            target_tab, target_info = matched[0]
+        else:
+            target_tab, target_info = flat[0]
+
+        # --- Tree format ---
+        if fmt == "tree":
+            tree_yaml = _tab_content_to_tree_yaml(doc, target_tab, source_url)
+
+            if output:
+                file_path = output
+            else:
+                safe_name = _safe_filename(doc_title if not tab_name else tab_name)
+                suffix = ".tab.gax.yaml" if tab_name else ".doc.gax.yaml"
+                file_path = Path(f"{safe_name}{suffix}")
+
+            if file_path.exists():
+                raise ValueError(f"File already exists: {file_path}")
+
+            file_path.write_text(tree_yaml, encoding="utf-8")
+            return file_path
+
+        # --- Markdown format (default) ---
+        if tab_name:
             section = pull_single_tab(document_id, tab_name, source_url)
         else:
-            # Clone first tab via full document fetch
-            doc = _fetch_doc(document_id)
-            doc_title = doc.get("title", "Untitled")
-            flat = _flatten_tabs(doc.get("tabs", []))
-
-            if not flat:
-                raise ValueError("Document has no tabs")
-
-            first_tab, first_info = flat[0]
-            content, baseline_hash = _tab_content_to_markdown(doc, first_tab)
+            content, baseline_hash = _tab_content_to_markdown(doc, target_tab)
             revision_id = doc.get("revisionId", "")
 
             time_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1177,11 +1243,11 @@ class Tab(Resource):
                 source=source_url,
                 time=time_str,
                 section=1,
-                section_title=first_info.title,
+                section_title=target_info.title,
                 content=content,
-                tab_depth=first_info.depth,
-                tab_has_children=first_info.has_children,
-                tab_id=first_info.id,
+                tab_depth=target_info.depth,
+                tab_has_children=target_info.has_children,
+                tab_id=target_info.id,
                 baseline=baseline_hash,
                 revision=revision_id,
             )
@@ -1217,13 +1283,26 @@ class Tab(Resource):
         return Doc(url=self.url).checkout(output=output, **kw)
 
     def get(self, **kw) -> str:
-        """Fetch current remote content for this tab. Read-only."""
+        """Fetch current remote content for this tab. Read-only.
+
+        Keyword args:
+            json: if True, return raw Docs API JSON instead of markdown.
+        """
+        as_json = kw.get("json", False)
+
+        if _is_tree_file(self.path):
+            return self._get_tree(as_json=as_json)
+
         section = _parse_tab_file(self.path)
         source_url = section.source
         if not source_url:
             raise ValueError("No source URL found in file")
 
         document_id = extract_doc_id(source_url)
+
+        if as_json:
+            return self._get_json(document_id, section.section_title)
+
         content = self.path.read_text(encoding="utf-8")
         sections = parse_multipart(content)
 
@@ -1235,8 +1314,47 @@ class Tab(Resource):
             remote_sections = pull_doc(document_id, source_url)
             return "\n\n".join(s.content for s in remote_sections)
 
+    def _get_tree(self, *, as_json: bool = False) -> str:
+        """get() for tree YAML files."""
+        tree_doc = _parse_tree_file(self.path)
+        source_url = tree_doc.get("source", "")
+        tab_name = tree_doc.get("tab", "")
+        if not source_url:
+            raise ValueError("No source URL found in tree file")
+
+        document_id = extract_doc_id(source_url)
+
+        if as_json:
+            return self._get_json(document_id, tab_name)
+
+        # Return tree YAML of current remote
+        doc = _fetch_doc(document_id)
+        flat = _flatten_tabs(doc.get("tabs", []))
+        for tab, info in flat:
+            if info.title == tab_name:
+                return _tab_content_to_tree_yaml(doc, tab, source_url)
+
+        raise ValueError(f"Tab '{tab_name}' not found in document")
+
+    def _get_json(self, document_id: str, tab_name: str) -> str:
+        """Return raw Docs API JSON for a single tab."""
+        import json as json_mod
+
+        doc = _fetch_doc(document_id)
+        flat = _flatten_tabs(doc.get("tabs", []))
+
+        for tab, info in flat:
+            if info.title == tab_name:
+                doc_tab = tab.get("documentTab", {})
+                return json_mod.dumps(doc_tab, indent=2)
+
+        raise ValueError(f"Tab '{tab_name}' not found in document")
+
     def pull(self, **kw) -> None:
         """Refresh a tab file from remote."""
+        if _is_tree_file(self.path):
+            return self._pull_tree()
+
         with_comments = kw.get("with_comments", False)
 
         section = _parse_tab_file(self.path)
@@ -1270,6 +1388,27 @@ class Tab(Resource):
 
         self.path.write_text(new_content, encoding="utf-8")
 
+    def _pull_tree(self) -> None:
+        """Pull for tree YAML files — re-serialize remote as tree YAML."""
+        tree_doc = _parse_tree_file(self.path)
+        source_url = tree_doc.get("source", "")
+        tab_name = tree_doc.get("tab", "")
+        if not source_url:
+            raise ValueError("No source URL found in tree file")
+
+        document_id = extract_doc_id(source_url)
+        doc = _fetch_doc(document_id)
+        flat = _flatten_tabs(doc.get("tabs", []))
+
+        for tab, info in flat:
+            if info.title == tab_name:
+                new_yaml = _tab_content_to_tree_yaml(doc, tab, source_url)
+                self.path.write_text(new_yaml, encoding="utf-8")
+                logger.info(f"Pulled tree: {self.path.name}")
+                return
+
+        raise ValueError(f"Tab '{tab_name}' not found in document")
+
     def diff(self, **kw) -> str | None:
         """Preview changes between local tab and remote.
 
@@ -1277,6 +1416,9 @@ class Tab(Resource):
         Accepts ``body`` kwarg (Path) to use an external file as the local content
         instead of the tracking file's content.
         """
+        if _is_tree_file(self.path):
+            return self._diff_tree()
+
         body: Path | None = kw.get("body", None)
 
         section = _parse_tab_file(self.path)
@@ -1308,6 +1450,40 @@ class Tab(Resource):
 
         return "\n".join(line.rstrip("\n") for line in diff_lines)
 
+    def _diff_tree(self) -> str | None:
+        """Diff for tree YAML files — text diff of tree YAML."""
+        tree_doc = _parse_tree_file(self.path)
+        source_url = tree_doc.get("source", "")
+        tab_name = tree_doc.get("tab", "")
+        if not source_url:
+            raise ValueError("No source URL found in tree file")
+
+        document_id = extract_doc_id(source_url)
+        doc = _fetch_doc(document_id)
+        flat = _flatten_tabs(doc.get("tabs", []))
+
+        for tab, info in flat:
+            if info.title == tab_name:
+                remote_yaml = _tab_content_to_tree_yaml(doc, tab, source_url)
+                local_yaml = self.path.read_text(encoding="utf-8")
+                local_lines = local_yaml.splitlines(keepends=True)
+                remote_lines = remote_yaml.splitlines(keepends=True)
+
+                diff_lines = list(
+                    difflib.unified_diff(
+                        remote_lines,
+                        local_lines,
+                        fromfile="remote",
+                        tofile="local",
+                        lineterm="",
+                    )
+                )
+                if not diff_lines:
+                    return None
+                return "\n".join(line.rstrip("\n") for line in diff_lines)
+
+        raise ValueError(f"Tab '{tab_name}' not found in document")
+
     def push(self, **kw) -> None:
         """Push local tab to remote.
 
@@ -1317,6 +1493,9 @@ class Tab(Resource):
                   tracking file's content; also updates the tracking file so
                   subsequent pull round-trips are consistent.
         """
+        if _is_tree_file(self.path):
+            return self._push_tree()
+
         use_patch = kw.get("patch", False)
         body: Path | None = kw.get("body", None)
 
@@ -1357,6 +1536,77 @@ class Tab(Resource):
         # Refresh baseline after successful push (ADR 034 §1)
         _refresh_baseline_after_push(self.path, document_id, tab_name)
 
+    def _push_tree(self) -> None:
+        """Push for tree YAML files — compute_tree_plan + apply mutations."""
+        from .diff_push import compute_tree_plan
+
+        tree_doc = _parse_tree_file(self.path)
+        source_url = tree_doc.get("source", "")
+        tab_name = tree_doc.get("tab", "")
+        stored_revision = tree_doc.get("revision", "")
+        if not source_url:
+            raise ValueError("No source URL found in tree file")
+
+        document_id = extract_doc_id(source_url)
+        doc = _fetch_doc(document_id)
+        flat = _flatten_tabs(doc.get("tabs", []))
+        remote_revision = doc.get("revisionId", "")
+
+        matched_tab = None
+        tab_id = ""
+        for tab, info in flat:
+            if info.title == tab_name:
+                matched_tab = tab
+                tab_id = info.id
+                break
+
+        if matched_tab is None:
+            raise ValueError(f"Tab '{tab_name}' not found in document")
+
+        doc_tab = matched_tab.get("documentTab", {})
+        remote_body = doc_tab.get("body", {}).get("content", [])
+        lists = doc_tab.get("lists") or doc.get("lists")
+
+        plan = compute_tree_plan(
+            local_tree_body=tree_doc.get("body", []),
+            local_appendix=tree_doc.get("appendix"),
+            remote_body=remote_body,
+            remote_revision=remote_revision,
+            stored_revision=stored_revision,
+            tab_id=tab_id,
+            lists=lists,
+        )
+
+        if plan.error:
+            raise ValueError(f"Tree push failed: {plan.error}")
+
+        if plan.is_empty:
+            logger.info("No differences to push.")
+            return
+
+        # Apply mutations
+        from ..auth import get_service
+        service = get_service("docs", "v1")
+        service.documents().batchUpdate(
+            documentId=document_id,
+            body={"requests": plan.mutations},
+        ).execute()
+
+        logger.info(f"Tree push: {len(plan.mutations)} mutation(s) applied")
+
+        # Post-push refresh: re-serialize from remote to update
+        # revision stamp and baseline (like md _refresh_baseline_after_push)
+        refreshed_doc = _fetch_doc(document_id)
+        refreshed_flat = _flatten_tabs(refreshed_doc.get("tabs", []))
+        for rtab, rinfo in refreshed_flat:
+            if rinfo.title == tab_name:
+                new_yaml = _tab_content_to_tree_yaml(
+                    refreshed_doc, rtab, source_url,
+                )
+                self.path.write_text(new_yaml, encoding="utf-8")
+                logger.info("Post-push tree refresh done")
+                break
+
 
 # =============================================================================
 # Doc(Resource) — whole document, folder
@@ -1381,12 +1631,20 @@ class Doc(Resource):
 
         Keyword args:
             with_comments: include document comments
+            fmt: "md" (default) or "tree" — output format
         """
         with_comments = kw.get("with_comments", False)
+        fmt = kw.get("fmt", "md")
         document_id = extract_doc_id(self.url)
         source_url = f"https://docs.google.com/document/d/{document_id}/edit"
 
         logger.info(f"Fetching: {document_id}")
+
+        # --- Tree format ---
+        if fmt == "tree":
+            return self._clone_tree(output, document_id, source_url)
+
+        # --- Markdown format (default) ---
         sections = pull_doc(document_id, source_url)
 
         if not sections:
@@ -1452,6 +1710,71 @@ class Doc(Resource):
             created += 1
 
         logger.info(f"Checked out: {created}, Skipped: {skipped}")
+        return folder
+
+    def _clone_tree(
+        self,
+        output: Path | None,
+        document_id: str,
+        source_url: str,
+    ) -> Path:
+        """Clone all tabs as tree YAML into a .doc.gax.yaml.d/ folder."""
+        doc = _fetch_doc(document_id)
+        doc_title = doc.get("title", "Untitled")
+        revision_id = doc.get("revisionId", "")
+        flat = _flatten_tabs(doc.get("tabs", []))
+
+        if not flat:
+            raise ValueError("Document has no tabs")
+
+        if output:
+            folder = output
+        else:
+            folder = Path(f"{_safe_filename(doc_title)}.doc.gax.yaml.d")
+
+        folder.mkdir(parents=True, exist_ok=True)
+
+        # Write .gax.yaml metadata (same as markdown checkout)
+        tab_tree = []
+        for tab, info in flat:
+            safe = _safe_filename(info.title)
+            tab_tree.append({
+                "id": info.id,
+                "title": info.title,
+                "path": f"{safe}.doc.gax.yaml",
+                "depth": info.depth,
+            })
+
+        metadata = write_sync_header({
+            "type": "gax/doc-checkout",
+            "document_id": document_id,
+            "url": source_url,
+            "title": doc_title,
+            "revision": revision_id,
+            "tabs": tab_tree,
+        })
+        metadata_path = folder / ".gax.yaml"
+        with open(metadata_path, "w") as f:
+            yaml.dump(
+                metadata, f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+
+        created = 0
+        for tab, info in flat:
+            safe = _safe_filename(info.title)
+            file_path = folder / f"{safe}.doc.gax.yaml"
+            if file_path.exists():
+                continue
+
+            tree_yaml = _tab_content_to_tree_yaml(doc, tab, source_url)
+            file_path.write_text(tree_yaml, encoding="utf-8")
+            logger.info(f"Created: {file_path.name}")
+            created += 1
+
+        logger.info(f"Checked out {created} tab(s) as tree YAML")
         return folder
 
     def checkout(self, output: Path | None = None, **kw) -> Path:

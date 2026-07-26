@@ -1882,3 +1882,180 @@ class TestErrorPaths:
     def test_schema_error_str(self):
         err = SchemaError("$.body[0].p", "something is wrong")
         assert str(err) == "$.body[0].p: something is wrong"
+
+
+# ============================================================================
+# serialize_tree_yaml tests (gax-cvi.8)
+# ============================================================================
+
+
+class TestSerializeTreeYaml:
+    """Test the serialize_tree_yaml convenience function."""
+
+    def test_basic_serialization(self):
+        """Serialize a simple doc body to tree YAML."""
+        from gax.gdoc.tree import serialize_tree_yaml
+
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "HEADING_1"},
+                    "elements": [{"textRun": {"content": "Title\n", "textStyle": {}}}],
+                }
+            },
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "Hello world\n", "textStyle": {}}}],
+                }
+            },
+        ]
+
+        yaml_str = serialize_tree_yaml(body, source="https://example.com", tab="Tab 1")
+        doc = validated_parse(yaml_str)
+
+        assert doc["kind"] == "doc-tree/v1"
+        assert doc["source"] == "https://example.com"
+        assert doc["tab"] == "Tab 1"
+        assert len(doc["body"]) == 2
+        assert "h1" in doc["body"][0]
+        assert "p" in doc["body"][1]
+
+    def test_serialization_with_lists(self):
+        """Serialize body with list items and lists metadata."""
+        from gax.gdoc.tree import serialize_tree_yaml
+
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "bullet": {"listId": "kix.a", "nestingLevel": 0},
+                    "elements": [{"textRun": {"content": "Item one\n", "textStyle": {}}}],
+                }
+            },
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "bullet": {"listId": "kix.a", "nestingLevel": 0},
+                    "elements": [{"textRun": {"content": "Item two\n", "textStyle": {}}}],
+                }
+            },
+        ]
+        lists = {
+            "kix.a": {
+                "listProperties": {
+                    "nestingLevels": [{"glyphType": "GLYPH_TYPE_UNSPECIFIED"}],
+                }
+            }
+        }
+
+        yaml_str = serialize_tree_yaml(body, lists=lists)
+        doc = validated_parse(yaml_str)
+        assert doc["kind"] == "doc-tree/v1"
+        # Should be grouped into a ul container
+        assert any("ul" in b for b in doc["body"] if isinstance(b, dict))
+
+    def test_round_trip_through_validated_parse(self):
+        """serialize_tree_yaml output passes validated_parse without errors."""
+        from gax.gdoc.tree import serialize_tree_yaml
+
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "Simple\n", "textStyle": {}}}],
+                }
+            },
+        ]
+        yaml_str = serialize_tree_yaml(body)
+        # Should not raise
+        doc = validated_parse(yaml_str)
+        assert doc["body"][0]["p"] == "Simple"
+
+    def test_revision_field_stamped(self):
+        """serialize_tree_yaml stamps revision: in output (ADR 037 guard)."""
+        from gax.gdoc.tree import serialize_tree_yaml
+
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "Text\n", "textStyle": {}}}],
+                }
+            },
+        ]
+        yaml_str = serialize_tree_yaml(
+            body, source="https://example.com", revision="rev-abc123",
+        )
+        doc = validated_parse(yaml_str)
+        assert doc.get("revision") == "rev-abc123"
+
+    def test_revision_omitted_when_empty(self):
+        """serialize_tree_yaml omits revision: when not provided."""
+        from gax.gdoc.tree import serialize_tree_yaml
+
+        body = [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "Text\n", "textStyle": {}}}],
+                }
+            },
+        ]
+        yaml_str = serialize_tree_yaml(body)
+        doc = validated_parse(yaml_str)
+        assert "revision" not in doc
+
+
+class TestIsTreeFile:
+    """Test _is_tree_file and _parse_tree_file helpers."""
+
+    def test_doc_gax_yaml_detected(self, tmp_path):
+        from gax.gdoc.doc import _is_tree_file
+        f = tmp_path / "report.doc.gax.yaml"
+        f.write_text("kind: doc-tree/v1\nbody: []\n")
+        assert _is_tree_file(f) is True
+
+    def test_tab_gax_yaml_detected(self, tmp_path):
+        from gax.gdoc.doc import _is_tree_file
+        f = tmp_path / "details.tab.gax.yaml"
+        f.write_text("kind: doc-tree/v1\nbody: []\n")
+        assert _is_tree_file(f) is True
+
+    def test_doc_gax_md_not_detected(self, tmp_path):
+        from gax.gdoc.doc import _is_tree_file
+        f = tmp_path / "report.doc.gax.md"
+        f.write_text("---\ntype: gax/doc\n---\ncontent\n")
+        assert _is_tree_file(f) is False
+
+    def test_parse_tree_file(self, tmp_path):
+        from gax.gdoc.doc import _parse_tree_file
+        f = tmp_path / "test.doc.gax.yaml"
+        f.write_text(
+            "kind: doc-tree/v1\n"
+            "source: https://docs.google.com/document/d/abc/edit\n"
+            "tab: Overview\n"
+            "body:\n"
+            "- h1: Hello\n"
+            "- p: World\n"
+        )
+        doc = _parse_tree_file(f)
+        assert doc["kind"] == "doc-tree/v1"
+        assert doc["source"] == "https://docs.google.com/document/d/abc/edit"
+        assert doc["tab"] == "Overview"
+        assert len(doc["body"]) == 2
+
+    def test_parse_tree_file_with_revision(self, tmp_path):
+        """_parse_tree_file preserves the revision: field (ADR 037)."""
+        from gax.gdoc.doc import _parse_tree_file
+        f = tmp_path / "test.doc.gax.yaml"
+        f.write_text(
+            "kind: doc-tree/v1\n"
+            "source: https://docs.google.com/document/d/abc/edit\n"
+            "tab: Overview\n"
+            "revision: rev-xyz789\n"
+            "body:\n"
+            "- p: Hello\n"
+        )
+        doc = _parse_tree_file(f)
+        assert doc.get("revision") == "rev-xyz789"

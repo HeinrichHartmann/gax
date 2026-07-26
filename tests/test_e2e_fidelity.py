@@ -1510,3 +1510,215 @@ class TestLiveRevisionGuard:
             )
         finally:
             _delete_scratch_doc(drive_svc, doc_id)
+
+
+# ---------------------------------------------------------------------------
+#  Live test: tree mode — style edit → push → re-fetch
+# ---------------------------------------------------------------------------
+
+
+def _populate_styled_doc(docs_svc, doc_id: str) -> dict:
+    """Populate a scratch doc with styled content for tree-mode testing.
+
+    Creates:
+        Block 0: HEADING_1  "Styled Heading"
+        Block 1: Paragraph  "Normal text with styled word here."
+                 ("styled" is red + italic)
+        Block 2: Paragraph  "Untouched paragraph."
+
+    Returns the full document JSON after population.
+    """
+    text = (
+        "Styled Heading\n"           # 15 chars → [1, 16)
+        "Normal text with styled word here.\n"  # 35 chars → [16, 51)
+        "Untouched paragraph."       # 21 chars → [51, 72)
+    )
+    requests = [
+        {"insertText": {"text": text, "location": {"index": 1}}},
+        # Heading style
+        {
+            "updateParagraphStyle": {
+                "range": {"startIndex": 1, "endIndex": 16},
+                "paragraphStyle": {"namedStyleType": "HEADING_1"},
+                "fields": "namedStyleType",
+            }
+        },
+        # Red + italic on "styled" (index 33-39 in the second paragraph)
+        {
+            "updateTextStyle": {
+                "range": {"startIndex": 33, "endIndex": 39},
+                "textStyle": {
+                    "italic": True,
+                    "foregroundColor": {
+                        "color": {"rgbColor": {"red": 1.0, "green": 0.0, "blue": 0.0}},
+                    },
+                },
+                "fields": "italic,foregroundColor",
+            }
+        },
+    ]
+    docs_svc.documents().batchUpdate(
+        documentId=doc_id, body={"requests": requests}
+    ).execute()
+    return _fetch_full_doc(docs_svc, doc_id)
+
+
+@pytest.mark.e2e
+class TestLiveTreeStylePush:
+    """Live API: tree clone → style edit → push → verify (gax-0uv)."""
+
+    def test_tree_style_edit_applied(self):
+        """Clone as tree → add bold to a run → push → re-fetch: bold is set.
+
+        This is the exact scenario that caught the is_empty bug: a
+        style-only edit produces mutations but no ops, so the old
+        is_empty (len(ops)==0) silently dropped it.
+        """
+        _skip_if_no_auth()
+        docs_svc, drive_svc = _make_services()
+        doc_id = _create_scratch_doc(drive_svc)
+        try:
+            doc = _populate_styled_doc(docs_svc, doc_id)
+            body, lists, tab_id = _doc_body_and_meta(doc)
+            revision = doc.get("revisionId", "")
+
+            # Compress to tree and parse
+            from gax.gdoc.tree import compress_doc, extract_appendix
+            from gax.gdoc.diff_push import compute_tree_plan
+
+            compressed = compress_doc(body, lists=lists)
+            appendix_result = extract_appendix(compressed.body)
+            tree_body = appendix_result.body
+
+            # Find the paragraph with "styled" and add bold to it
+            # Tree schema (doc-tree/v1): paragraphs with styled runs are
+            # {"p": {"runs": [...]}} and run text/bold use the short keys
+            # t: / b: (gax-pfu key unification).
+            edited_body = []
+            edit_hits = 0
+            for block in tree_body:
+                if isinstance(block, dict) and isinstance(block.get("p"), dict):
+                    inner = dict(block["p"])
+                    runs = inner.get("runs")
+                    if isinstance(runs, list):
+                        new_runs = []
+                        for run in runs:
+                            if isinstance(run, dict) and "styled" in run.get("t", ""):
+                                run = dict(run)
+                                run["b"] = True
+                                edit_hits += 1
+                            new_runs.append(run)
+                        inner["runs"] = new_runs
+                    edited_body.append({**block, "p": inner})
+                else:
+                    edited_body.append(block)
+            assert edit_hits == 1, (
+                f"Test edit must hit exactly one run, hit {edit_hits} — "
+                "fixture/schema drift, fix the test before trusting the plan"
+            )
+
+            # Compute plan — this must NOT be empty
+            plan = compute_tree_plan(
+                local_tree_body=edited_body,
+                local_appendix=appendix_result.appendix if appendix_result.appendix else None,
+                remote_body=body,
+                remote_revision=revision,
+                stored_revision=revision,
+                tab_id=tab_id,
+                lists=lists,
+            )
+
+            assert plan.error is None, f"Plan should succeed, got: {plan.error}"
+            assert not plan.is_empty, (
+                "Style-only edit must produce a non-empty plan "
+                f"(ops={len(plan.ops)}, mutations={len(plan.mutations)})"
+            )
+            assert len(plan.mutations) > 0, "Should produce mutations"
+
+            # Apply mutations
+            docs_svc.documents().batchUpdate(
+                documentId=doc_id, body={"requests": plan.mutations}
+            ).execute()
+
+            # Re-fetch and verify: the "styled" run should now be bold
+            doc_after = _fetch_full_doc(docs_svc, doc_id)
+            after_body, _, _ = _doc_body_and_meta(doc_after)
+
+            # Find the paragraph containing "styled"
+            found_bold = False
+            for elem in after_body:
+                para = elem.get("paragraph", {})
+                for text_elem in para.get("elements", []):
+                    tr = text_elem.get("textRun", {})
+                    if "styled" in tr.get("content", ""):
+                        ts = tr.get("textStyle", {})
+                        assert ts.get("bold") is True, (
+                            f"'styled' run should be bold after push, "
+                            f"got textStyle: {ts}"
+                        )
+                        found_bold = True
+            assert found_bold, "Should find the 'styled' run in the document"
+
+            # Untouched blocks should be identical (heading + third para)
+            _assert_untouched_identical(
+                doc, doc_after, edited_indices={1},
+                label="tree style edit",
+            )
+
+        finally:
+            _delete_scratch_doc(drive_svc, doc_id)
+
+    def test_tree_revision_guard_live(self):
+        """Tree plan refuses when remote changed after clone (live ADR 037).
+
+        Clone as tree with stored revision → remote edit via API →
+        compute_tree_plan with stale stored_revision → error.
+        """
+        _skip_if_no_auth()
+        docs_svc, drive_svc = _make_services()
+        doc_id = _create_scratch_doc(drive_svc)
+        try:
+            doc = _populate_styled_doc(docs_svc, doc_id)
+            body, lists, tab_id = _doc_body_and_meta(doc)
+            stored_rev = doc.get("revisionId", "")
+
+            from gax.gdoc.tree import compress_doc, extract_appendix
+            from gax.gdoc.diff_push import compute_tree_plan
+
+            compressed = compress_doc(body, lists=lists)
+            appendix_result = extract_appendix(compressed.body)
+
+            # Remote edit: insert text (changes revisionId)
+            docs_svc.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": [
+                    {"insertText": {
+                        "text": "REMOTE ",
+                        "location": {"index": 1},
+                    }},
+                ]},
+            ).execute()
+
+            # Re-fetch: new revision
+            doc_after = _fetch_full_doc(docs_svc, doc_id)
+            new_body, new_lists, _ = _doc_body_and_meta(doc_after)
+            new_rev = doc_after.get("revisionId", "")
+            assert new_rev != stored_rev, "Remote edit should change revision"
+
+            # Tree plan should refuse
+            plan = compute_tree_plan(
+                local_tree_body=appendix_result.body,
+                local_appendix=appendix_result.appendix if appendix_result.appendix else None,
+                remote_body=new_body,
+                remote_revision=new_rev,
+                stored_revision=stored_rev,
+                tab_id=tab_id,
+                lists=new_lists,
+            )
+            assert plan.revision_changed is True
+            assert plan.error is not None
+            assert "Pull first" in plan.error
+            assert plan.is_empty
+
+        finally:
+            _delete_scratch_doc(drive_svc, doc_id)

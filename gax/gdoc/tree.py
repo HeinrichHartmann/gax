@@ -1318,7 +1318,7 @@ class SchemaValidationError(Exception):
 # ============================================================================
 
 # Top-level document keys
-_HEADER_KEYS = {"source", "kind", "body", "tab", "appendix"}
+_HEADER_KEYS = {"source", "kind", "body", "tab", "appendix", "revision"}
 
 # The only accepted kind value
 ACCEPTED_KIND = "doc-tree/v1"
@@ -2135,3 +2135,56 @@ def validated_parse(yaml_str: str) -> dict:
         raise SchemaValidationError(conv_errors)
 
     return doc
+
+
+# ============================================================================
+# Tree YAML serialization
+# ============================================================================
+
+
+def serialize_tree_yaml(
+    body_content: list[dict],
+    *,
+    source: str = "",
+    tab: str = "",
+    revision: str = "",
+    lists: dict | None = None,
+) -> str:
+    """Serialize raw doc JSON body to a doc-tree/v1 YAML string.
+
+    Pipeline: compress_doc → extract_appendix → YAML dump.
+
+    Args:
+        body_content: The body.content array from documents().get().
+        source: Document source URL (optional header).
+        tab: Tab name (optional header).
+        revision: Document revisionId at pull/clone time (ADR 037 guard).
+        lists: Document lists metadata.
+
+    Returns:
+        YAML string conforming to the doc-tree/v1 schema.
+    """
+    import yaml
+
+    compressed = compress_doc(body_content, lists=lists)
+    appendix_result = extract_appendix(compressed.body)
+
+    doc: dict = {}
+    if source:
+        doc["source"] = source
+    doc["kind"] = ACCEPTED_KIND
+    if tab:
+        doc["tab"] = tab
+    if revision:
+        doc["revision"] = revision
+    doc["body"] = appendix_result.body
+    if appendix_result.appendix:
+        doc["appendix"] = appendix_result.appendix
+
+    return yaml.dump(
+        doc,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+        width=120,
+    )

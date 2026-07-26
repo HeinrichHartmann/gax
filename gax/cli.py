@@ -68,7 +68,8 @@ def _split_flags_and_files(
 @main.command("get")
 @click.argument("target")
 @click.option("--tab", help="Specific tab (for multi-tab resources)")
-def unified_get(target: str, tab: str | None):
+@click.option("--json", "as_json", is_flag=True, help="Output raw API JSON (docs only)")
+def unified_get(target: str, tab: str | None, as_json: bool):
     """Fetch remote content to stdout. Read-only, no local changes.
 
     Reads the source URL from the file's metadata, fetches current remote
@@ -77,9 +78,10 @@ def unified_get(target: str, tab: str | None):
     \b
     Examples:
         gax get report.doc.gax.md           # Print remote doc content
+        gax get report.doc.gax.yaml         # Print remote tree YAML
+        gax get report.doc.gax.md --json    # Print raw Docs API JSON
         gax get Budget.sheet.gax.md.d/      # Print all remote tabs
         gax get Budget.sheet.gax.md.d/ --tab Revenue  # Single tab
-        gax get tab.sheet.gax.md            # Print remote tab data
     """
     from .ui import error as ui_error
 
@@ -99,9 +101,11 @@ def unified_get(target: str, tab: str | None):
             sys.exit(1)
 
     try:
-        kw = {}
+        kw: dict = {}
         if tab:
             kw["tab"] = tab
+        if as_json:
+            kw["json"] = True
         content = resource.get(**kw)
         click.echo(content, nl=False)
     except NotImplementedError:
@@ -389,21 +393,49 @@ def unified_push(files: tuple[str, ...], yes: bool, values: bool):
 @docs.section("main")
 @main.command("get")
 @click.argument("source")
+@click.option("--json", "as_json", is_flag=True, help="Output raw API JSON (docs only)")
 @gax_command
-def get_cmd(source: str):
+def get_cmd(source: str, as_json: bool):
     """Fetch remote resource and print content to stdout.
 
-    Accepts a URL or a local .gax.md tracking file (reads the source URL
-    from its header). Content goes to stdout; progress goes to stderr.
-    No files are created or modified.
+    Accepts a URL or a local .gax.md/.gax.yaml tracking file (reads the
+    source URL from its header). Content goes to stdout; progress goes to
+    stderr. No files are created or modified.
+
+    Use ``--json`` to output raw Docs API JSON for a Google Doc file.
 
     \b
     Examples:
         gax get https://docs.google.com/document/d/abc123 | less
         gax get report.doc.gax.md | grep TODO
+        gax get report.doc.gax.md --json | jq '.body'
         diff <(gax get https://docs.google.com/...) local.md
     """
     import tempfile
+
+    # --json path: use Resource.from_file().get(json=True)
+    if as_json:
+        from .ui import error as ui_error
+
+        path = Path(source)
+        if not path.exists():
+            ui_error("--json requires a local file, not a URL")
+            sys.exit(1)
+        try:
+            resource = Resource.from_file(path)
+        except ValueError:
+            ui_error(f"Unsupported file: {source}")
+            sys.exit(1)
+        try:
+            content = resource.get(json=True)
+            click.echo(content, nl=False)
+        except NotImplementedError:
+            ui_error(f"get --json not supported for: {source}")
+            sys.exit(1)
+        except Exception as e:
+            ui_error(str(e))
+            sys.exit(1)
+        return
 
     def _print_file(file_path: Path, first_ref: list) -> None:
         sections = _parse(file_path.read_text(encoding="utf-8"))
@@ -451,17 +483,29 @@ def get_cmd(source: str):
     "-f",
     "--format",
     "fmt",
-    type=click.Choice(["md", "yaml"]),
+    type=click.Choice(["md", "yaml", "tree"]),
     default="md",
-    help="Output format (for forms)",
+    help="Output format (yaml: forms; tree: docs tree IR)",
 )
 @gax_command
 def clone(url: str, output: Path | None, fmt: str):
     """Clone a Google resource from URL.
 
     Supports Google Docs, Sheets, Forms, Gmail, and Calendar.
+
+    \b
+    Use ``--format tree`` for Google Docs tree IR (doc-tree/v1 YAML).
     """
-    from .ui import success
+    from .ui import success, error as ui_error
+
+    if fmt == "tree":
+        # Tree format only supported for Google Docs
+        try:
+            from .gdoc.doc import extract_doc_id
+            extract_doc_id(url)
+        except ValueError:
+            ui_error("tree format is only supported for Google Docs")
+            sys.exit(1)
 
     path = Resource.from_url(url).clone(output=output, fmt=fmt)
     success(f"Created: {path}")
@@ -471,7 +515,14 @@ def clone(url: str, output: Path | None, fmt: str):
 @main.command()
 @click.argument("url")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output folder")
-@click.option("-f", "--format", "fmt", default="md", help="Output format (for sheets)")
+@click.option(
+    "-f",
+    "--format",
+    "fmt",
+    type=click.Choice(["md", "csv", "tree"]),
+    default="md",
+    help="Output format (csv: sheets; tree: docs tree IR)",
+)
 @gax_command
 def checkout(url: str, output: Path | None, fmt: str):
     """Checkout a Google resource from URL into a folder of individual files.
@@ -483,8 +534,17 @@ def checkout(url: str, output: Path | None, fmt: str):
         gax checkout <docs-url>
         gax checkout <sheets-url> -f csv
         gax checkout <calendar-url> -o Week/
+        gax checkout <docs-url> -f tree
     """
-    from .ui import success
+    from .ui import success, error as ui_error
+
+    if fmt == "tree":
+        try:
+            from .gdoc.doc import extract_doc_id
+            extract_doc_id(url)
+        except ValueError:
+            ui_error("tree format is only supported for Google Docs")
+            sys.exit(1)
 
     path = Resource.from_url(url).checkout(output=output, fmt=fmt)
     success(f"Checked out: {path}")
