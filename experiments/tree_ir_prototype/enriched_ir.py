@@ -292,7 +292,11 @@ _TABLE_CELL_PARA_DEFAULT_KEYS: frozenset[str] = frozenset({
 _TABLE_CELL_DEFAULT_LINE_SPACING = 100
 
 
-def _extract_para_style(style_dict: dict, table_cell: bool = False) -> ParagraphStyle:
+def _extract_para_style(
+    style_dict: dict,
+    table_cell: bool = False,
+    list_item: bool = False,
+) -> ParagraphStyle:
     """Extract a ParagraphStyle from a Docs API paragraphStyle dict.
 
     Args:
@@ -300,6 +304,10 @@ def _extract_para_style(style_dict: dict, table_cell: bool = False) -> Paragraph
         table_cell: When True, suppress known table-cell default keys from raw
             (borders, shading, keepLines*, etc.) and the default lineSpacing
             of 100. These defaults are preserved in Table._raw_table for push.
+        list_item: When True, suppress indentStart and indentFirstLine because
+            they are implied by the list nesting depth (gax-tvv). Suppressing
+            them here prevents spurious diffs when serialize/parse round-trips
+            through YAML (where they are also elided via suppress_indent=True).
     """
     if not style_dict:
         return ParagraphStyle()
@@ -332,9 +340,11 @@ def _extract_para_style(style_dict: dict, table_cell: bool = False) -> Paragraph
     return ParagraphStyle(
         alignment=alignment,
         named_style=style_dict.get("namedStyleType"),
-        indent_start=_mag("indentStart"),
+        # For list items, indentStart/indentFirstLine are derived from depth;
+        # suppress them to prevent spurious diffs during serialize/parse cycles.
+        indent_start=None if list_item else _mag("indentStart"),
         indent_end=_mag("indentEnd"),
-        indent_first_line=_mag("indentFirstLine"),
+        indent_first_line=None if list_item else _mag("indentFirstLine"),
         line_spacing=line_spacing,
         space_above=_mag("spaceAbove"),
         space_below=_mag("spaceBelow"),
@@ -422,7 +432,9 @@ def from_doc_json(
         style = para.get("paragraphStyle", {})
         named_style = style.get("namedStyleType", "NORMAL_TEXT")
         bullet = para.get("bullet")
-        para_style = _extract_para_style(style)
+        # Pass list_item=True when this paragraph is a bullet; suppresses
+        # indentStart/indentFirstLine which are implied by depth (gax-tvv).
+        para_style = _extract_para_style(style, list_item=(bullet is not None))
 
         # Heading
         if named_style in HEADING_STYLES:

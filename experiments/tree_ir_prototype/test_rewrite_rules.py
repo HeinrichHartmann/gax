@@ -938,6 +938,111 @@ class TestTableCellDefaultSuppression:
         assert "spacingMode" not in yaml_str
 
 
+# =============================================================================
+# YAML serializer suppression tests (gax-tvv)
+# =============================================================================
+
+
+class TestYamlSerializerSuppression:
+    """Unit tests for link-implied style and list-indent suppression (gax-tvv)."""
+
+    def test_link_suppresses_underline(self):
+        """underline=True is omitted when url is also set."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        style = TextStyle(underline=True, url="https://example.com")
+        result = _serialize_text_style(style)
+        assert "u" not in result, "underline implied by link should be suppressed"
+        assert result.get("url") == "https://example.com"
+
+    def test_link_suppresses_link_blue_color(self):
+        """foreground_color≈#1155cc is omitted when url is set."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        style = TextStyle(url="https://x.com", foreground_color="#1155cc")
+        result = _serialize_text_style(style)
+        assert "color" not in result, "link-blue color implied by link should be suppressed"
+        assert result.get("url") == "https://x.com"
+
+    def test_link_preserves_non_link_color(self):
+        """Non-link-blue foreground color is preserved even when url is set."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        style = TextStyle(url="https://x.com", foreground_color="#cc0000")
+        result = _serialize_text_style(style)
+        assert result.get("color") == "#cc0000", "Non-link color must be kept"
+
+    def test_underline_without_link_preserved(self):
+        """underline=True is preserved when no url is present."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        style = TextStyle(underline=True)
+        result = _serialize_text_style(style)
+        assert result.get("u") is True
+
+    def test_link_blue_color_variant_suppressed(self):
+        """Color close to #1155cc (float rounding) is also suppressed for links."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        # 17=0x11, 84=0x54 (off by 1 from 0x55=85), 204=0xcc — within ±2
+        style = TextStyle(url="https://x.com", foreground_color="#1154cc")
+        result = _serialize_text_style(style)
+        assert "color" not in result
+
+    def test_list_item_indent_suppressed_by_depth(self):
+        """indent_start and indent_first are suppressed for list items."""
+        from .enriched_ir import ListItem, ParagraphStyle, Span, TextStyle
+        from .yaml_serializer import _serialize_block
+
+        block = ListItem(
+            spans=[Span(text="item", style=TextStyle())],
+            depth=1,
+            para_style=ParagraphStyle(indent_start=72.0, indent_first_line=54.0),
+        )
+        result = _serialize_block(block)
+        inner = result.get("ul", {})
+        assert inner.get("depth") == 1
+        style_dict = inner.get("style", {})
+        assert "indent_start" not in style_dict, "indent_start implied by depth should be suppressed"
+        assert "indent_first" not in style_dict, "indent_first implied by depth should be suppressed"
+
+    def test_list_item_depth0_indent_suppressed(self):
+        """Depth-0 list items also have indent suppressed (depth=0 omitted)."""
+        from .enriched_ir import ListItem, ParagraphStyle, Span, TextStyle
+        from .yaml_serializer import _serialize_block
+
+        block = ListItem(
+            spans=[Span(text="top level", style=TextStyle())],
+            depth=0,
+            para_style=ParagraphStyle(indent_start=36.0, indent_first_line=18.0),
+        )
+        result = _serialize_block(block)
+        # Depth-0 with only indent → should be compact string form
+        assert result.get("ul") == "top level", (
+            f"Depth-0 list with only suppressed indent should be compact; got: {result}"
+        )
+
+    def test_list_item_non_indent_style_kept(self):
+        """Non-indent paragraph style attributes on list items are preserved."""
+        from .enriched_ir import ListItem, ParagraphStyle, Span, TextStyle
+        from .yaml_serializer import _serialize_block
+
+        block = ListItem(
+            spans=[Span(text="centered item", style=TextStyle())],
+            depth=0,
+            para_style=ParagraphStyle(alignment="CENTER", indent_start=36.0),
+        )
+        result = _serialize_block(block)
+        inner = result.get("ul", {})
+        assert inner.get("style", {}).get("align") == "center", "alignment must be kept"
+        assert "indent_start" not in inner.get("style", {}), "indent must be suppressed"
+
+
 def _dict_diff(a: dict, b: dict, path: str = "") -> str:
     """Find first difference between two nested dicts."""
     if a == b:
