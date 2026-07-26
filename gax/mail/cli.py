@@ -70,7 +70,7 @@ def mail_pull(path, yes: bool):
 
 
 @mail_group.command("reply")
-@click.argument("file_or_url")
+@click.argument("target")
 @click.option(
     "--output",
     "-o",
@@ -78,20 +78,25 @@ def mail_pull(path, yes: bool):
     help="Output file (default: Re_<subject>.draft.gax.md)",
 )
 @gax_command
-def mail_reply(file_or_url, output):
-    """Create a reply draft from a thread.
+def mail_reply(target, output):
+    """Create a reply draft from a message, thread file, or URL.
+
+    TARGET can be a message hex ID (16-char), a thread file, or a URL.
+    Message IDs reply to that specific message. Thread files and URLs
+    reply to the last message.
 
     Examples:
 
+        gax mail reply 19f9ae1f6df20003
         gax mail reply Project_Update.mail.gax.md
         gax mail reply "https://mail.google.com/mail/u/0/#inbox/abc123"
         gax mail reply thread.mail.gax.md -o my_reply.draft.gax.md
     """
-    file_path = Path(file_or_url)
+    file_path = Path(target)
     if file_path.exists():
         thread = Thread(path=file_path)
     else:
-        thread = Thread.from_url_or_id(file_or_url)
+        thread = Thread.from_url_or_id(target)
     out_path = thread.reply(output=output)
     success(f"Created: {out_path}")
     click.echo(f"Edit the file, then run: gax draft push {out_path}")

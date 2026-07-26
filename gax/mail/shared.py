@@ -65,6 +65,9 @@ class MailSection:
     content: str
     attachments: list[Attachment] = field(default_factory=list)
     message_id: str = ""  # RFC 2822 Message-ID header value
+    id: str = ""  # Gmail message hex ID (API 'id' field)
+    reply_to: str = ""  # Reply-To header (RFC-correct reply target)
+    references: str = ""  # References header (ancestor Message-IDs)
     history_id: str = ""  # Gmail historyId (first section only)
 
 
@@ -87,8 +90,14 @@ def _mail_section_to_multipart(section: MailSection) -> gaxfile.Section:
         "to": section.to_addr,
         "date": section.date,
     }
+    if section.id:
+        headers["id"] = section.id
     if section.message_id:
         headers["message_id"] = section.message_id
+    if section.reply_to:
+        headers["reply_to"] = section.reply_to
+    if section.references:
+        headers["references"] = section.references
     if section.attachments:
         headers["attachments"] = [
             {"name": att.name, "size": att.size, "url": att.url}
@@ -339,6 +348,63 @@ def _extract_attachments(payload: dict, message_id: str, service) -> list[Attach
     return attachments
 
 
+def fetch_message(message_id: str, *, service=None) -> dict:
+    """Fetch a single message from Gmail API by its hex ID.
+
+    Returns the raw API response dict. Raises googleapiclient.errors.HttpError
+    on 404 (message not found).
+    """
+    if service is None:
+        service = get_service("gmail", "v1")
+
+    return (
+        service.users()
+        .messages()
+        .get(userId="me", id=message_id, format="full")
+        .execute()
+    )
+
+
+def message_to_reply_headers(msg: dict) -> dict:
+    """Extract reply-relevant headers from a Gmail API message dict.
+
+    Returns a dict with keys: to, subject, in_reply_to, references, thread_id,
+    from_addr, id, reply_to.
+    """
+    payload = msg.get("payload", {})
+    headers = payload.get("headers", [])
+
+    from_addr = _get_header(headers, "From")
+    reply_to = _get_header(headers, "Reply-To")
+    subject = _get_header(headers, "Subject") or "No Subject"
+    rfc_message_id = _get_header(headers, "Message-Id")
+    rfc_references = _get_header(headers, "References")
+
+    # to = Reply-To (if set) or From (ADR 038 §3)
+    to = reply_to or from_addr
+
+    # subject = Re: + target subject (if not already prefixed)
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+
+    # references = target's References + target's Message-ID (RFC 5322 §3.6.4)
+    ref_parts = rfc_references.split() if rfc_references else []
+    if rfc_message_id:
+        ref_parts.append(rfc_message_id)
+    references = " ".join(ref_parts)
+
+    return {
+        "to": to,
+        "subject": subject,
+        "in_reply_to": rfc_message_id,
+        "references": references,
+        "thread_id": msg.get("threadId", ""),
+        "from_addr": from_addr,
+        "id": msg.get("id", ""),
+        "reply_to": reply_to,
+    }
+
+
 def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
     """Fetch thread from Gmail API and return list of sections."""
     if service is None:
@@ -376,6 +442,8 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
         to_addr = _get_header(headers, "To")
         date_str = _get_header(headers, "Date")
         rfc_message_id = _get_header(headers, "Message-Id")
+        reply_to = _get_header(headers, "Reply-To")
+        rfc_references = _get_header(headers, "References")
         msg_id = msg.get("id", "")
 
         try:
@@ -406,6 +474,9 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
                 content=body.strip(),
                 attachments=attachments,
                 message_id=rfc_message_id,
+                id=msg_id,
+                reply_to=reply_to,
+                references=rfc_references,
                 history_id=history_id if i == 1 else "",
             )
         )

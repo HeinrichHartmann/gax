@@ -34,6 +34,8 @@ from ..resource import Resource
 
 from .shared import (
     extract_thread_id,
+    fetch_message,
+    message_to_reply_headers,
     pull_thread,
     format_multipart,
 )
@@ -70,6 +72,79 @@ def _is_thread_id(value: str) -> bool:
     if re.fullmatch(r"\d{15,}", value):
         return True
     return False
+
+
+def _is_message_hex_id(value: str) -> bool:
+    """Check if value looks like a 16-char hex message/thread ID."""
+    return bool(re.fullmatch(r"[0-9a-f]{16}", value))
+
+
+def _resolve_reply_target(input_value: str, *, service=None) -> dict:
+    """Resolve a reply target from a message ID, thread ID, or URL.
+
+    Returns a dict from message_to_reply_headers() with keys:
+    to, subject, in_reply_to, references, thread_id, from_addr, id, reply_to.
+
+    Resolution rules (ADR 038 §2):
+    - 16-hex ID: try messages.get first; on 404, fall back to threads.get
+      (last message). Anchor disambiguation: if message.id == message.threadId,
+      treat as thread reference (reply to last message, not first).
+    - Thread URL or non-hex ID: threads.get, reply to last message.
+    """
+    # Try as message first if it looks like a 16-hex ID
+    if _is_message_hex_id(input_value):
+        try:
+            msg = fetch_message(input_value, service=service)
+            # Anchor disambiguation: if msg.id == msg.threadId, this is the
+            # first message (thread anchor). Treat as thread reference.
+            if msg.get("id") == msg.get("threadId"):
+                logger.info(
+                    f"Message {input_value} is thread anchor, "
+                    "replying to last message"
+                )
+                sections = pull_thread(msg["threadId"], service=service)
+                last = sections[-1]
+                return message_to_reply_headers({
+                    "id": last.id,
+                    "threadId": last.thread_id,
+                    "payload": {
+                        "headers": [
+                            {"name": "From", "value": last.from_addr},
+                            {"name": "Reply-To", "value": last.reply_to},
+                            {"name": "Subject", "value": last.title},
+                            {"name": "Message-Id", "value": last.message_id},
+                            {"name": "References", "value": last.references},
+                        ]
+                    },
+                })
+            # Non-anchor message: reply directly to this message
+            return message_to_reply_headers(msg)
+        except Exception:
+            # messages.get failed — fall back to threads.get
+            logger.info(
+                f"messages.get failed for {input_value}, "
+                "trying as thread ID"
+            )
+
+    # Thread resolution: extract thread ID and reply to last message
+    thread_id = extract_thread_id(input_value)
+    sections = pull_thread(thread_id, service=service)
+    if not sections:
+        raise ValueError(f"No messages found in thread {thread_id}")
+    last = sections[-1]
+    return message_to_reply_headers({
+        "id": last.id,
+        "threadId": last.thread_id,
+        "payload": {
+            "headers": [
+                {"name": "From", "value": last.from_addr},
+                {"name": "Reply-To", "value": last.reply_to},
+                {"name": "Subject", "value": last.title},
+                {"name": "Message-Id", "value": last.message_id},
+                {"name": "References", "value": last.references},
+            ]
+        },
+    })
 
 
 def _pull_single_file(file_path: Path) -> tuple[int, int]:
@@ -262,49 +337,61 @@ class Thread(Resource):
         return "\n".join(lines).rstrip() if lines else None
 
     def reply(self, output: Path | None = None) -> Path:
-        """Create a reply draft from a thread file or URL. Returns path created."""
+        """Create a reply draft from a message ID, thread file, or URL.
+
+        Resolution (ADR 038 §2):
+        - File path: derive headers from last section in the file.
+        - 16-hex message ID: messages.get; anchor (id==threadId) → last msg.
+        - Thread URL/ID: threads.get, reply to last message.
+
+        Headers derive from the target message only (ADR 038 §3):
+        - to = Reply-To or From
+        - subject = Re: + target's Subject
+        - in_reply_to = target's Message-ID
+        - references = target's References + target's Message-ID
+        """
         if self.path and self.path.exists() and self.path.name.endswith(".gax.md"):
+            # File-based reply: derive from last section
             content = self.path.read_text(encoding="utf-8")
             sections = gaxfile.parse_multipart(content)
             if not sections:
                 raise ValueError("No sections found in file")
 
-            last_section = sections[-1]
-            thread_id = last_section.headers.get("thread_id", "")
-            subject = last_section.headers.get("title", "")
-            from_addr = last_section.headers.get("from", "")
-            # Collect message_ids from all sections for References chain
-            all_message_ids = [
-                s.headers.get("message_id", "")
-                for s in sections
-                if s.headers.get("message_id", "")
-            ]
-            in_reply_to = all_message_ids[-1] if all_message_ids else ""
-            references = " ".join(all_message_ids)
+            last = sections[-1]
+            h = last.headers
+            reply_to_addr = h.get("reply_to", "")
+            from_addr = h.get("from", "")
+            to = reply_to_addr or from_addr
+            subject = h.get("title", "")
+            rfc_message_id = h.get("message_id", "")
+            rfc_references = h.get("references", "")
+            thread_id = h.get("thread_id", "")
+
+            # References = target's References + target's Message-ID
+            ref_parts = rfc_references.split() if rfc_references else []
+            if rfc_message_id:
+                ref_parts.append(rfc_message_id)
+
+            if not subject.lower().startswith("re:"):
+                subject = f"Re: {subject}"
+
+            target = {
+                "to": to,
+                "subject": subject,
+                "in_reply_to": rfc_message_id,
+                "references": " ".join(ref_parts),
+                "thread_id": thread_id,
+            }
         else:
-            thread_id = extract_thread_id(self.url)
-            logger.info(f"Fetching thread: {thread_id}")
-
-            mail_sections = pull_thread(thread_id)
-            if not mail_sections:
-                raise ValueError("No messages found in thread")
-
-            last_mail = mail_sections[-1]
-            subject = last_mail.title
-            from_addr = last_mail.from_addr
-            all_message_ids = [s.message_id for s in mail_sections if s.message_id]
-            in_reply_to = all_message_ids[-1] if all_message_ids else ""
-            references = " ".join(all_message_ids)
-
-        if not subject.lower().startswith("re:"):
-            subject = f"Re: {subject}"
+            # URL/ID-based reply: resolve via API
+            target = _resolve_reply_target(self.url)
 
         config = draft_module.DraftHeader(
-            subject=subject,
-            to=from_addr,
-            thread_id=thread_id,
-            in_reply_to=in_reply_to,
-            references=references,
+            subject=target["subject"],
+            to=target["to"],
+            thread_id=target["thread_id"],
+            in_reply_to=target["in_reply_to"],
+            references=target["references"],
             time=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
 
@@ -313,7 +400,7 @@ class Thread(Resource):
         if output:
             out_path = output
         else:
-            safe_subject = re.sub(r'[<>:"/\\|?*]', "-", subject)
+            safe_subject = re.sub(r'[<>:"/\\|?*]', "-", target["subject"])
             safe_subject = re.sub(r"\s+", "_", safe_subject)[:50]
             out_path = Path(f"{safe_subject}.draft.gax.md")
 
@@ -321,7 +408,7 @@ class Thread(Resource):
             raise ValueError(f"File already exists: {out_path}")
 
         out_path.write_text(draft_content, encoding="utf-8")
-        logger.info(f"To: {from_addr}, Subject: {subject}")
+        logger.info(f"To: {target['to']}, Subject: {target['subject']}")
         return out_path
 
 

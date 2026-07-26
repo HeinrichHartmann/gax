@@ -23,10 +23,11 @@ from gax.mail.shared import (
     format_multipart,
     format_section,
     extract_thread_id,
+    message_to_reply_headers,
     _extract_text_body,
     _strip_quoted_text,
 )
-from gax.mail.thread import Thread, _is_thread_id
+from gax.mail.thread import Thread, _is_thread_id, _resolve_reply_target
 
 
 # Load fixtures
@@ -436,6 +437,10 @@ def _make_section(
     subject="Test Subject",
     date="2025-03-10T09:30:00Z",
     content="Hello there.",
+    message_id="",
+    msg_id="",
+    reply_to="",
+    references="",
 ):
     return MailSection(
         title=subject,
@@ -448,6 +453,10 @@ def _make_section(
         to_addr=to_addr,
         date=date,
         content=content,
+        message_id=message_id,
+        id=msg_id,
+        reply_to=reply_to,
+        references=references,
     )
 
 
@@ -1122,3 +1131,263 @@ class TestStripSignature:
     def test_body_is_only_signature(self):
         body = "\n-- \nJust a sig\n"
         assert strip_signature(body) == "\n"
+
+
+# =============================================================================
+# ADR 038: Message-addressed reply tests
+# =============================================================================
+
+
+class TestMessageIdInOutput:
+    """Test that message hex IDs appear in .mail.gax.md output."""
+
+    def test_id_in_formatted_section(self):
+        """Each section carries 'id: <hex>' in output."""
+        section = _make_section(msg_id="19f9ae1f6df20003")
+        content = format_section(section)
+        assert "id: 19f9ae1f6df20003" in content
+
+    def test_id_in_multipart_output(self):
+        """Both sections carry their own id in multipart output."""
+        sections = [
+            _make_section(section_num=1, msg_id="19f9a45b51e50001"),
+            _make_section(section_num=2, msg_id="19f9ae1f6df20002"),
+        ]
+        content = format_multipart(sections)
+        assert "id: 19f9a45b51e50001" in content
+        assert "id: 19f9ae1f6df20002" in content
+
+    def test_pull_thread_populates_id(self):
+        """pull_thread sets MailSection.id from API message id."""
+        thread_response = json.loads(load_fixture("sample_thread_response.json"))
+        service = make_mock_service(thread_response)
+        sections = pull_thread("thread-abc123", service=service)
+        assert sections[0].id == "msg-001"
+        assert sections[1].id == "msg-002"
+
+
+class TestMessageToReplyHeaders:
+    """Test header derivation from target message (ADR 038 §3)."""
+
+    def _make_msg(
+        self,
+        msg_id="19f9ae1f6df20003",
+        thread_id="19f9a45b51e50000",
+        from_addr="Carol <carol@example.com>",
+        reply_to="",
+        subject="Project Update",
+        message_id="<msg-3@mail.example.com>",
+        references="<msg-1@mail.example.com>",
+    ):
+        headers = [
+            {"name": "From", "value": from_addr},
+            {"name": "Subject", "value": subject},
+            {"name": "Message-Id", "value": message_id},
+            {"name": "References", "value": references},
+        ]
+        if reply_to:
+            headers.append({"name": "Reply-To", "value": reply_to})
+        return {
+            "id": msg_id,
+            "threadId": thread_id,
+            "payload": {"headers": headers},
+        }
+
+    def test_to_uses_from_by_default(self):
+        """to = From when no Reply-To is set."""
+        result = message_to_reply_headers(self._make_msg())
+        assert result["to"] == "Carol <carol@example.com>"
+
+    def test_to_honors_reply_to(self):
+        """to = Reply-To when set (ADR 038 §3)."""
+        msg = self._make_msg(reply_to="list@example.com")
+        result = message_to_reply_headers(msg)
+        assert result["to"] == "list@example.com"
+
+    def test_subject_gets_re_prefix(self):
+        """Subject is prefixed with 'Re: ' if missing."""
+        result = message_to_reply_headers(self._make_msg())
+        assert result["subject"] == "Re: Project Update"
+
+    def test_subject_keeps_existing_re(self):
+        """Subject starting with 'Re:' is not double-prefixed."""
+        msg = self._make_msg(subject="Re: Project Update")
+        result = message_to_reply_headers(msg)
+        assert result["subject"] == "Re: Project Update"
+
+    def test_in_reply_to_is_target_message_id(self):
+        """in_reply_to = target's Message-ID."""
+        result = message_to_reply_headers(self._make_msg())
+        assert result["in_reply_to"] == "<msg-3@mail.example.com>"
+
+    def test_references_chain(self):
+        """references = target's References + target's Message-ID."""
+        result = message_to_reply_headers(self._make_msg())
+        assert result["references"] == (
+            "<msg-1@mail.example.com> <msg-3@mail.example.com>"
+        )
+
+    def test_references_empty_target(self):
+        """If target has no References, references = just Message-ID."""
+        msg = self._make_msg(references="")
+        result = message_to_reply_headers(msg)
+        assert result["references"] == "<msg-3@mail.example.com>"
+
+    def test_thread_id_preserved(self):
+        """thread_id comes from the target message's threadId."""
+        result = message_to_reply_headers(self._make_msg())
+        assert result["thread_id"] == "19f9a45b51e50000"
+
+
+class TestResolveReplyTarget:
+    """Test _resolve_reply_target resolution logic (ADR 038 §2)."""
+
+    def test_message_id_resolves_to_message(self, monkeypatch):
+        """16-hex message ID that is NOT a thread anchor → reply to that message."""
+        msg = {
+            "id": "19f9ae1f6df20003",
+            "threadId": "19f9a45b51e50000",  # different from id
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Carol <carol@example.com>"},
+                    {"name": "Reply-To", "value": ""},
+                    {"name": "Subject", "value": "Question"},
+                    {"name": "Message-Id", "value": "<msg-3@example.com>"},
+                    {"name": "References", "value": "<msg-1@example.com>"},
+                ]
+            },
+        }
+        monkeypatch.setattr(
+            "gax.mail.thread.fetch_message", lambda mid, service=None: msg
+        )
+        result = _resolve_reply_target("19f9ae1f6df20003")
+        assert result["to"] == "Carol <carol@example.com>"
+        assert result["in_reply_to"] == "<msg-3@example.com>"
+
+    def test_anchor_message_resolves_to_last(self, monkeypatch):
+        """Message where id == threadId (anchor) → reply to last message."""
+        anchor_msg = {
+            "id": "19f9a45b51e50000",
+            "threadId": "19f9a45b51e50000",  # same → anchor
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Alice <alice@example.com>"},
+                    {"name": "Reply-To", "value": ""},
+                    {"name": "Subject", "value": "Hello"},
+                    {"name": "Message-Id", "value": "<msg-1@example.com>"},
+                    {"name": "References", "value": ""},
+                ]
+            },
+        }
+        last_section = _make_section(
+            thread_id="19f9a45b51e50000",
+            section_num=3,
+            from_addr="Dave <dave@example.com>",
+            subject="Hello",
+            msg_id="19f9ae1f6df20099",
+            message_id="<msg-3@example.com>",
+            references="<msg-1@example.com> <msg-2@example.com>",
+        )
+        monkeypatch.setattr(
+            "gax.mail.thread.fetch_message",
+            lambda mid, service=None: anchor_msg,
+        )
+        monkeypatch.setattr(
+            "gax.mail.thread.pull_thread",
+            lambda tid, service=None: [
+                _make_section(section_num=1),
+                _make_section(section_num=2),
+                last_section,
+            ],
+        )
+        result = _resolve_reply_target("19f9a45b51e50000")
+        assert result["to"] == "Dave <dave@example.com>"
+        assert result["in_reply_to"] == "<msg-3@example.com>"
+
+    def test_thread_url_resolves_to_last(self, monkeypatch):
+        """Thread URL → reply to last message."""
+        last = _make_section(
+            section_num=2,
+            from_addr="Bob <bob@example.com>",
+            msg_id="19f9ae1f6df20002",
+            message_id="<msg-2@example.com>",
+            references="<msg-1@example.com>",
+        )
+        monkeypatch.setattr(
+            "gax.mail.thread.pull_thread",
+            lambda tid, service=None: [_make_section(section_num=1), last],
+        )
+        url = "https://mail.google.com/mail/u/0/#inbox/19f9a45b51e50000"
+        result = _resolve_reply_target(url)
+        assert result["to"] == "Bob <bob@example.com>"
+
+    def test_unknown_hex_raises(self, monkeypatch):
+        """Unknown 16-hex (neither message nor thread) → clean error."""
+        def fail_messages(mid, service=None):
+            from unittest.mock import MagicMock
+            err = MagicMock()
+            err.resp = MagicMock()
+            err.resp.status = 404
+            raise Exception("Not found")
+
+        def fail_threads(tid, service=None):
+            raise ValueError(f"No messages found in thread {tid}")
+
+        monkeypatch.setattr("gax.mail.thread.fetch_message", fail_messages)
+        monkeypatch.setattr("gax.mail.thread.pull_thread", fail_threads)
+
+        with pytest.raises(ValueError, match="No messages found"):
+            _resolve_reply_target("deadbeefdeadbeef")
+
+
+class TestReplyFromFile:
+    """Test Thread.reply() with file-based input (ADR 038)."""
+
+    def test_reply_uses_last_section_headers(self, tmp_path, monkeypatch):
+        """File reply derives headers from last section only."""
+        sections = [
+            _make_section(
+                section_num=1,
+                from_addr="Alice <alice@test.com>",
+                msg_id="19f9a45b51e50001",
+                message_id="<msg-1@test.com>",
+            ),
+            _make_section(
+                section_num=2,
+                from_addr="Bob <bob@test.com>",
+                msg_id="19f9ae1f6df20002",
+                message_id="<msg-2@test.com>",
+                references="<msg-1@test.com>",
+            ),
+        ]
+        monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: sections)
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
+
+        out = Thread(path=path).reply(output=tmp_path / "reply.draft.gax.md")
+        content = out.read_text()
+
+        # to = Bob (last section's From)
+        assert "to: Bob <bob@test.com>" in content
+        # in_reply_to = Bob's Message-ID only
+        assert "in_reply_to: <msg-2@test.com>" in content
+        # references = Bob's References + Bob's Message-ID (not Alice's)
+        assert "references: <msg-1@test.com> <msg-2@test.com>" in content
+        # Should NOT contain all section message_ids concatenated
+        assert content.count("<msg-1@test.com>") == 1  # only in references
+
+    def test_reply_honors_reply_to_in_file(self, tmp_path, monkeypatch):
+        """File reply uses Reply-To when present."""
+        section = _make_section(
+            from_addr="Sender <sender@test.com>",
+            reply_to="list@test.com",
+            msg_id="19f9ae1f6df20001",
+            message_id="<msg-1@test.com>",
+        )
+        monkeypatch.setattr("gax.mail.thread.pull_thread", lambda tid: [section])
+        path = Thread(url=THREAD_ID).clone(output=tmp_path / "test.mail.gax.md")
+
+        out = Thread(path=path).reply(output=tmp_path / "reply.draft.gax.md")
+        content = out.read_text()
+
+        # Reply-To wins over From
+        assert "to: list@test.com" in content
