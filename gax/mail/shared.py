@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import html2text as _html2text  # type: ignore[import-untyped]  # hard dep since pyproject.toml
+
 
 from ..auth import get_service
 from ..store import store_blob
@@ -189,9 +191,7 @@ def _strip_quoted_text(body: str) -> str:
 
 def _html_to_markdown(html: str) -> str:
     """Convert HTML to markdown using html2text."""
-    import html2text  # type: ignore[import-untyped]  # lazy: optional dep
-
-    h = html2text.HTML2Text()
+    h = _html2text.HTML2Text()
     h.ignore_links = False
     h.body_width = 0  # no wrapping
     return h.handle(html)

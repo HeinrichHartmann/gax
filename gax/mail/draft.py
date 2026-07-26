@@ -69,6 +69,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
+import html2text as _html2text  # type: ignore[import-untyped]  # hard dep since pyproject.toml
 import mistune
 
 
@@ -218,9 +219,7 @@ def _load_signature() -> tuple[str, str] | None:
     if html_path.exists():
         raw_html = html_path.read_text(encoding="utf-8").strip()
         # Use the raw HTML as-is; provide a plain-text strip for the plain part
-        import html2text  # type: ignore[import-untyped]
-
-        h = html2text.HTML2Text()
+        h = _html2text.HTML2Text()
         h.body_width = 0
         plain = h.handle(raw_html).strip()
         return plain, raw_html
