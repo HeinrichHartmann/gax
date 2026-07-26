@@ -64,23 +64,58 @@ bd update <id> --claim
 Then implement the fix. Follow these rules:
 
 - Read the code before changing it. Understand the context.
-- Run tests after changes: `direnv exec . python -m pytest tests/ -x --tb=short`
-- Keep changes minimal and focused on the issue.
-- One commit per issue. Use a descriptive message referencing the bead ID.
-- Prefix all shell commands with `direnv exec .` (the project uses direnv/nix).
+- **Keep changes small**: aim for <100 lines changed per commit.
+  If a ticket needs more, break it into sub-tickets with `bd create`
+  and work them sequentially.
+- **Commit early and often**: make small, incremental commits as you
+  go. Do not batch everything into one giant commit. Each commit
+  should be a coherent step (e.g. "add diff() method", then "wire
+  CLI subcommand", then "add test").
+- **Run tests after every change**:
+  ```bash
+  direnv exec . python -m pytest tests/ -x --tb=short
+  ```
+  Do not pile up changes without testing. If tests break, fix before
+  continuing.
+- **Write or update tests** to validate your changes. If no test
+  covers the behavior you changed, add one. If the ticket references
+  a specific test, make sure it passes.
+- **Rebase regularly** onto main to stay current:
+  ```bash
+  git rebase main
+  ```
+  Worktrees share refs with the main checkout, so when the architect
+  merges to main, you see it immediately — no fetch needed.
+  Rebase before starting each new ticket and before signaling for
+  review. Fix conflicts immediately.
+- Prefix all shell commands with `direnv exec .` (the project uses
+  direnv/nix).
 
 ### 4. Validate
 
-Before closing an issue, always:
+Before signaling for review, run the full test suite:
 
 ```bash
 direnv exec . python -m pytest tests/ -x --tb=short
 ```
 
-If the issue has a specific test (e.g., `test_cli_surface.py::TestFoo::test_bar`),
-run that test explicitly and confirm it passes.
+If the issue references a specific test (e.g.,
+`test_cli_surface.py::TestFoo::test_bar`), run it explicitly and
+confirm it passes. If no test existed for the behavior, you should
+have added one in step 3.
 
-### 5. Close
+### 5. Signal for review
+
+When your branch is ready, create a review bead so the architect
+knows to merge it:
+
+```bash
+bd create "Review: worker/$AGENT_ID — <bead-id> <short title>" \
+  -t chore -l review \
+  -d "Branch: worker/$AGENT_ID. Implements <bead-id>. Tests pass. Ready to merge to main."
+```
+
+Then close the implementation bead:
 
 ```bash
 bd close <id> --reason="Implemented: <one-line summary>"
