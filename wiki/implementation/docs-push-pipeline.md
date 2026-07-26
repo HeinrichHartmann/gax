@@ -1,18 +1,53 @@
 ---
 title: Docs Push Pipeline
-description: How gax pushes edits to Google Docs — IR, patch vs bulk, UTF-16 indexing, tables
+description: How gax pushes edits to Google Docs — plan-driven surgical push, revision guard, run splicing, full-replace fallback
 status: current
 updated: 2026-07-26
 sources:
   - gax/gdoc/ir.py
   - gax/gdoc/diff_push.py
   - gax/gdoc/doc.py
+  - gax/gdoc/cli.py
   - ADR/034-faithful-surgical-push.md
+  - ADR/037-single-editor-sync.md
 ---
+
+## Sync model (ADR 037)
+
+gax uses a single-editor model: one loop, two guards.
+
+```
+pull  →  edit  →  push
+```
+
+- **Push guard**: refuses when the remote revision differs from the
+  stored one (`Remote changed (rev abc → def). Pull first.`).
+- **Pull guard**: refuses when you have unpushed local edits (local
+  content differs from render of stored baseline). Use `--force` to
+  discard.
+
+Nothing merges. Nothing rebases. Under the guard the remote IS the
+state you pulled, so diffing remote vs local directly gives your edits
+with correct indices — no baseline load on push, no alignment, no
+drift logic. One code path.
 
 ## Two push modes
 
-### Bulk (full-replace, default)
+### Surgical patch (default)
+
+Plan-driven diff that preserves non-markdown formatting:
+
+1. Fetch remote tab, parse to IR blocks with `doc_range` populated.
+2. Parse local markdown to IR blocks (no `doc_range`).
+3. Diff block lists via `SequenceMatcher` on block keys → `EditOp`s.
+4. Translate ops to Docs API `batchUpdate` mutations using remote
+   `doc_range` indices (run-level splicing).
+5. Apply via `batchUpdate`; refresh baseline + revision stamp.
+
+Falls back to full-replace (with user confirmation) when the patch
+cannot be computed (e.g. structural changes in tables).
+
+### Full-replace (`--force-replace`)
 
 1. Delete entire document body (`deleteContentRange` index 1 to end).
 2. Insert new text from markdown-rendered IR.
@@ -20,18 +55,9 @@ sources:
    index order.
 
 Destroys all non-markdown formatting: colors, fonts, comments,
-suggestions. Fast and reliable; appropriate for early drafts.
-
-### Patch (`--patch` flag, experimental)
-
-1. Pull remote doc, parse to blocks with `doc_range` populated.
-2. Parse local markdown to blocks (no `doc_range`).
-3. Diff block lists via `ast_diff` (SequenceMatcher on block keys).
-4. Translate edit ops to Docs API mutations (`diff_to_mutations`).
-5. Apply via `batchUpdate`.
-
-Preserves formatting on untouched blocks. Falls back to bulk on
-structural changes (table shape, unsupported edits).
+suggestions. Fast and reliable; appropriate for early drafts or when
+surgical patch fails. The old `--patch`/`--bulk` flags are deprecated;
+use `--force-replace` for the destructive path.
 
 ## The IR (Intermediate Representation)
 
@@ -53,9 +79,11 @@ footnotes, comments, suggestions, images (extracted to blob store as
 `file://` URLs), block quotes (converted to plain paragraphs),
 horizontal rules (skipped), custom styles.
 
-ADR 034/035 address this: a pull-time baseline in the CAS store
-preserves the full document JSON so push can be surgical even though
-the markdown is lossy.
+ADR 034/035/037 address this: a pull-time baseline in the CAS store
+preserves the full document JSON. Under the single-editor model
+(ADR 037), the revision guard ensures remote hasn't moved, so the
+remote itself provides correct indices for surgical push. The baseline
+is now only used by the pull guard (detecting unpushed local edits).
 
 ## UTF-16 index arithmetic
 
@@ -114,7 +142,7 @@ it on patch updates. Document body starts at index 1, not 0.
 
 ## Formatting round-trip summary
 
-| Feature | Survives bulk push | Survives patch push |
+| Feature | Survives force-replace | Survives surgical patch (default) |
 |---|---|---|
 | Bold, italic, strikethrough, links | yes | yes |
 | Heading levels | yes | yes |

@@ -8,3 +8,5 @@ with ops create/ingest/update/lint/prune. New entries at the bottom.
 ## [2026-07-26] create | Seeded wiki from ADRs and codebase: positioning, cli-model, file-conventions, architecture, adr-map (gax-k2n)
 
 ## [2026-07-26] create | Added resource-types, docs-push-pipeline, mail-parsing from deep code scan (gax-k2n)
+
+## [2026-07-26] ingest | ADR 036/037 accepted, surgical push landed — updated adr-map, docs-push-pipeline, architecture, cli-model (gax-b6d)

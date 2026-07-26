@@ -21,5 +21,5 @@ pages. Maintenance rules: [schema.md](schema.md). Change history:
 
 ## Implementation
 
-- [Docs Push Pipeline](implementation/docs-push-pipeline.md) — How gax pushes edits to Google Docs — IR, patch vs bulk, UTF-16 indexing, tables
+- [Docs Push Pipeline](implementation/docs-push-pipeline.md) — How gax pushes edits to Google Docs — plan-driven surgical push, revision guard, run splicing, full-replace fallback
 - [Mail Parsing](implementation/mail-parsing.md) — Email body extraction, quoted-text stripping, HTML conversion, and attachment handling

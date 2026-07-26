@@ -6,7 +6,9 @@ updated: 2026-07-26
 sources:
   - gax/cli.py
   - gax/resource.py
+  - gax/gdoc/cli.py
   - README.md
+  - ADR/037-single-editor-sync.md
 ---
 
 ## Command structure
@@ -64,10 +66,22 @@ via explicit subclass calls.
 - **`checkout`** creates a `.gax.md.d/` directory with individual
   files per item, plus a `.gax.yaml` metadata file.
 
-### Pull/Push with confirmation
+### Pull/Push with guards (ADR 037)
+
+The single-editor sync model enforces a strict `pull → edit → push`
+loop with two guards:
+
+- **Push** refuses when the remote revision differs from the stored
+  one. User must pull first.
+- **Pull** refuses when you have unpushed local edits (local differs
+  from baseline). Use `--force` to discard local edits.
 
 `push` is always preceded by a diff preview. The user confirms before
 any remote mutation. `--yes`/`-y` skips the prompt for scripting.
+
+For Google Docs, push is plan-driven by default (surgical patch
+preserving formatting). Use `--force-replace` to force a full-replace
+push that destroys non-markdown formatting.
 
 ### Plan/Apply (bulk resources)
 

@@ -9,6 +9,8 @@ sources:
   - gax/cli.py
   - gax/store.py
   - gax/syncstate.py
+  - gax/gdoc/diff_push.py
+  - ADR/037-single-editor-sync.md
 ---
 
 ## Module layout
@@ -73,8 +75,9 @@ Content-addressable blob storage under `~/.gax/store/`:
 - `meta/` — JSON metadata per blob
 - `ref/` — Named symlinks to blobs
 
-Currently used for Gmail attachments. ADR 034 extends it to store
-pull-time baselines for Docs (raw JSON + revisionId).
+Used for Gmail attachments and Docs pull-time baselines (raw JSON +
+revisionId). The baseline is consumed by the pull guard (ADR 037) to
+detect unpushed local edits; it is no longer needed on the push path.
 
 ## Resource implementation pattern
 
@@ -109,9 +112,13 @@ Heading, Paragraph, ListItem, CodeBlock, Table. Spans carry text with
 bold/italic/strikethrough/url. Used for both pull (Docs JSON to
 markdown) and push (markdown to API `batchUpdate` requests).
 
-### Patch-based push (`gdoc/diff_push.py`)
+### Plan-driven surgical push (`gdoc/diff_push.py`)
 
-Computes deltas using difflib, builds Docs API `batchUpdate` requests
-for changed blocks only. Falls back to full-replace when structural
-changes are detected. See [ADR Map](adr-map.md) for the accepted ADRs
-(034, 035) that extend this with baselines and a faithful Tree IR.
+Single-editor model (ADR 037): a revision guard ensures the remote
+hasn't moved since pull, so the remote blocks carry correct indices.
+Computes deltas (difflib SequenceMatcher on block keys), translates
+`EditOp`s to run-level `batchUpdate` mutations, applies them. Falls
+back to full-replace when structural changes are detected. See
+[Docs Push Pipeline](../implementation/docs-push-pipeline.md) for
+details. ADR 036 extends the Tree IR with a compression pipeline for
+human-readable YAML.

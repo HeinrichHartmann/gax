@@ -13,6 +13,8 @@ sources:
   - ADR/021-get-command.md
   - ADR/034-faithful-surgical-push.md
   - ADR/035-faithful-tree-ir.md
+  - ADR/036-tree-compression-pipeline.md
+  - ADR/037-single-editor-sync.md
 ---
 
 ## Status summary
@@ -20,7 +22,7 @@ sources:
 | Status | Count | ADRs |
 |---|---|---|
 | Implemented | 1 | 001 |
-| Accepted | 7 | 002, 009, 012, 019, 020, 021b, 034, 035 |
+| Accepted | 10 | 002, 009, 012, 019, 020, 021b, 034, 035, 036, 037 |
 | Proposed | 25 | 003-008, 010-011, 013-015, 017-018, 021a, 022-028, 030-032a, 032b |
 | Draft | 1 | 016 |
 
@@ -40,6 +42,8 @@ sources:
 | 021 | `gax get` | Stateless read-only fetch to stdout |
 | 034 | Faithful Surgical Push | Pull-time baseline in CAS, three-way diff, run-level splicing for Docs |
 | 035 | Faithful Tree IR | Index-free YAML tree as a machine-editing surface for Docs |
+| 036 | Tree IR Compression | Five-step pipeline to compress verbose Tree IR YAML (default elision, run merge, style table, implicit default, canonical output) |
+| 037 | Single-Editor Sync | Simplifies push to one code path: revision guard on push, unpushed-edit guard on pull; removes all drift/three-way machinery from ADR 034 |
 
 ## Proposed ADRs by area
 
@@ -76,12 +80,14 @@ sources:
 
 ### Push and sync architecture
 
-| ADR | Title |
-|---|---|
-| 023 | Markdown-to-Google-Docs Conversion and Testing |
-| 027 | Diff-Based Document Push |
-| 030 | Markdown Strategy (Unified IR via Mistune) |
-| 032b | Patch-First Push with Bulk Fallback |
+| ADR | Title | Status |
+|---|---|---|
+| 023 | Markdown-to-Google-Docs Conversion and Testing | Proposed |
+| 027 | Diff-Based Document Push | Proposed |
+| 030 | Markdown Strategy (Unified IR via Mistune) | Proposed |
+| 032b | Patch-First Push with Bulk Fallback | Proposed (superseded by 034) |
+| 036 | Tree IR Compression | Accepted |
+| 037 | Single-Editor Sync | Accepted (implemented — multi-editor code removed) |
 
 ### Abstractions
 
