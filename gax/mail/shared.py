@@ -164,6 +164,11 @@ def _strip_quoted_text(body: str) -> str:
     - 'On ... wrote:' attribution blocks (Gmail/Outlook style, may wrap over
       up to 3 lines when the sender name is long)
 
+    To avoid false positives on prose like 'On Monday we wrote: the report',
+    the attribution detection requires at least one of:
+    - An email address (<...@...>) in the attribution span, OR
+    - The line immediately after the attribution ends with '>' quoting
+
     Returns the new-content portion only.
     """
     lines = body.splitlines()
@@ -177,12 +182,16 @@ def _strip_quoted_text(body: str) -> str:
 
         # 'On ... wrote:' attribution — may span 1-3 lines
         if stripped.startswith("On "):
-            # Look ahead for 'wrote:' within the next 3 lines
-            lookahead = " ".join(
-                lines[i : min(i + 3, len(lines))]
-            )
+            end = min(i + 3, len(lines))
+            lookahead = " ".join(lines[i:end])
             if "wrote:" in lookahead:
-                return "\n".join(lines[:i]).rstrip()
+                # Require an email address OR immediately-following '>' quoting
+                # to avoid false-positives on normal prose.
+                has_email = bool(re.search(r"<[^>]+@[^>]+>", lookahead))
+                next_line = lines[end].rstrip() if end < len(lines) else ""
+                next_is_quote = next_line.startswith(">")
+                if has_email or next_is_quote:
+                    return "\n".join(lines[:i]).rstrip()
 
         i += 1
 

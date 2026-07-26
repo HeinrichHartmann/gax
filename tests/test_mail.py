@@ -23,6 +23,7 @@ from gax.mail.shared import (
     format_section,
     extract_thread_id,
     _extract_text_body,
+    _strip_quoted_text,
 )
 from gax.mail.thread import Thread, _is_thread_id
 
@@ -419,6 +420,87 @@ def _make_section(
         date=date,
         content=content,
     )
+
+
+# =============================================================================
+# _strip_quoted_text tests
+# =============================================================================
+
+
+class TestStripQuotedText:
+    """Tests for _strip_quoted_text, including false-positive hardening (gax-ami)."""
+
+    def test_no_quoting_returns_body_unchanged(self):
+        """Body with no quote markers is returned as-is."""
+        body = "Hello,\n\nThis is a plain reply with no quoting."
+        assert _strip_quoted_text(body) == body
+
+    def test_strips_gt_prefixed_lines(self):
+        """Lines starting with '>' are stripped along with everything after."""
+        body = "My reply.\n\n> Original message here."
+        result = _strip_quoted_text(body)
+        assert "My reply" in result
+        assert ">" not in result
+        assert "Original" not in result
+
+    def test_strips_gmail_attribution_with_email(self):
+        """Standard Gmail 'On ... wrote:' block with email address is stripped."""
+        body = (
+            "Thanks for the update.\n\n"
+            "On Mon, Mar 10, 2025 at 9:30 AM Alice Smith <alice@example.com> wrote:\n"
+            "> Some quoted content here."
+        )
+        result = _strip_quoted_text(body)
+        assert "Thanks for the update" in result
+        assert "quoted content" not in result
+        assert "alice@example.com" not in result
+
+    def test_strips_multiline_attribution_with_email(self):
+        """Attribution that wraps across 2-3 lines is stripped when email present."""
+        body = (
+            "My new content.\n\n"
+            "On Mon, Mar 10, 2025 at 9:30 AM\n"
+            "Alice Smith <alice@example.com> wrote:\n"
+            "> Previous message."
+        )
+        result = _strip_quoted_text(body)
+        assert "My new content" in result
+        assert "Previous message" not in result
+
+    def test_false_positive_prose_not_stripped(self):
+        """'On Monday we wrote: the report' is NOT treated as quote attribution."""
+        body = "On Monday we wrote: the report was ready.\n\nSee attached."
+        result = _strip_quoted_text(body)
+        assert "the report was ready" in result
+        assert "See attached" in result
+
+    def test_false_positive_no_email_no_quote_follows(self):
+        """'On X wrote:' without email and no following '>' is not stripped."""
+        body = "On the topic of AI, John wrote: a fascinating paper.\n\nLet's discuss."
+        result = _strip_quoted_text(body)
+        assert "fascinating paper" in result
+        assert "Let's discuss" in result
+
+    def test_strips_attribution_when_gt_follows_even_without_email(self):
+        """If '>' quoting immediately follows the attribution, strip even without email."""
+        body = (
+            "Agreed.\n\n"
+            "On Monday, John wrote:\n"
+            "> Some previous content."
+        )
+        result = _strip_quoted_text(body)
+        assert "Agreed" in result
+        assert "previous content" not in result
+
+    def test_empty_body(self):
+        """Empty body is handled gracefully."""
+        assert _strip_quoted_text("") == ""
+
+    def test_only_quoted_lines(self):
+        """Body that starts with '>' returns empty string."""
+        body = "> Original message."
+        result = _strip_quoted_text(body)
+        assert result == ""
 
 
 # =============================================================================
