@@ -39,7 +39,6 @@ import difflib
 import logging
 import re
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -50,6 +49,7 @@ import yaml
 from ..resource import Resource
 from ..formats import get_format
 from ..gaxfile import Section, format_multipart, parse_multipart
+from ..syncstate import write_sync_header
 from ..ui import operation
 from .client import GSheetClient, _tlog
 from .frontmatter import SheetConfig, parse_file, parse_content, write_file, format_content
@@ -591,14 +591,15 @@ class Sheet(Resource):
 
         folder.mkdir(parents=True, exist_ok=True)
 
-        metadata = {
-            "type": "gax/sheet-checkout",
-            "spreadsheet_id": spreadsheet_id,
-            "url": self.url,
-            "title": title,
-            "format": fmt,
-            "checked_out": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+        metadata = write_sync_header(
+            {
+                "type": "gax/sheet-checkout",
+                "spreadsheet_id": spreadsheet_id,
+                "url": self.url,
+                "title": title,
+                "format": fmt,
+            }
+        )
         metadata_path = folder / ".gax.yaml"
         with open(metadata_path, "w") as f:
             yaml.dump(
@@ -681,9 +682,7 @@ class Sheet(Resource):
         client = GSheetClient()
         info = client.get_spreadsheet_info(spreadsheet_id)
 
-        metadata["checked_out"] = datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        metadata = write_sync_header(metadata)
         metadata["title"] = info["title"]
         with open(metadata_path, "w") as f:
             yaml.dump(
