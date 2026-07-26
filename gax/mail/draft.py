@@ -293,6 +293,24 @@ def build_message(
     return result
 
 
+def strip_signature(body: str) -> str:
+    """Strip email signature (after '-- \\n' delimiter) from body text.
+
+    The signature delimiter per RFC 3676 is a line containing exactly '-- '
+    (dash dash space). We strip from the last occurrence to avoid false
+    positives in quoted text.
+    """
+    # Split on the standard sig delimiter (line == "-- \n" or "-- " at end)
+    marker = "\n-- \n"
+    idx = body.rfind(marker)
+    if idx != -1:
+        return body[:idx].rstrip("\n") + "\n"
+    # Also handle body ending with "-- " and no trailing newline
+    if body.rstrip("\n").endswith("\n-- "):
+        return body[: body.rstrip("\n").rfind("\n-- ")].rstrip("\n") + "\n"
+    return body
+
+
 def extract_body(payload: dict) -> str:
     """Extract plain text body from Gmail message payload."""
     mime_type = payload.get("mimeType", "")
@@ -460,6 +478,8 @@ class Draft(Resource):
         logger.info(f"Fetching draft: {draft_id}")
 
         header, body = fetch_draft(draft_id)
+        # Strip signature appended by push — local file stores body only
+        body = strip_signature(body)
         content = format_draft(header, body)
 
         file_path = self._output_path(header.subject, output)
@@ -479,6 +499,8 @@ class Draft(Resource):
             raise ValueError("No draft_id in file")
 
         remote_header, remote_body = fetch_draft(header.draft_id)
+        # Strip signature appended by push — the local file stores body only
+        remote_body = strip_signature(remote_body)
         new_content = format_draft(remote_header, remote_body)
         self.path.write_text(new_content, encoding="utf-8")
         logger.info(f"Subject: {remote_header.subject}, To: {remote_header.to}")
@@ -504,6 +526,8 @@ class Draft(Resource):
             return summary
 
         remote_header, remote_body = fetch_draft(header.draft_id)
+        # Strip signature appended by push — compare body content only
+        remote_body = strip_signature(remote_body)
 
         lines = []
 

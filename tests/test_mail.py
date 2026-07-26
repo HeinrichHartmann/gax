@@ -15,6 +15,7 @@ from gax.mail.draft import (
     build_message,
     parse_draft,
     format_draft,
+    strip_signature,
 )
 from gax.mail.shared import (
     MailSection,
@@ -47,10 +48,16 @@ def make_mock_service(thread_response: dict):
 class TestExtractThreadId:
     """Tests for thread ID extraction from various URL formats."""
 
-    def test_inbox_url(self):
-        """Test extraction from standard inbox URL."""
+    def test_inbox_url_with_hex_id(self):
+        """Test extraction from legacy inbox URL with hex thread ID."""
+        url = "https://mail.google.com/mail/u/0/#inbox/18a1b2c3d4e5f678"
+        assert extract_thread_id(url) == "18a1b2c3d4e5f678"
+
+    def test_inbox_url_fmfcg_rejected(self):
+        """FMfcg tokens in new-style inbox URLs are rejected with helpful error."""
         url = "https://mail.google.com/mail/u/0/#inbox/FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV"
-        assert extract_thread_id(url) == "FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV"
+        with pytest.raises(ValueError, match="client-side Gmail token"):
+            extract_thread_id(url)
 
     def test_popout_url_encoded(self):
         """Test extraction from popout URL with encoded thread-f."""
@@ -62,14 +69,25 @@ class TestExtractThreadId:
         url = "https://mail.google.com/mail/u/0/#thread-f:1859907402038417535"
         assert extract_thread_id(url) == "1859907402038417535"
 
-    def test_raw_alphanumeric_id(self):
-        """Test raw alphanumeric thread ID."""
-        thread_id = "FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV"
-        assert extract_thread_id(thread_id) == thread_id
+    def test_popout_thread_a_rejected(self):
+        """thread-a:r IDs from popout URLs are rejected with helpful error."""
+        url = "https://mail.google.com/mail/u/0/popout?ver=1&th=%23thread-a%3Ar95077152518394753&cvid=1"
+        with pytest.raises(ValueError, match="thread-a:r.*client-side"):
+            extract_thread_id(url)
+
+    def test_raw_fmfcg_token_rejected(self):
+        """Raw FMfcg tokens are rejected."""
+        with pytest.raises(ValueError, match="client-side Gmail token"):
+            extract_thread_id("FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV")
 
     def test_raw_numeric_id(self):
         """Test raw numeric thread ID."""
         thread_id = "1859907402038417535"
+        assert extract_thread_id(thread_id) == thread_id
+
+    def test_raw_hex_id(self):
+        """Test raw 16-char hex thread ID."""
+        thread_id = "18a1b2c3d4e5f678"
         assert extract_thread_id(thread_id) == thread_id
 
 
@@ -515,11 +533,20 @@ class TestIsThreadId:
     def test_hex_id(self):
         assert _is_thread_id("18f3a2b4c5d6e7f0") is True
 
-    def test_alphanumeric_id(self):
-        assert _is_thread_id("FMfcgzQXJWDsKmvPLCdfvx") is True
+    def test_fmfcg_token_rejected(self):
+        """FMfcg tokens are not valid API thread IDs."""
+        assert _is_thread_id("FMfcgzQXJWDsKmvPLCdfvx") is False
+
+    def test_thread_a_rejected(self):
+        """thread-a:r IDs are not valid API thread IDs."""
+        assert _is_thread_id("thread-a:r95077152518394753") is False
 
     def test_numeric_id(self):
         assert _is_thread_id("1859907402038417535") is True
+
+    def test_long_alphanumeric_non_fmfcg(self):
+        """Non-FMfcg long alphanumeric strings are still accepted."""
+        assert _is_thread_id("ABCDEFghijklmnopqrstu") is True
 
     def test_search_query(self):
         assert _is_thread_id("from:alice subject:hello") is False
@@ -985,3 +1012,27 @@ class TestDraftAttachments:
 
         result = Draft(path=draft_file).diff()
         assert "Attachments: offer.pdf, contract.pdf" in result
+
+
+class TestStripSignature:
+    """Tests for strip_signature helper."""
+
+    def test_strips_standard_delimiter(self):
+        body = "Hello world\n\n-- \nJohn Doe\njohn@example.com\n"
+        assert strip_signature(body) == "Hello world\n"
+
+    def test_no_signature_unchanged(self):
+        body = "Hello world\nNo sig here.\n"
+        assert strip_signature(body) == body
+
+    def test_strips_last_occurrence(self):
+        """If body contains '-- ' in quoted text, strip only the last one."""
+        body = "Quoting:\n-- \nold sig\n\nMy reply\n\n-- \nNew Sig\n"
+        assert strip_signature(body) == "Quoting:\n-- \nold sig\n\nMy reply\n"
+
+    def test_empty_body(self):
+        assert strip_signature("") == ""
+
+    def test_body_is_only_signature(self):
+        body = "\n-- \nJust a sig\n"
+        assert strip_signature(body) == "\n"

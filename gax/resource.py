@@ -109,6 +109,18 @@ class Resource:
         """Register a Resource subclass for from_url/from_file dispatch."""
         Resource._subclasses.append(subclass)
 
+    # Known Google hosts that can appear without https:// when pasted from
+    # the browser address bar.
+    _GOOGLE_HOSTS = (
+        "mail.google.com",
+        "docs.google.com",
+        "drive.google.com",
+        "calendar.google.com",
+        "forms.google.com",
+        "sheets.google.com",
+        "slides.google.com",
+    )
+
     @classmethod
     def from_url(cls, url: str) -> "Resource":
         """Construct a resource from a URL.
@@ -124,6 +136,12 @@ class Resource:
         raises ValueError. Override for custom URL matching.
         """
         if cls is Resource:
+            # Accept scheme-less URLs for known Google hosts
+            if "://" not in url:
+                for host in cls._GOOGLE_HOSTS:
+                    if url.startswith(host) or url.startswith(f"www.{host}"):
+                        url = f"https://{url}"
+                        break
             if "://" not in url:
                 raise ValueError(
                     f"Resource.from_url requires a URL, got: {url!r}. "

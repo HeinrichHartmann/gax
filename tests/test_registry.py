@@ -87,6 +87,32 @@ class TestFromUrl:
         r = Resource.from_url("https://docs.google.com/document/d/abc123/edit")
         assert r.url == "https://docs.google.com/document/d/abc123/edit"
 
+    def test_schemeless_docs_url(self):
+        """Scheme-less docs.google.com URL gets https:// prepended."""
+        r = Resource.from_url("docs.google.com/document/d/abc123/edit")
+        assert r.__class__.__name__ == "Tab"
+        assert r.url == "https://docs.google.com/document/d/abc123/edit"
+
+    def test_schemeless_mail_url(self):
+        """Scheme-less mail.google.com URL gets https:// prepended."""
+        r = Resource.from_url("mail.google.com/mail/u/0/#drafts/r-1234567890")
+        assert r.__class__.__name__ == "Draft"
+
+    def test_schemeless_drive_url(self):
+        """Scheme-less drive.google.com URL gets https:// prepended."""
+        r = Resource.from_url("drive.google.com/file/d/abc123/view")
+        assert r.__class__.__name__ == "File"
+
+    def test_schemeless_calendar_url(self):
+        """Scheme-less calendar.google.com URL gets https:// prepended."""
+        r = Resource.from_url("calendar.google.com/calendar/event?eid=abc123")
+        assert r.__class__.__name__ == "Cal"
+
+    def test_schemeless_non_google_rejected(self):
+        """Non-Google scheme-less strings still rejected."""
+        with pytest.raises(ValueError, match="requires a URL"):
+            Resource.from_url("example.com/foo")
+
 
 # =============================================================================
 # Resource.from_file — file dispatch
@@ -239,7 +265,7 @@ class TestFromFile:
         (Draft, "r-123456"),
         (Event, "evt_123"),
         (File, "drive_123"),
-        (Thread, "FMfcgzQXJWDsKmvPLCdfvxhHXqhSwBZV"),
+        (Thread, "1859907402038417535"),
     ],
 )
 def test_subclass_from_id_accepts_raw_ids(cls, raw_id):
@@ -264,7 +290,7 @@ def test_subclass_from_id_accepts_raw_ids(cls, raw_id):
     ],
 )
 def test_subclass_from_url_rejects_raw_ids(cls, raw_id):
-    with pytest.raises(ValueError, match="does not handle URL|Not a Gmail thread URL"):
+    with pytest.raises(ValueError, match="does not handle URL|Not a Gmail thread|client-side"):
         cls.from_url(raw_id)
 
 

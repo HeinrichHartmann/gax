@@ -116,15 +116,50 @@ def format_multipart(sections: list[MailSection]) -> str:
 # =============================================================================
 
 
+def _is_opaque_gmail_token(value: str) -> bool:
+    """Return True if value is an opaque client-side Gmail token (FMfcg...).
+
+    These tokens appear in new-style Gmail URLs (#inbox/FMfcg...) but cannot
+    be mapped to API thread IDs without a search.
+    """
+    return bool(re.fullmatch(r"FMfcg[A-Za-z0-9]{10,}", value))
+
+
+def _is_thread_a_id(value: str) -> bool:
+    """Return True if value is a client-side thread-a:r ID (popout URLs)."""
+    return bool(re.search(r"thread-a[:%]3[Aa]r|thread-a:r", value))
+
+
+_OPAQUE_TOKEN_MSG = (
+    "This URL contains a client-side Gmail token that cannot be resolved to an "
+    "API thread ID.\nUse 'gax mailbox fetch -q <subject or search>' to find the "
+    "thread by content."
+)
+
+
 def extract_thread_id(url_or_id: str) -> str:
     """Extract thread ID from Gmail URL or return as-is."""
     from urllib.parse import unquote
 
     url_or_id = unquote(url_or_id)
 
+    # Detect unsupported client-side IDs early with a helpful error
+    if _is_thread_a_id(url_or_id):
+        raise ValueError(
+            f"Cannot extract thread ID from: {url_or_id}\n"
+            "thread-a:r IDs are client-side popout identifiers with no API mapping.\n"
+            + _OPAQUE_TOKEN_MSG
+        )
+
+    # Legacy URL pattern: #inbox/HEXID, #sent/HEXID, etc.
     match = re.search(r"#[^/]+/([A-Za-z0-9]+)$", url_or_id)
     if match:
-        return match.group(1)
+        token = match.group(1)
+        if _is_opaque_gmail_token(token):
+            raise ValueError(
+                f"Cannot extract thread ID from: {url_or_id}\n" + _OPAQUE_TOKEN_MSG
+            )
+        return token
 
     match = re.search(r"thread-f[:%]3A(\d+)", url_or_id)
     if match:
@@ -135,6 +170,8 @@ def extract_thread_id(url_or_id: str) -> str:
         return match.group(1)
 
     if re.fullmatch(r"[A-Za-z0-9]+", url_or_id):
+        if _is_opaque_gmail_token(url_or_id):
+            raise ValueError(_OPAQUE_TOKEN_MSG)
         return url_or_id
 
     raise ValueError(f"Cannot extract thread ID from: {url_or_id}")

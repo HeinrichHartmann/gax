@@ -47,9 +47,19 @@ logger = logging.getLogger(__name__)
 
 
 def _is_thread_id(value: str) -> bool:
-    """Check if value looks like a thread ID (vs a search query)."""
+    """Check if value looks like a thread ID (vs a search query).
+
+    Rejects opaque client-side tokens (FMfcg...) and thread-a:r IDs that
+    cannot be resolved to API thread IDs.
+    """
+    from .shared import _is_opaque_gmail_token, _is_thread_a_id
+
+    if _is_thread_a_id(value):
+        return False
     if "mail.google.com" in value:
         return True
+    if _is_opaque_gmail_token(value):
+        return False
     if re.fullmatch(r"[0-9a-f]{16}", value):
         return True
     if re.fullmatch(r"[A-Za-z0-9]{20,}", value):
