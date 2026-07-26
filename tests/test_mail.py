@@ -22,6 +22,7 @@ from gax.mail.shared import (
     format_multipart,
     format_section,
     extract_thread_id,
+    _extract_text_body,
 )
 from gax.mail.thread import Thread, _is_thread_id
 
@@ -242,6 +243,149 @@ class TestMultipartMimeTypes:
         # Should prefer text/plain over text/html
         assert "Plain text version" in sections[0].content
         assert "HTML" not in sections[0].content
+
+    def test_html_only_message_converted_to_markdown(self):
+        """text/html-only message body is converted to markdown via html2text."""
+        # "<p>Hello from <b>HTML</b> only email.</p>" base64-encoded
+        html_b64 = "PHA-SGVsbG8gZnJvbSA8Yj5IVE1MPC9iPiBvbmx5IGVtYWlsLjwvcD4="
+        thread_response = {
+            "id": "html-only-thread",
+            "messages": [
+                {
+                    "id": "msg-html",
+                    "threadId": "html-only-thread",
+                    "payload": {
+                        "mimeType": "text/html",
+                        "headers": [
+                            {"name": "From", "value": "sender@example.com"},
+                            {"name": "To", "value": "recipient@example.com"},
+                            {"name": "Subject", "value": "HTML Only"},
+                            {
+                                "name": "Date",
+                                "value": "Wed, 12 Mar 2025 14:00:00 -0700",
+                            },
+                        ],
+                        "body": {"data": html_b64},
+                    },
+                }
+            ],
+        }
+        service = make_mock_service(thread_response)
+        sections = pull_thread("html-only-thread", service=service)
+
+        assert len(sections) == 1
+        # html2text should yield readable text from the HTML
+        assert "Hello" in sections[0].content
+        assert "HTML" in sections[0].content
+        # Should not contain raw HTML tags
+        assert "<p>" not in sections[0].content
+        assert "<b>" not in sections[0].content
+
+    def test_multipart_alternative_html_fallback(self):
+        """multipart/alternative with no text/plain falls back to html2text."""
+        # "<p>HTML fallback body.</p>" base64-encoded
+        import base64
+
+        html_body = "<p>HTML fallback body.</p>"
+        html_b64 = base64.urlsafe_b64encode(html_body.encode()).decode()
+        thread_response = {
+            "id": "html-fallback-thread",
+            "messages": [
+                {
+                    "id": "msg-htmlfb",
+                    "threadId": "html-fallback-thread",
+                    "payload": {
+                        "mimeType": "multipart/alternative",
+                        "headers": [
+                            {"name": "From", "value": "sender@example.com"},
+                            {"name": "To", "value": "recipient@example.com"},
+                            {"name": "Subject", "value": "HTML Fallback"},
+                            {
+                                "name": "Date",
+                                "value": "Wed, 12 Mar 2025 15:00:00 -0700",
+                            },
+                        ],
+                        "parts": [
+                            {
+                                "mimeType": "text/html",
+                                "body": {"data": html_b64},
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+        service = make_mock_service(thread_response)
+        sections = pull_thread("html-fallback-thread", service=service)
+
+        assert len(sections) == 1
+        assert "HTML fallback body" in sections[0].content
+        assert "<p>" not in sections[0].content
+
+
+class TestExtractTextBody:
+    """Unit tests for _extract_text_body helper."""
+
+    def test_plain_text_payload(self):
+        """text/plain payload returns decoded body directly."""
+        import base64
+
+        data = base64.urlsafe_b64encode(b"Plain content").decode()
+        payload = {"mimeType": "text/plain", "body": {"data": data}}
+        result = _extract_text_body(payload)
+        assert result == "Plain content"
+
+    def test_html_only_payload(self):
+        """text/html payload is converted to markdown."""
+        import base64
+
+        html = "<h1>Title</h1><p>Body text.</p>"
+        data = base64.urlsafe_b64encode(html.encode()).decode()
+        payload = {"mimeType": "text/html", "body": {"data": data}}
+        result = _extract_text_body(payload)
+        # Should contain the text without HTML tags
+        assert "Title" in result
+        assert "Body text" in result
+        assert "<h1>" not in result
+        assert "<p>" not in result
+
+    def test_multipart_prefers_plain(self):
+        """multipart/alternative prefers text/plain over text/html."""
+        import base64
+
+        plain_b64 = base64.urlsafe_b64encode(b"Plain wins").decode()
+        html_b64 = base64.urlsafe_b64encode(b"<p>HTML loses</p>").decode()
+        payload = {
+            "mimeType": "multipart/alternative",
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": plain_b64}},
+                {"mimeType": "text/html", "body": {"data": html_b64}},
+            ],
+        }
+        result = _extract_text_body(payload)
+        assert "Plain wins" in result
+        assert "HTML" not in result
+
+    def test_multipart_html_fallback_when_no_plain(self):
+        """multipart without text/plain falls back to html2text on text/html."""
+        import base64
+
+        html_b64 = base64.urlsafe_b64encode(b"<p>Fallback HTML</p>").decode()
+        payload = {
+            "mimeType": "multipart/alternative",
+            "parts": [
+                {"mimeType": "text/html", "body": {"data": html_b64}},
+            ],
+        }
+        result = _extract_text_body(payload)
+        assert "Fallback HTML" in result
+        assert "<p>" not in result
+
+    def test_unknown_mime_type_returns_empty(self):
+        """Unknown MIME type yields empty string (no crash)."""
+        payload = {"mimeType": "application/pdf", "body": {}}
+        result = _extract_text_body(payload)
+        assert result == ""
 
 
 # 20+ alphanumeric chars pass _is_thread_id validation
