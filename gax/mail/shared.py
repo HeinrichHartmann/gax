@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+
 from ..auth import get_service
 from ..store import store_blob
 from .. import gaxfile
@@ -60,6 +61,7 @@ class MailSection:
     date: str
     content: str
     attachments: list[Attachment] = field(default_factory=list)
+    message_id: str = ""  # RFC 2822 Message-ID header value
 
 
 # =============================================================================
@@ -81,6 +83,8 @@ def _mail_section_to_multipart(section: MailSection) -> gaxfile.Section:
         "to": section.to_addr,
         "date": section.date,
     }
+    if section.message_id:
+        headers["message_id"] = section.message_id
     if section.attachments:
         headers["attachments"] = [
             {"name": att.name, "size": att.size, "url": att.url}
@@ -146,18 +150,74 @@ def _decode_body(part: dict) -> str:
     return ""
 
 
+def _strip_quoted_text(body: str) -> str:
+    """Strip quoted reply history from email body.
+
+    Detects and removes:
+    - Lines starting with '>' (RFC 2822 quoting)
+    - 'On ... wrote:' attribution blocks (Gmail/Outlook style, may wrap over
+      up to 3 lines when the sender name is long)
+
+    Returns the new-content portion only.
+    """
+    lines = body.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].rstrip()
+
+        # '> ' prefixed quoting — start of quote block
+        if stripped.startswith(">"):
+            return "\n".join(lines[:i]).rstrip()
+
+        # 'On ... wrote:' attribution — may span 1-3 lines
+        if stripped.startswith("On "):
+            # Look ahead for 'wrote:' within the next 3 lines
+            lookahead = " ".join(
+                lines[i : min(i + 3, len(lines))]
+            )
+            if "wrote:" in lookahead:
+                return "\n".join(lines[:i]).rstrip()
+
+        i += 1
+
+    return body
+
+
+def _html_to_markdown(html: str) -> str:
+    """Convert HTML to markdown using html2text."""
+    import html2text  # type: ignore[import-untyped]  # lazy: optional dep
+
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.body_width = 0  # no wrapping
+    return h.handle(html)
+
+
 def _extract_text_body(payload: dict) -> str:
-    """Extract plain text body from message payload."""
+    """Extract plain text body from message payload.
+
+    Prefers text/plain parts. Falls back to converting text/html to markdown
+    when no plain-text part is available (HTML-only emails).
+    """
     mime_type = payload.get("mimeType", "")
 
     if mime_type == "text/plain":
         return _decode_body(payload)
 
+    if mime_type == "text/html":
+        return _html_to_markdown(_decode_body(payload))
+
     if mime_type.startswith("multipart/"):
         parts = payload.get("parts", [])
+        # Prefer text/plain
         for part in parts:
             if part.get("mimeType") == "text/plain":
                 return _decode_body(part)
+        # Fall back to text/html converted to markdown
+        for part in parts:
+            if part.get("mimeType") == "text/html":
+                return _html_to_markdown(_decode_body(part))
+        # Recurse into nested multipart
         for part in parts:
             result = _extract_text_body(part)
             if result:
@@ -250,6 +310,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
         from_addr = _get_header(headers, "From")
         to_addr = _get_header(headers, "To")
         date_str = _get_header(headers, "Date")
+        rfc_message_id = _get_header(headers, "Message-Id")
         msg_id = msg.get("id", "")
 
         try:
@@ -260,7 +321,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
         except (ValueError, TypeError):
             date_iso = date_str
 
-        body = _extract_text_body(payload)
+        body = _strip_quoted_text(_extract_text_body(payload))
         attachments = _extract_attachments(payload, msg_id, service)
 
         sender_name = from_addr.split("<")[0].strip().strip('"') or from_addr
@@ -279,6 +340,7 @@ def pull_thread(thread_id: str, *, service=None) -> list[MailSection]:
                 date=date_iso,
                 content=body.strip(),
                 attachments=attachments,
+                message_id=rfc_message_id,
             )
         )
 

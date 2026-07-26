@@ -56,7 +56,9 @@ import base64
 import difflib
 import logging
 import mimetypes
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email import encoders
@@ -67,8 +69,10 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
+import mistune
 
-from ..auth import get_service
+
+from ..auth import get_service, CONFIG_DIR
 from .. import gaxfile
 from ..resource import Resource
 
@@ -93,6 +97,7 @@ class DraftHeader:
     bcc: str = ""
     thread_id: str = ""
     in_reply_to: str = ""
+    references: str = ""  # space-separated ancestor Message-IDs
     source: str = ""
     time: str = ""
     attachments: list[str] = field(default_factory=list)
@@ -130,6 +135,7 @@ def parse_draft(content: str) -> tuple[DraftHeader, str]:
         bcc=h.get("bcc", ""),
         thread_id=h.get("thread_id", ""),
         in_reply_to=h.get("in_reply_to", ""),
+        references=h.get("references", ""),
         source=h.get("source", ""),
         time=h.get("time", ""),
         attachments=attachments,
@@ -150,6 +156,8 @@ def format_draft(header: DraftHeader, body: str) -> str:
         h["thread_id"] = header.thread_id
     if header.in_reply_to:
         h["in_reply_to"] = header.in_reply_to
+    if header.references:
+        h["references"] = header.references
 
     h["subject"] = header.subject
     h["to"] = header.to
@@ -191,6 +199,33 @@ def parse_draft_id(url_or_id: str) -> str:
 # =============================================================================
 
 
+def _load_signature() -> tuple[str, str] | None:
+    """Load email signature from ~/.config/gax/signature.md or signature.html.
+
+    Returns (plain_text, html) tuple, or None if no signature file exists.
+    Prefers signature.md; falls back to signature.html.
+    """
+    md_path = CONFIG_DIR / "signature.md"
+    html_path = CONFIG_DIR / "signature.html"
+
+    if md_path.exists():
+        text = md_path.read_text(encoding="utf-8").strip()
+        html = str(mistune.html(text))
+        return text, html
+
+    if html_path.exists():
+        raw_html = html_path.read_text(encoding="utf-8").strip()
+        # Use the raw HTML as-is; provide a plain-text strip for the plain part
+        import html2text  # type: ignore[import-untyped]
+
+        h = html2text.HTML2Text()
+        h.body_width = 0
+        plain = h.handle(raw_html).strip()
+        return plain, raw_html
+
+    return None
+
+
 def get_header(headers_list: list[dict], name: str) -> str:
     """Get a header value by name from Gmail API headers list."""
     for h in headers_list:
@@ -208,12 +243,25 @@ def build_message(
 
     Args:
         header: Draft metadata.
-        body: Plain text body.
+        body: Markdown body (converted to multipart/alternative with HTML).
         attachments: Optional list of (filename, mime_type, data) tuples.
     """
+    sig = _load_signature()
+    if sig is not None:
+        sig_plain, sig_html = sig
+        plain_body = body + "\n\n-- \n" + sig_plain
+        html_body = str(mistune.html(body)) + "\n<br>-- <br>\n" + sig_html
+    else:
+        plain_body = body
+        html_body = str(mistune.html(body))
+
+    alternative = MIMEMultipart("alternative")
+    alternative.attach(MIMEText(plain_body, "plain", "utf-8"))
+    alternative.attach(MIMEText(html_body, "html", "utf-8"))
+
     if attachments:
-        message = MIMEMultipart()
-        message.attach(MIMEText(body, "plain", "utf-8"))
+        message: MIMEMultipart = MIMEMultipart("mixed")
+        message.attach(alternative)
         for filename, mime_type, data in attachments:
             maintype, subtype = mime_type.split("/", 1)
             part = MIMEBase(maintype, subtype)
@@ -222,7 +270,7 @@ def build_message(
             part.add_header("Content-Disposition", "attachment", filename=filename)
             message.attach(part)
     else:
-        message = MIMEText(body, "plain", "utf-8")
+        message = alternative
 
     message["to"] = header.to
     message["subject"] = header.subject
@@ -233,7 +281,7 @@ def build_message(
         message["bcc"] = header.bcc
     if header.in_reply_to:
         message["In-Reply-To"] = header.in_reply_to
-        message["References"] = header.in_reply_to
+        message["References"] = header.references or header.in_reply_to
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
@@ -538,7 +586,18 @@ class Draft(Resource):
 
         header.time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         new_content = format_draft(header, body)
-        self.path.write_text(new_content, encoding="utf-8")
+        # Write atomically so draft_id is never lost if the process is interrupted
+        # between the Gmail API create and the local file update.
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".tmp",
+            dir=self.path.parent,
+            delete=False,
+            encoding="utf-8",
+        ) as tmp:
+            tmp.write(new_content)
+            tmp_path = tmp.name
+        os.replace(tmp_path, self.path)
         logger.info("Pushed successfully")
 
 
