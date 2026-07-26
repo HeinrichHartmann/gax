@@ -878,9 +878,10 @@ class Form(Resource):
         header, body_content = parse_form_file(self.path)
 
         if header.content_type != "application/yaml":
-            raise ValueError(
-                "Plan/apply only works with YAML format files (use --format yaml)"
-            )
+            # Markdown forms are view-only; no structured diff available.
+            # Return a notice so confirm_and_pull shows something sensible
+            # instead of raising into the YAML-only plan/apply path.
+            return "Re-fetch form from remote (markdown format — no structured diff)"
 
         form_id = _resolve_form_id(header)
         local_body = parse_form_body(body_content)

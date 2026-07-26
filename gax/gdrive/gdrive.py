@@ -557,6 +557,10 @@ class Folder(Resource):
         logger.info(f"Cloned: {cloned}, Skipped: {skipped}")
         return folder
 
+    def diff(self, **kw) -> str | None:
+        """Drive folders don't support structured diff — return a notice."""
+        return "Re-fetch folder contents from Drive (no structured diff)"
+
     def pull(self, **kw) -> None:
         """Pull latest files for a checkout folder.
 

@@ -279,7 +279,7 @@ class TestDocE2E:
         assert result.returncode == 0, f"Push failed: {result.stderr}"
 
         # Pull and verify
-        result = _run_gax("doc", "tab", "pull", str(tracking_file))
+        result = _run_gax("doc", "tab", "pull", str(tracking_file), "-y")
         assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
         final_content = tracking_file.read_text()
@@ -368,7 +368,7 @@ class TestDocE2E:
 
             # Step 4: Pull the checkout folder — should fail with "Tab not found"
             # because Doc.diff() -> Tab.diff() looks up by the stale local tab name
-            result = _run_gax("pull", str(checkout_dir))
+            result = _run_gax("pull", str(checkout_dir), "-y")
             assert result.returncode != 0, (
                 "Expected pull to fail after tab rename, but it succeeded"
             )
@@ -1130,7 +1130,7 @@ class TestDraftE2E:
             assert result.returncode == 0, f"Update push failed: {result.stderr}"
 
             # Pull back
-            result = _run_gax("pull", str(draft_file))
+            result = _run_gax("pull", str(draft_file), "-y")
             assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
             pulled = draft_file.read_text()
@@ -1426,7 +1426,7 @@ class TestContactsE2E:
             assert resource_name, "Contact was not created in Google"
 
             # Pull — should now include the contact with a resourceName
-            result = _run_gax("contacts", "pull", str(contacts_file))
+            result = _run_gax("contacts", "pull", str(contacts_file), "-y")
             assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
             pulled_content = contacts_file.read_text()
@@ -1543,7 +1543,7 @@ class TestLabelE2E:
             assert test_labels[0]["name"] == test_label_name
 
             # Pull — should include the new label
-            result = _run_gax("mail-label", "pull", str(labels_file))
+            result = _run_gax("mail-label", "pull", str(labels_file), "-y")
             assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
             pulled_content = labels_file.read_text()
@@ -1657,7 +1657,7 @@ class TestFilterE2E:
             )
 
             # Pull — should include the new filter
-            result = _run_gax("mail-filter", "pull", str(filters_file))
+            result = _run_gax("mail-filter", "pull", str(filters_file), "-y")
             assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
             pulled_content = filters_file.read_text()
@@ -1765,7 +1765,7 @@ class TestFormE2E:
         assert result.returncode == 0, f"Clone failed: {result.stderr}"
 
         # Pull should succeed and update synced timestamp
-        result = _run_gax("form", "pull", str(output_file))
+        result = _run_gax("form", "pull", str(output_file), "-y")
         assert result.returncode == 0, f"Pull failed: {result.stderr}"
 
         content = output_file.read_text()
@@ -1810,7 +1810,7 @@ class TestFormE2E:
         result = _run_gax("form", "clone", form_url, "-o", str(output_file))
         assert result.returncode == 0, f"Clone failed: {result.stderr}"
 
-        result = _run_gax("pull", str(output_file))
+        result = _run_gax("pull", str(output_file), "-y")
         assert result.returncode == 0, f"Unified pull failed: {result.stderr}"
 
 

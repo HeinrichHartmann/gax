@@ -285,6 +285,12 @@ def confirm_and_push(resource, *, yes=False, **kw):
                     err=True,
                 )
                 if not yes:
+                    if not sys.stdin.isatty():
+                        click.echo(
+                            "Refusing to prompt without a TTY; pass -y to skip confirmation.",
+                            err=True,
+                        )
+                        sys.exit(1)
                     if not click.confirm("Remote has changed. Push anyway?"):
                         click.echo("Cancelled.")
                         return
@@ -294,6 +300,12 @@ def confirm_and_push(resource, *, yes=False, **kw):
         return
     if not yes:
         click.echo(diff_text)
+        if not sys.stdin.isatty():
+            click.echo(
+                "Refusing to prompt without a TTY; pass -y to skip confirmation.",
+                err=True,
+            )
+            sys.exit(1)
         if not click.confirm("Push these changes?"):
             click.echo("Cancelled.")
             return
@@ -309,6 +321,12 @@ def confirm_and_pull(resource, *, yes=False, **kw):
         return
     if not yes:
         click.echo(diff_text)
+        if not sys.stdin.isatty():
+            click.echo(
+                "Refusing to prompt without a TTY; pass -y to skip confirmation.",
+                err=True,
+            )
+            sys.exit(1)
         if not click.confirm("Pull these changes?"):
             click.echo("Cancelled.")
             return
