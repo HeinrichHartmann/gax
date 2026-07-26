@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-07-26
+
+### Added
+- **Faithful surgical push for Google Docs** (ADR 034/035): three-way
+  plan with revision gate and run-level splicing; pull captures a
+  baseline + revisionId (content-addressed store) as the diff anchor
+- Plan-driven `gax diff`/`gax push` with `--force-replace` escape hatch
+- **Pull guard**: `gax pull` refuses to overwrite unpushed local edits
+  (`--force` to discard); **push guard** refuses when the remote moved
+  since pull
+- Sync header in frontmatter across all resources (doc, sheet, draft,
+  thread, slides, drive, calendar, tasks, forms, contacts) with
+  staleness warnings in push flows
+- `gax pull -r/--recursive` — collect `.gax.md` files and `.gax.md.d/`
+  folders across directory trees
+- Mail: signature auto-append from `~/.config/gax/signature.md`;
+  quoted reply history stripped from thread bodies; reply drafts set
+  In-Reply-To/References (correct Gmail threading); drafts sent as
+  multipart/alternative with HTML; HTML→markdown fallback when no
+  text/plain part
+- Live-API fidelity e2e suite for surgical push
+- Tree IR (`doc-tree/v1`): formal schema validator, compression
+  passes (experimental, `experiments/tree_ir_prototype/`)
+
+### Changed
+- **Single-editor sync model** (ADR 037): one push code path; the
+  revision guard on push + unpushed-edit guard on pull replace all
+  multi-editor drift machinery
+- Non-interactive `pull`/`push` refuse to prompt without a TTY and
+  point to `-y` instead of failing silently
+
+### Fixed
+- Revision guard no longer trips on your own push: after pushing a tab
+  in a checkout folder, sibling tab files get the new revisionId
+- Unified `gax pull` works on markdown-format forms and drive folders
+  (previously died in the YAML-only plan/apply or diff path)
+- Draft push writes local files atomically (no more lost `draft_id`)
+- Quoted-text stripping hardened against false positives
+
+### Internal
+- ADRs 034–037 accepted (surgical push, Tree IR, compression pipeline,
+  single-editor sync)
+- Multi-agent tooling: `scripts/spawn.py`/`cspawn.py` (profiled agent
+  spawning), worker/reviewer/architect/librarian profiles,
+  squash-merge convention (one commit per bead on main)
+- `wiki/` knowledge base (llm-wiki pattern) with `wiki/schema.md`
+  discipline and `scripts/wikilint.py` gate
+
 ## [Unreleased]
 
 ### Added
