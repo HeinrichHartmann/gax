@@ -31,9 +31,35 @@ from .enriched_ir import (
 # Serialize: IR → YAML dict → YAML string
 # =============================================================================
 
+# Link-blue RGB components (gax-tvv): #1155cc = (17, 85, 204)
+_LINK_BLUE_RGB = (17, 85, 204)
+
+
+def _is_link_implied_color(color: str) -> bool:
+    """True if hex color is approximately the link-default blue (#1155cc ± 2).
+
+    Google Docs reports the link foreground as an RGB float that rounds to
+    #1155cc. We allow ±2 per channel to absorb float-to-int rounding noise.
+    """
+    if not color or not color.startswith("#") or len(color) != 7:
+        return False
+    try:
+        r = int(color[1:3], 16)
+        g = int(color[3:5], 16)
+        b = int(color[5:7], 16)
+        lr, lg, lb = _LINK_BLUE_RGB
+        return abs(r - lr) <= 2 and abs(g - lg) <= 2 and abs(b - lb) <= 2
+    except (ValueError, IndexError):
+        return False
+
 
 def _serialize_text_style(style: TextStyle) -> dict[str, Any]:
-    """Serialize a TextStyle to a compact dict (omitting defaults)."""
+    """Serialize a TextStyle to a compact dict (omitting defaults).
+
+    Link-implied attributes are suppressed when url is present (gax-tvv):
+    - underline=True is implied by any link → omit when url set
+    - foreground_color≈#1155cc (link blue) is implied → omit when url set
+    """
     d: dict[str, Any] = {}
     if style.bold:
         d["b"] = True
@@ -41,11 +67,15 @@ def _serialize_text_style(style: TextStyle) -> dict[str, Any]:
         d["i"] = True
     if style.strikethrough:
         d["s"] = True
-    if style.underline:
+    # Suppress underline when it is implied by the link.
+    if style.underline and not style.url:
         d["u"] = True
     if style.url:
         d["url"] = style.url
-    if style.foreground_color:
+    # Suppress link-blue foreground color when implied by the link.
+    if style.foreground_color and not (
+        style.url and _is_link_implied_color(style.foreground_color)
+    ):
         d["color"] = style.foreground_color
     if style.background_color:
         d["bg"] = style.background_color
@@ -60,16 +90,25 @@ def _serialize_text_style(style: TextStyle) -> dict[str, Any]:
     return d
 
 
-def _serialize_para_style(style: ParagraphStyle) -> dict[str, Any]:
-    """Serialize a ParagraphStyle to a compact dict (omitting defaults)."""
+def _serialize_para_style(
+    style: ParagraphStyle, suppress_indent: bool = False
+) -> dict[str, Any]:
+    """Serialize a ParagraphStyle to a compact dict (omitting defaults).
+
+    Args:
+        style: The ParagraphStyle to serialize.
+        suppress_indent: When True, omit indent_start and indent_first_line.
+            Used for list items where depth already captures the nesting level
+            (gax-tvv).
+    """
     d: dict[str, Any] = {}
     if style.alignment:
         d["align"] = style.alignment.lower()
-    if style.indent_start:
+    if style.indent_start and not suppress_indent:
         d["indent_start"] = style.indent_start
     if style.indent_end:
         d["indent_end"] = style.indent_end
-    if style.indent_first_line:
+    if style.indent_first_line and not suppress_indent:
         d["indent_first"] = style.indent_first_line
     if style.line_spacing:
         d["line_spacing"] = style.line_spacing
@@ -142,7 +181,8 @@ def _serialize_block(block: Block) -> dict[str, Any]:
 
     elif isinstance(block, ListItem):
         runs = _serialize_runs(block.spans)
-        ps = _serialize_para_style(block.para_style)
+        # indentStart/indentFirstLine are implied by depth → suppress (gax-tvv).
+        ps = _serialize_para_style(block.para_style, suppress_indent=True)
         kind = "ol" if block.ordered else "ul"
         # Compact: single unstyled list item → { ul: "text" } or { ol: "text" }
         if isinstance(runs, str) and not ps and block.depth == 0:

@@ -231,8 +231,37 @@ def _hex_to_color(hex_str: str) -> dict:
     return {"color": {"rgbColor": {"red": r, "green": g, "blue": b}}}
 
 
+# Link-blue RGB (gax-tvv / gax-q5m): #1155cc = (17, 85, 204)
+_LINK_BLUE_RGB = (17, 85, 204)
+
+
+def _is_link_blue(hex_color: str) -> bool:
+    """True if hex_color is approximately the link-default blue (#1155cc ± 2/channel).
+
+    Google Docs sets foregroundColor to this value on every linked textRun.
+    The ±2 tolerance absorbs float-to-int rounding in the Docs API response.
+    """
+    if not hex_color or not hex_color.startswith("#") or len(hex_color) != 7:
+        return False
+    try:
+        r = int(hex_color[1:3], 16)
+        g = int(hex_color[3:5], 16)
+        b = int(hex_color[5:7], 16)
+        lr, lg, lb = _LINK_BLUE_RGB
+        return abs(r - lr) <= 2 and abs(g - lg) <= 2 and abs(b - lb) <= 2
+    except (ValueError, IndexError):
+        return False
+
+
 def _extract_text_style(style_dict: dict) -> TextStyle:
-    """Extract a TextStyle from a Docs API textStyle dict."""
+    """Extract a TextStyle from a Docs API textStyle dict.
+
+    Link-implied attributes are suppressed at extraction time (gax-tvv/gax-q5m):
+    when a link is present the API always reports underline=True and
+    foregroundColor≈#1155cc. Clearing them here ensures that both the base
+    IR (from_doc_json) and the local IR (parse_tree) agree after a
+    serialize→parse round-trip, preventing spurious updateTextStyle mutations.
+    """
     if not style_dict:
         return TextStyle()
 
@@ -260,13 +289,24 @@ def _extract_text_style(style_dict: dict) -> TextStyle:
     if baseline == "NONE":
         baseline = None
 
+    url = style_dict.get("link", {}).get("url") if "link" in style_dict else None
+    underline = style_dict.get("underline", False)
+    fg_color = _color_to_hex(style_dict.get("foregroundColor"))
+
+    # Suppress link-implied attributes at extraction so both diff sides agree.
+    if url:
+        if underline:
+            underline = False
+        if fg_color and _is_link_blue(fg_color):
+            fg_color = None
+
     return TextStyle(
         bold=style_dict.get("bold", False),
         italic=style_dict.get("italic", False),
         strikethrough=style_dict.get("strikethrough", False),
-        underline=style_dict.get("underline", False),
-        url=style_dict.get("link", {}).get("url") if "link" in style_dict else None,
-        foreground_color=_color_to_hex(style_dict.get("foregroundColor")),
+        underline=underline,
+        url=url,
+        foreground_color=fg_color,
         background_color=_color_to_hex(style_dict.get("backgroundColor")),
         font_family=font_family,
         font_size=font_size,
@@ -275,8 +315,40 @@ def _extract_text_style(style_dict: dict) -> TextStyle:
     )
 
 
-def _extract_para_style(style_dict: dict) -> ParagraphStyle:
-    """Extract a ParagraphStyle from a Docs API paragraphStyle dict."""
+# =============================================================================
+# Known table-cell paragraph style defaults (gax-24m)
+# =============================================================================
+
+# These keys appear verbatim on every table cell paragraph style with their
+# default values. Suppressing them in the IR reduces YAML noise significantly
+# while the original data is preserved in Table._raw_table for push.
+_TABLE_CELL_PARA_DEFAULT_KEYS: frozenset[str] = frozenset({
+    "borderBetween", "borderTop", "borderBottom", "borderLeft", "borderRight",
+    "keepLinesTogether", "keepWithNext", "avoidWidowAndOrphan",
+    "shading", "pageBreakBefore", "spacingMode",
+})
+
+# lineSpacing=100 is the table-cell default; suppress it when table_cell=True.
+_TABLE_CELL_DEFAULT_LINE_SPACING = 100
+
+
+def _extract_para_style(
+    style_dict: dict,
+    table_cell: bool = False,
+    list_item: bool = False,
+) -> ParagraphStyle:
+    """Extract a ParagraphStyle from a Docs API paragraphStyle dict.
+
+    Args:
+        style_dict: The raw paragraphStyle dict from the Docs API.
+        table_cell: When True, suppress known table-cell default keys from raw
+            (borders, shading, keepLines*, etc.) and the default lineSpacing
+            of 100. These defaults are preserved in Table._raw_table for push.
+        list_item: When True, suppress indentStart and indentFirstLine because
+            they are implied by the list nesting depth (gax-tvv). Suppressing
+            them here prevents spurious diffs when serialize/parse round-trips
+            through YAML (where they are also elided via suppress_indent=True).
+    """
     if not style_dict:
         return ParagraphStyle()
 
@@ -286,7 +358,9 @@ def _extract_para_style(style_dict: dict) -> ParagraphStyle:
         "direction", "headingId",
     }
 
-    raw = {k: v for k, v in style_dict.items() if k not in known_keys}
+    # For table cells also exclude the known-default noise keys from raw.
+    exclude = known_keys | _TABLE_CELL_PARA_DEFAULT_KEYS if table_cell else known_keys
+    raw = {k: v for k, v in style_dict.items() if k not in exclude}
 
     alignment = style_dict.get("alignment")
     if alignment == "START":
@@ -298,13 +372,20 @@ def _extract_para_style(style_dict: dict) -> ParagraphStyle:
             return obj.get("magnitude")
         return None
 
+    line_spacing = style_dict.get("lineSpacing")
+    # Suppress the table-cell default lineSpacing=100 from the IR.
+    if table_cell and line_spacing == _TABLE_CELL_DEFAULT_LINE_SPACING:
+        line_spacing = None
+
     return ParagraphStyle(
         alignment=alignment,
         named_style=style_dict.get("namedStyleType"),
-        indent_start=_mag("indentStart"),
+        # For list items, indentStart/indentFirstLine are derived from depth;
+        # suppress them to prevent spurious diffs during serialize/parse cycles.
+        indent_start=None if list_item else _mag("indentStart"),
         indent_end=_mag("indentEnd"),
-        indent_first_line=_mag("indentFirstLine"),
-        line_spacing=style_dict.get("lineSpacing"),
+        indent_first_line=None if list_item else _mag("indentFirstLine"),
+        line_spacing=line_spacing,
         space_above=_mag("spaceAbove"),
         space_below=_mag("spaceBelow"),
         raw=raw if raw else None,
@@ -362,7 +443,8 @@ def from_doc_json(
                                 _spans_from_textruns(ce["paragraph"].get("elements", []))
                             )
                             cell_para_style = _extract_para_style(
-                                ce["paragraph"].get("paragraphStyle", {})
+                                ce["paragraph"].get("paragraphStyle", {}),
+                                table_cell=True,
                             )
                     row_spans.append(cell_spans)
                     row_styles.append(cell_para_style)
@@ -390,7 +472,9 @@ def from_doc_json(
         style = para.get("paragraphStyle", {})
         named_style = style.get("namedStyleType", "NORMAL_TEXT")
         bullet = para.get("bullet")
-        para_style = _extract_para_style(style)
+        # Pass list_item=True when this paragraph is a bullet; suppresses
+        # indentStart/indentFirstLine which are implied by depth (gax-tvv).
+        para_style = _extract_para_style(style, list_item=(bullet is not None))
 
         # Heading
         if named_style in HEADING_STYLES:

@@ -810,6 +810,341 @@ class TestLiveDocRoundTrip:
         )
 
 
+# =============================================================================
+# Enriched IR suppression tests (gax-24m)
+# =============================================================================
+
+
+class TestTableCellDefaultSuppression:
+    """Unit tests for table-cell default paragraph style suppression (gax-24m)."""
+
+    def _make_cell_body(self, para_style: dict) -> list[dict]:
+        """Wrap a paragraphStyle in minimal table-body content."""
+        return [{
+            "startIndex": 1,
+            "endIndex": 10,
+            "table": {
+                "rows": 1,
+                "columns": 1,
+                "tableRows": [{
+                    "tableCells": [{
+                        "content": [{
+                            "startIndex": 1,
+                            "endIndex": 10,
+                            "paragraph": {
+                                "elements": [{
+                                    "startIndex": 1,
+                                    "endIndex": 10,
+                                    "textRun": {
+                                        "content": "Cell text\n",
+                                        "textStyle": {},
+                                    },
+                                }],
+                                "paragraphStyle": para_style,
+                            },
+                        }],
+                    }],
+                }],
+            },
+        }]
+
+    def test_border_defaults_not_in_raw(self):
+        """Known border defaults are stripped from cell ParagraphStyle.raw."""
+        from .enriched_ir import Table, from_doc_json
+
+        para_style = {
+            "namedStyleType": "NORMAL_TEXT",
+            "lineSpacing": 100,
+            "borderTop": {
+                "color": {}, "width": {"unit": "PT"},
+                "padding": {"unit": "PT"}, "dashStyle": "SOLID",
+            },
+            "borderLeft": {
+                "color": {}, "width": {"unit": "PT"},
+                "padding": {"unit": "PT"}, "dashStyle": "SOLID",
+            },
+            "keepLinesTogether": False,
+            "shading": {"backgroundColor": {}},
+            "pageBreakBefore": False,
+        }
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        assert len(blocks) == 1
+        assert isinstance(blocks[0], Table)
+        cell_ps = blocks[0].cell_styles[0][0]
+        # raw should be None (all keys were defaults)
+        assert cell_ps.raw is None, f"Expected raw=None, got: {cell_ps.raw}"
+
+    def test_line_spacing_100_suppressed(self):
+        """lineSpacing=100 (table-cell default) is suppressed from IR."""
+        from .enriched_ir import Table, from_doc_json
+
+        para_style = {"namedStyleType": "NORMAL_TEXT", "lineSpacing": 100}
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        cell_ps = blocks[0].cell_styles[0][0]
+        assert cell_ps.line_spacing is None, (
+            f"lineSpacing=100 should be suppressed, got: {cell_ps.line_spacing}"
+        )
+
+    def test_non_default_line_spacing_kept(self):
+        """Non-default lineSpacing (e.g. 115) is kept in the IR."""
+        from .enriched_ir import Table, from_doc_json
+
+        para_style = {"namedStyleType": "NORMAL_TEXT", "lineSpacing": 115}
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        cell_ps = blocks[0].cell_styles[0][0]
+        assert cell_ps.line_spacing == 115
+
+    def test_spacingmode_default_suppressed(self):
+        """spacingMode=COLLAPSE_LISTS (table-cell noise) is suppressed from raw."""
+        from .enriched_ir import Table, from_doc_json
+
+        para_style = {
+            "namedStyleType": "NORMAL_TEXT",
+            "spacingMode": "COLLAPSE_LISTS",
+        }
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        cell_ps = blocks[0].cell_styles[0][0]
+        assert cell_ps.raw is None or "spacingMode" not in (cell_ps.raw or {})
+
+    def test_yaml_contains_no_border_noise(self):
+        """YAML output for table with cell border defaults has no border keys."""
+        from .enriched_ir import from_doc_json
+        from .yaml_serializer import serialize_tree
+
+        para_style = {
+            "namedStyleType": "NORMAL_TEXT",
+            "lineSpacing": 100,
+            "borderTop": {
+                "color": {}, "width": {"unit": "PT"},
+                "padding": {"unit": "PT"}, "dashStyle": "SOLID",
+            },
+            "borderBottom": {
+                "color": {}, "width": {"unit": "PT"},
+                "padding": {"unit": "PT"}, "dashStyle": "SOLID",
+            },
+            "keepLinesTogether": False,
+            "keepWithNext": False,
+            "avoidWidowAndOrphan": False,
+            "shading": {"backgroundColor": {}},
+            "pageBreakBefore": False,
+            "spacingMode": "COLLAPSE_LISTS",
+        }
+        blocks = from_doc_json(self._make_cell_body(para_style))
+        yaml_str = serialize_tree(blocks)
+        assert "borderTop" not in yaml_str, "Border defaults must not appear in YAML"
+        assert "borderBottom" not in yaml_str
+        assert "keepLinesTogether" not in yaml_str
+        assert "shading" not in yaml_str
+        assert "spacingMode" not in yaml_str
+
+
+# =============================================================================
+# YAML serializer suppression tests (gax-tvv)
+# =============================================================================
+
+
+class TestYamlSerializerSuppression:
+    """Unit tests for link-implied style and list-indent suppression (gax-tvv)."""
+
+    def test_link_suppresses_underline(self):
+        """underline=True is omitted when url is also set."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        style = TextStyle(underline=True, url="https://example.com")
+        result = _serialize_text_style(style)
+        assert "u" not in result, "underline implied by link should be suppressed"
+        assert result.get("url") == "https://example.com"
+
+    def test_link_suppresses_link_blue_color(self):
+        """foreground_color≈#1155cc is omitted when url is set."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        style = TextStyle(url="https://x.com", foreground_color="#1155cc")
+        result = _serialize_text_style(style)
+        assert "color" not in result, "link-blue color implied by link should be suppressed"
+        assert result.get("url") == "https://x.com"
+
+    def test_link_preserves_non_link_color(self):
+        """Non-link-blue foreground color is preserved even when url is set."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        style = TextStyle(url="https://x.com", foreground_color="#cc0000")
+        result = _serialize_text_style(style)
+        assert result.get("color") == "#cc0000", "Non-link color must be kept"
+
+    def test_underline_without_link_preserved(self):
+        """underline=True is preserved when no url is present."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        style = TextStyle(underline=True)
+        result = _serialize_text_style(style)
+        assert result.get("u") is True
+
+    def test_link_blue_color_variant_suppressed(self):
+        """Color close to #1155cc (float rounding) is also suppressed for links."""
+        from .enriched_ir import TextStyle
+        from .yaml_serializer import _serialize_text_style
+
+        # 17=0x11, 84=0x54 (off by 1 from 0x55=85), 204=0xcc — within ±2
+        style = TextStyle(url="https://x.com", foreground_color="#1154cc")
+        result = _serialize_text_style(style)
+        assert "color" not in result
+
+    def test_list_item_indent_suppressed_by_depth(self):
+        """indent_start and indent_first are suppressed for list items."""
+        from .enriched_ir import ListItem, ParagraphStyle, Span, TextStyle
+        from .yaml_serializer import _serialize_block
+
+        block = ListItem(
+            spans=[Span(text="item", style=TextStyle())],
+            depth=1,
+            para_style=ParagraphStyle(indent_start=72.0, indent_first_line=54.0),
+        )
+        result = _serialize_block(block)
+        inner = result.get("ul", {})
+        assert inner.get("depth") == 1
+        style_dict = inner.get("style", {})
+        assert "indent_start" not in style_dict, "indent_start implied by depth should be suppressed"
+        assert "indent_first" not in style_dict, "indent_first implied by depth should be suppressed"
+
+    def test_list_item_depth0_indent_suppressed(self):
+        """Depth-0 list items also have indent suppressed (depth=0 omitted)."""
+        from .enriched_ir import ListItem, ParagraphStyle, Span, TextStyle
+        from .yaml_serializer import _serialize_block
+
+        block = ListItem(
+            spans=[Span(text="top level", style=TextStyle())],
+            depth=0,
+            para_style=ParagraphStyle(indent_start=36.0, indent_first_line=18.0),
+        )
+        result = _serialize_block(block)
+        # Depth-0 with only indent → should be compact string form
+        assert result.get("ul") == "top level", (
+            f"Depth-0 list with only suppressed indent should be compact; got: {result}"
+        )
+
+    def test_list_item_non_indent_style_kept(self):
+        """Non-indent paragraph style attributes on list items are preserved."""
+        from .enriched_ir import ListItem, ParagraphStyle, Span, TextStyle
+        from .yaml_serializer import _serialize_block
+
+        block = ListItem(
+            spans=[Span(text="centered item", style=TextStyle())],
+            depth=0,
+            para_style=ParagraphStyle(alignment="CENTER", indent_start=36.0),
+        )
+        result = _serialize_block(block)
+        inner = result.get("ul", {})
+        assert inner.get("style", {}).get("align") == "center", "alignment must be kept"
+        assert "indent_start" not in inner.get("style", {}), "indent must be suppressed"
+
+    # ------------------------------------------------------------------
+    # Offline round-trip regression test (gax-q5m)
+    # NOT @e2e — runs in the default suite so skipping live tests cannot
+    # mask this class of bug again.
+    # ------------------------------------------------------------------
+
+    def test_linked_run_round_trip_style_equal(self):
+        """from_doc_json → serialize → parse preserves style_equal for linked runs.
+
+        Regression for gax-q5m: the original gax-tvv impl suppressed
+        link-implied underline/color only in the serializer, not at
+        extraction. That left base.underline=True / #1155cc while local
+        (post-parse) had False/None → spurious diff on every linked run.
+        """
+        from .enriched_ir import Paragraph, from_doc_json
+        from .yaml_serializer import parse_tree, serialize_tree
+
+        # Synthetic body content: one paragraph with three runs where the
+        # middle run has a link (with API-injected underline + link-blue color).
+        link_blue = {"color": {"rgbColor": {"red": 0.067, "green": 0.333, "blue": 0.8}}}
+        body_content = [{
+            "startIndex": 1,
+            "endIndex": 50,
+            "paragraph": {
+                "elements": [
+                    {
+                        "startIndex": 1,
+                        "endIndex": 6,
+                        "textRun": {"content": "See ", "textStyle": {}},
+                    },
+                    {
+                        "startIndex": 6,
+                        "endIndex": 20,
+                        "textRun": {
+                            "content": "this article",
+                            "textStyle": {
+                                "link": {"url": "https://example.com"},
+                                "underline": True,
+                                "foregroundColor": link_blue,
+                            },
+                        },
+                    },
+                    {
+                        "startIndex": 20,
+                        "endIndex": 50,
+                        "textRun": {"content": " for more details.\n", "textStyle": {}},
+                    },
+                ],
+                "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            },
+        }]
+
+        # Base IR from raw JSON
+        base_blocks = from_doc_json(body_content)
+        assert base_blocks, "Should parse to at least one block"
+
+        # Find the linked span in base blocks and confirm link-implied styles
+        # are already cleared at extraction time.
+        linked_base = None
+        for block in base_blocks:
+            if isinstance(block, Paragraph):
+                for span in block.spans:
+                    if span.style.url:
+                        linked_base = span
+                        break
+        assert linked_base is not None, "Should find a linked span in base blocks"
+        assert not linked_base.style.underline, (
+            "underline must be cleared at extraction (link-implied)"
+        )
+        assert linked_base.style.foreground_color is None, (
+            "link-blue foreground_color must be cleared at extraction"
+        )
+
+        # Serialize → parse round-trip
+        yaml_str = serialize_tree(base_blocks)
+        local_blocks = parse_tree(yaml_str)
+
+        # Every span must have style_equal between base and local.
+        base_spans = [
+            span
+            for block in base_blocks
+            if isinstance(block, Paragraph)
+            for span in block.spans
+        ]
+        local_spans = [
+            span
+            for block in local_blocks
+            if isinstance(block, Paragraph)
+            for span in block.spans
+        ]
+        assert len(base_spans) == len(local_spans), (
+            f"Span count mismatch: base={len(base_spans)} local={len(local_spans)}"
+        )
+        for i, (b, lo) in enumerate(zip(base_spans, local_spans)):
+            assert b.style.style_equal(lo.style), (
+                f"Span {i} ({b.text!r}): style_equal=False\n"
+                f"  base:  url={b.style.url!r} u={b.style.underline} "
+                f"color={b.style.foreground_color!r}\n"
+                f"  local: url={lo.style.url!r} u={lo.style.underline} "
+                f"color={lo.style.foreground_color!r}"
+            )
+
+
 def _dict_diff(a: dict, b: dict, path: str = "") -> str:
     """Find first difference between two nested dicts."""
     if a == b:
