@@ -91,6 +91,67 @@ def _apply_plan(docs_service, doc_id: str, plan, tab_id: str):
     return requests
 
 
+def _strip_index_fields(obj):
+    """Deep-strip startIndex/endIndex from a JSON-like structure for comparison.
+
+    The Docs API shifts all indices when text is inserted/deleted, so we
+    cannot compare raw indices across edits. Stripping them lets us assert
+    that non-edited blocks are structurally identical.
+    """
+    if isinstance(obj, dict):
+        return {
+            k: _strip_index_fields(v)
+            for k, v in obj.items()
+            if k not in ("startIndex", "endIndex")
+        }
+    if isinstance(obj, list):
+        return [_strip_index_fields(item) for item in obj]
+    return obj
+
+
+def _get_structural_blocks(doc: dict) -> list[dict]:
+    """Get structural elements (paragraphs + tables) from body, excluding section breaks."""
+    content = _get_body_content(doc)
+    return [e for e in content if "paragraph" in e or "table" in e]
+
+
+def _assert_untouched_blocks_identical(
+    doc_before: dict,
+    doc_after: dict,
+    edited_indices: set[int],
+    scenario: str = "",
+):
+    """Assert all non-edited blocks are byte-identical (index-stripped).
+
+    ADR 034 invariant 2: untouched content is untouched.
+
+    Args:
+        doc_before: Full doc JSON before edit
+        doc_after: Full doc JSON after edit
+        edited_indices: Set of structural block indices that were edited
+        scenario: Label for assertion message
+    """
+    blocks_before = _get_structural_blocks(doc_before)
+    blocks_after = _get_structural_blocks(doc_after)
+
+    # After insert/delete the block count may differ; only compare
+    # blocks that exist in both and are not in the edited set.
+    # For insert: new blocks appear; for delete: blocks disappear.
+    # We compare the minimum of before/after, skipping edited indices.
+    min_len = min(len(blocks_before), len(blocks_after))
+
+    for i in range(min_len):
+        if i in edited_indices:
+            continue
+        before_stripped = _strip_index_fields(blocks_before[i])
+        after_stripped = _strip_index_fields(blocks_after[i])
+        assert before_stripped == after_stripped, (
+            f"[{scenario}] Block {i} was not edited but differs after push.\n"
+            f"  Before: {json.dumps(before_stripped, sort_keys=True)[:300]}\n"
+            f"  After:  {json.dumps(after_stripped, sort_keys=True)[:300]}"
+        )
+
+
 # =============================================================================
 # Scenario 1: No-op (serialize → parse → diff ⇒ ZERO mutations)
 # =============================================================================
@@ -241,6 +302,10 @@ class TestWordEdit:
         assert has_bold, "Bold formatting should survive word edit"
         assert has_color, "Color formatting should survive word edit"
         assert has_link, "Link should survive word edit"
+
+        # INVARIANT 2: untouched blocks are byte-identical (index-stripped)
+        # The edited paragraph is block 1 (after heading at 0)
+        _assert_untouched_blocks_identical(doc, doc_after, {1}, "Scenario 3")
 
         # Record mutation count
         print(f"\n  Scenario 3 mutations: {mutation_count}")
@@ -511,6 +576,22 @@ class TestInsertParagraph:
         )
         assert "Newly inserted paragraph" in all_text
 
+        # INVARIANT 2: all pre-existing blocks are unchanged (index-stripped).
+        # After insert at position 1, original blocks 0 stays at 0,
+        # and original blocks 1..N shift to 2..N+1 in the after doc.
+        blocks_before = _get_structural_blocks(doc)
+        blocks_after_list = _get_structural_blocks(doc_after)
+        # Check block 0 (heading) unchanged
+        assert _strip_index_fields(blocks_before[0]) == _strip_index_fields(blocks_after_list[0]), \
+            "[Scenario 7] Heading (block 0) should be unchanged after insert"
+        # Check blocks 1..N == blocks 2..N+1 in after (shifted by insert)
+        for i in range(1, len(blocks_before)):
+            before_stripped = _strip_index_fields(blocks_before[i])
+            after_stripped = _strip_index_fields(blocks_after_list[i + 1])
+            assert before_stripped == after_stripped, (
+                f"[Scenario 7] Block {i} (pre) should match block {i+1} (post) after insert"
+            )
+
         print(f"\n  Scenario 7 mutations: {len(requests)}")
 
 
@@ -565,6 +646,24 @@ class TestDeleteParagraph:
         # Remaining list items should still exist
         remaining_list = [b for b in blocks_after if isinstance(b, ListItem)]
         assert len(remaining_list) >= 1, "Other list items should survive"
+
+        # INVARIANT 2: non-deleted blocks are unchanged (index-stripped)
+        # After delete at position delete_idx, blocks before it stay in place,
+        # blocks after shift up by one.
+        blocks_before = _get_structural_blocks(doc)
+        blocks_after_list = _get_structural_blocks(doc_after)
+        for i in range(len(blocks_after_list)):
+            # Map back to pre-edit index
+            pre_idx = i if i < delete_idx else i + 1
+            if pre_idx == delete_idx:
+                continue
+            if pre_idx >= len(blocks_before):
+                break
+            before_stripped = _strip_index_fields(blocks_before[pre_idx])
+            after_stripped = _strip_index_fields(blocks_after_list[i])
+            assert before_stripped == after_stripped, (
+                f"[Scenario 8] Block {pre_idx} (pre) should match block {i} (post) after delete"
+            )
 
         print(f"\n  Scenario 8 mutations: {len(requests)}")
 
@@ -628,6 +727,9 @@ class TestHeadingRename:
             if isinstance(b, (Paragraph, ListItem))
         )
         assert "bold word" in all_text, "Section content should survive heading rename"
+
+        # INVARIANT 2: all blocks except the heading are unchanged
+        _assert_untouched_blocks_identical(doc, doc_after, {0}, "Scenario 9")
 
         print(f"\n  Scenario 9 mutations: {len(requests)}")
 
@@ -701,6 +803,19 @@ class TestTableCellEdit:
                     assert has_bold_cell, "Bold in other cell should survive"
                 break
 
+        # INVARIANT 2: all non-table blocks are unchanged; within the table,
+        # non-edited cells are unchanged. We check blocks outside the table.
+        table_block_idx = None
+        structural = _get_structural_blocks(doc)
+        for i, e in enumerate(structural):
+            if "table" in e:
+                table_block_idx = i
+                break
+        if table_block_idx is not None:
+            _assert_untouched_blocks_identical(
+                doc, doc_after, {table_block_idx}, "Scenario 10"
+            )
+
         print(f"\n  Scenario 10 mutations: {len(requests)}")
 
 
@@ -755,6 +870,18 @@ class TestEmojiEdit:
 
         # Find the emoji paragraph
         found_edit = False
+        emoji_block_idx = None
+        structural = _get_structural_blocks(doc)
+        for i, e in enumerate(structural):
+            if "paragraph" in e:
+                content = "".join(
+                    el.get("textRun", {}).get("content", "")
+                    for el in e["paragraph"].get("elements", [])
+                )
+                if "🎉" in content:
+                    emoji_block_idx = i
+                    break
+
         for b in blocks_after:
             if isinstance(b, Paragraph) and "🎉" in b.text:
                 assert "celebration" in b.text, f"Should have 'celebration', got: {b.text}"
@@ -762,6 +889,12 @@ class TestEmojiEdit:
                 found_edit = True
                 break
         assert found_edit, "Emoji paragraph should still exist with edits"
+
+        # INVARIANT 2: all blocks except the emoji paragraph are unchanged
+        if emoji_block_idx is not None:
+            _assert_untouched_blocks_identical(
+                doc, doc_after, {emoji_block_idx}, "Scenario 11"
+            )
 
         print(f"\n  Scenario 11 mutations: {len(requests)}")
 

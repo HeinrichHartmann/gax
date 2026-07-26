@@ -113,7 +113,7 @@ def _serialize_block(block: Block) -> dict[str, Any]:
         d: dict[str, Any] = {f"h{block.level}": {}}
         inner = d[f"h{block.level}"]
         if isinstance(runs, str):
-            inner["text"] = runs
+            inner["t"] = runs
         else:
             inner["runs"] = runs
         if ps:
@@ -130,7 +130,7 @@ def _serialize_block(block: Block) -> dict[str, Any]:
         d = {}
         inner: dict[str, Any] = {}
         if isinstance(runs, str):
-            inner["text"] = runs
+            inner["t"] = runs
         else:
             inner["runs"] = runs
         if ps:
@@ -150,7 +150,7 @@ def _serialize_block(block: Block) -> dict[str, Any]:
         d = {}
         inner = {}
         if isinstance(runs, str):
-            inner["text"] = runs
+            inner["t"] = runs
         else:
             inner["runs"] = runs
         if block.depth > 0:
@@ -174,7 +174,7 @@ def _serialize_block(block: Block) -> dict[str, Any]:
                         cell_ps = _serialize_para_style(ps_obj)
                 if cell_ps:
                     if isinstance(cell_runs, str):
-                        row_data.append({"text": cell_runs, "style": cell_ps})
+                        row_data.append({"t": cell_runs, "style": cell_ps})
                     else:
                         row_data.append({"runs": cell_runs, "style": cell_ps})
                 else:
@@ -271,9 +271,9 @@ def _parse_block(d: dict) -> Optional[Block]:
             val = d[key]
             if isinstance(val, str):
                 return Heading(level=level, spans=[Span(text=val, style=TextStyle())])
-            # Dict with runs/text and optional style
+            # Dict with runs/t and optional style
             if isinstance(val, dict):
-                runs_data = val.get("runs", val.get("text", ""))
+                runs_data = val.get("runs", val.get("t", ""))
                 spans = _parse_runs(runs_data)
                 ps = _parse_para_style(val.get("style", {}))
                 return Heading(level=level, spans=spans, para_style=ps)
@@ -284,7 +284,7 @@ def _parse_block(d: dict) -> Optional[Block]:
         if isinstance(val, str):
             return Paragraph(spans=[Span(text=val, style=TextStyle())])
         if isinstance(val, dict):
-            runs_data = val.get("runs", val.get("text", ""))
+            runs_data = val.get("runs", val.get("t", ""))
             spans = _parse_runs(runs_data)
             ps = _parse_para_style(val.get("style", {}))
             raw = val.get("raw")
@@ -302,7 +302,7 @@ def _parse_block(d: dict) -> Optional[Block]:
                     ordered=ordered,
                 )
             if isinstance(val, dict):
-                runs_data = val.get("runs", val.get("text", ""))
+                runs_data = val.get("runs", val.get("t", ""))
                 spans = _parse_runs(runs_data)
                 depth = val.get("depth", 0)
                 ps = _parse_para_style(val.get("style", {}))
@@ -330,7 +330,7 @@ def _parse_block(d: dict) -> Optional[Block]:
                     row_spans.append(_parse_runs(cell_raw))
                     row_ps.append(ParagraphStyle())
                 elif isinstance(cell_raw, dict):
-                    runs_data = cell_raw.get("runs", cell_raw.get("text", ""))
+                    runs_data = cell_raw.get("runs", cell_raw.get("t", ""))
                     row_spans.append(_parse_runs(runs_data))
                     row_ps.append(_parse_para_style(cell_raw.get("style", {})))
                 else:
