@@ -72,7 +72,7 @@ from typing import Any
 import mistune
 
 
-from ..auth import get_service
+from ..auth import get_service, CONFIG_DIR
 from .. import gaxfile
 from ..resource import Resource
 
@@ -199,6 +199,33 @@ def parse_draft_id(url_or_id: str) -> str:
 # =============================================================================
 
 
+def _load_signature() -> tuple[str, str] | None:
+    """Load email signature from ~/.config/gax/signature.md or signature.html.
+
+    Returns (plain_text, html) tuple, or None if no signature file exists.
+    Prefers signature.md; falls back to signature.html.
+    """
+    md_path = CONFIG_DIR / "signature.md"
+    html_path = CONFIG_DIR / "signature.html"
+
+    if md_path.exists():
+        text = md_path.read_text(encoding="utf-8").strip()
+        html = str(mistune.html(text))
+        return text, html
+
+    if html_path.exists():
+        raw_html = html_path.read_text(encoding="utf-8").strip()
+        # Use the raw HTML as-is; provide a plain-text strip for the plain part
+        import html2text  # type: ignore[import-untyped]
+
+        h = html2text.HTML2Text()
+        h.body_width = 0
+        plain = h.handle(raw_html).strip()
+        return plain, raw_html
+
+    return None
+
+
 def get_header(headers_list: list[dict], name: str) -> str:
     """Get a header value by name from Gmail API headers list."""
     for h in headers_list:
@@ -219,9 +246,17 @@ def build_message(
         body: Markdown body (converted to multipart/alternative with HTML).
         attachments: Optional list of (filename, mime_type, data) tuples.
     """
-    html_body = str(mistune.html(body))
+    sig = _load_signature()
+    if sig is not None:
+        sig_plain, sig_html = sig
+        plain_body = body + "\n\n-- \n" + sig_plain
+        html_body = str(mistune.html(body)) + "\n<br>-- <br>\n" + sig_html
+    else:
+        plain_body = body
+        html_body = str(mistune.html(body))
+
     alternative = MIMEMultipart("alternative")
-    alternative.attach(MIMEText(body, "plain", "utf-8"))
+    alternative.attach(MIMEText(plain_body, "plain", "utf-8"))
     alternative.attach(MIMEText(html_body, "html", "utf-8"))
 
     if attachments:
