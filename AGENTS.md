@@ -68,17 +68,16 @@ the script passes the profile file as the system prompt).
   code. Runs in the main checkout.
 - **worker** (`worker.md`): claims ready beads and implements them,
   one bead per commit, in an isolated worktree.
-- **reviewer** (`reviewer.md`): reviews worker branches from `review`
-  beads; approves or files `revisions` beads. The architect merges
-  approved branches.
+- **reviewer** (`reviewer.md`): dormant for now. Whoever issues the
+  work reviews it: the architect reviews worker branches from
+  `review` beads (running acceptance criteria live), then
+  squash-merges or files `revisions` beads.
 
 ### Spawning
 
 ```bash
 ./scripts/spawn.py --profile worker --beads "gax-cvi.1 gax-75t"
 ./scripts/spawn.py --profile worker --beads "gdoc"        # by label
-./scripts/spawn.py --profile reviewer --no-fork \
-  --extra-prompt "Review beads: bd list -l review"
 ```
 
 `spawn.py` forks a worktree `../gax-<profile>-<id>` on branch
@@ -95,7 +94,7 @@ session to the given beads/label, and sets the cmux tab title.
   (`review`/`revisions`/`approved` labels); never through shared
   uncommitted files.
 - Merge discipline: **workers rebase** their branch onto main (before
-  each ticket and before review); **architect/reviewer squash-merge**
+  each ticket and before review); the **architect squash-merges**
   approved branches (`git merge --squash worker/<id>`) — one commit
   per bead on main, micro-commits stay on the worker branch.
 - All shell commands must be prefixed with `direnv exec .` (direnv/nix).

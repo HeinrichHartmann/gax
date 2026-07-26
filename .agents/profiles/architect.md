@@ -115,23 +115,22 @@ audit existing issues.
    `main` *before* spawning workers, so they branch from a current
    state. Workers cannot see uncommitted files on `main`.
 
-7. **Delegate reviews**: when workers signal completion
-   (`bd list -l review`), spawn a reviewer agent:
+7. **Review worker branches yourself**: when workers signal
+   completion (`bd list -l review`), you review. If you issued the
+   work, you review it — do not spawn a reviewer agent (the
+   reviewer profile is dormant for now).
 
-   ```bash
-   claude --system-prompt "$(cat .agents/profiles/reviewer.md)" \
-     "Review bead <review-id>. Branch: worker/<id>."
-   ```
+   - Evaluate correctness, scope (matches the bead, nothing more),
+     minimality, test coverage, and commit hygiene:
+     `git diff main...worker/<id>`.
+   - **Execute the promise**: run the bead's acceptance criteria
+     live against the branch. Green suites are necessary, never
+     sufficient.
+   - Outcome: proceed to merge (step 8), or file a
+     `revisions`-labeled bead for the worker and leave the branch
+     unmerged.
 
-   The reviewer evaluates correctness, scope, minimality, test
-   coverage, and commit hygiene. It either tags the review
-   `approved` or creates a `revisions`-labeled bead for the worker
-   to pick up and fix. See `.agents/profiles/reviewer.md` for the
-   full protocol.
-
-   You do not review code yourself — delegate to the reviewer.
-
-8. **Merge approved work**: after the reviewer approves,
+8. **Merge approved work**: after your review approves,
    **squash-merge** — one commit per bead on main, clean message:
 
    ```bash
