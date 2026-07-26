@@ -202,6 +202,75 @@ def unified_pull(files: tuple[str, ...], yes: bool):
 
 
 @docs.section("main")
+@main.command(
+    "diff",
+    context_settings=dict(ignore_unknown_options=True),
+)
+@click.argument("files", nargs=-1, required=True)
+@click.option("-q", "--quiet", is_flag=True, help="Summary only (no full diff)")
+def unified_diff(files: tuple[str, ...], quiet: bool):
+    """Show diff between local .gax.md file(s) and their remote sources.
+
+    Dispatches to the resource-specific diff implementation based on file type.
+    Extra flags (e.g. --patch) are forwarded to the resource-specific diff method.
+
+    \b
+    Examples:
+        gax diff file.doc.gax.md           # Diff a single doc
+        gax diff *.gax.md                   # Diff all .gax.md files
+        gax diff Budget.sheet.gax.md.d/     # Diff a checkout folder
+        gax diff .                           # Diff everything in current dir
+    """
+    from .ui import error as ui_error
+
+    extra_kw, file_args = _split_flags_and_files(files)
+
+    all_paths: list[Path] = []
+    for pattern in file_args:
+        if pattern == ".":
+            all_paths.extend(Path(".").glob("*.gax.md"))
+            all_paths.extend(Path(".").glob("*.gax.md.d"))
+        elif "*" in pattern or "?" in pattern:
+            all_paths.extend(Path(p) for p in glob.glob(pattern))
+        else:
+            all_paths.append(Path(pattern))
+
+    if not all_paths:
+        click.echo("No .gax.md files or .gax.md.d folders found.", err=True)
+        sys.exit(1)
+
+    any_diff = False
+    fail_count = 0
+    for path in all_paths:
+        if not path.exists():
+            ui_error(f"{path}: not found")
+            fail_count += 1
+            continue
+        if path.is_dir() and not path.name.endswith(".gax.md.d"):
+            ui_error(f"{path}: not a .gax.md.d folder")
+            fail_count += 1
+            continue
+        try:
+            resource = Resource.from_file(path)
+            diff_text = resource.diff(**extra_kw)
+            if diff_text is not None:
+                any_diff = True
+                if not quiet:
+                    click.echo(diff_text)
+                else:
+                    click.echo(f"{path}: changes detected")
+        except Exception as e:
+            ui_error(f"{path}: {e}")
+            fail_count += 1
+
+    if not any_diff and not fail_count:
+        click.echo("No changes.")
+
+    if fail_count:
+        sys.exit(1)
+
+
+@docs.section("main")
 @main.command("push")
 @click.argument("files", nargs=-1, required=True)
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")

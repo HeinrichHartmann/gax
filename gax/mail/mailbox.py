@@ -520,6 +520,40 @@ class Mailbox(Resource):
         _write_gax_file(path, header["query"], header["limit"], thread_data)
         logger.info(f"Pulled {len(thread_data)} threads")
 
+    def diff(self, **kw) -> str | None:
+        """Preview what a pull would change in the local mailbox list file.
+
+        Fetches current remote threads for the same query and returns a
+        unified diff against the local file content.  Returns None if
+        the content is identical.
+        """
+        import tempfile
+        from difflib import unified_diff as _unified_diff
+        from pathlib import Path as _Path
+
+        local_content = self.path.read_text(encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=self.path.suffix, delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(local_content)
+            tmp_path = _Path(tmp.name)
+        try:
+            Mailbox(path=tmp_path).pull(**kw)
+            remote_content = tmp_path.read_text(encoding="utf-8")
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        if local_content == remote_content:
+            return None
+        return "".join(
+            _unified_diff(
+                local_content.splitlines(keepends=True),
+                remote_content.splitlines(keepends=True),
+                fromfile=f"{self.path.name} (local)",
+                tofile=f"{self.path.name} (remote)",
+            )
+        )
+
     def compute_plan(self) -> dict:
         """Compute label changes between local file and Gmail.
 

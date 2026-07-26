@@ -140,6 +140,23 @@ def cal_pull_cmd(file: Path, yes: bool):
     confirm_and_pull(Cal(path=file), yes=yes)
 
 
+@cal_group.command(name="diff")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@gax_command
+def cal_diff_cmd(file: Path):
+    """Show diff between local calendar list file and remote events.
+
+    \b
+    Example:
+        gax cal diff week.cal.gax.md
+    """
+    diff_text = Cal(path=file).diff()
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @cal_group.command(name="checkout")
 @click.argument("calendar", required=False)
 @click.option(

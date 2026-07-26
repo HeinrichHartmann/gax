@@ -68,6 +68,19 @@ def label_plan(file, output, allow_delete):
     click.echo(diff_text)
 
 
+@mail_label.command("diff")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@click.option("--delete", "allow_delete", is_flag=True, help="Include deletions")
+@gax_command
+def label_diff(file, allow_delete):
+    """Show diff between local label file and Gmail labels."""
+    diff_text = Label.from_file(file).diff(allow_delete=allow_delete)
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @mail_label.command("apply")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")

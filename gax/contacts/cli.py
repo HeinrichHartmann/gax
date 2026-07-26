@@ -55,6 +55,18 @@ def contacts_pull(file, yes: bool):
     confirm_and_pull(Contacts(path=file), yes=yes)
 
 
+@contacts.command("diff")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@gax_command
+def contacts_diff(file):
+    """Show diff between local contacts file and remote Google Contacts."""
+    diff_text = Contacts(path=file).diff()
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @contacts.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")

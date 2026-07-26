@@ -81,6 +81,18 @@ def file_pull(file_path, yes: bool):
     confirm_and_pull(File(path=file_path), yes=yes)
 
 
+@drive_group.command("diff")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@gax_command
+def file_diff(file_path):
+    """Show diff between local file and remote Google Drive version."""
+    diff_text = File(path=file_path).diff()
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @drive_group.command("push")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--public", is_flag=True, help="Make file publicly accessible")

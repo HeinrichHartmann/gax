@@ -570,6 +570,50 @@ class TaskList(Resource):
 
         self._write_list_file(self.path, tl_id, tl_title, items, fmt, show_all)
 
+    def diff(self, **kw) -> str | None:
+        """Preview what a pull would change in the local task list file or checkout folder.
+
+        For a single file: fetches current remote tasks and returns a unified diff
+        against the local file content.  For a checkout folder: delegates to each
+        individual Task.diff().  Returns None if content is identical.
+        """
+        if self.path.is_dir():
+            parts: list[str] = []
+            for task_file in sorted(self.path.glob("*.task.gax.yaml")):
+                try:
+                    d = Task.from_file(task_file).diff()
+                    if d:
+                        parts.append(d)
+                except Exception:
+                    pass
+            return "\n".join(parts) or None
+
+        import tempfile
+        from difflib import unified_diff as _unified_diff
+
+        local_content = self.path.read_text(encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=self.path.suffix, delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(local_content)
+            tmp_path = Path(tmp.name)
+        try:
+            TaskList(path=tmp_path).pull(**kw)
+            remote_content = tmp_path.read_text(encoding="utf-8")
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        if local_content == remote_content:
+            return None
+        return "".join(
+            _unified_diff(
+                local_content.splitlines(keepends=True),
+                remote_content.splitlines(keepends=True),
+                fromfile=f"{self.path.name} (local)",
+                tofile=f"{self.path.name} (remote)",
+            )
+        )
+
     def checkout(
         self,
         *,

@@ -73,6 +73,22 @@ def slides_pull(path: Path, yes: bool):
         confirm_and_pull(Slide.from_file(path), yes=yes)
 
 
+@slides.command("diff")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@gax_command
+def slides_diff(path: Path):
+    """Show diff between local slides and remote Google Slides."""
+    if path.is_dir():
+        resource = Presentation.from_file(path)
+    else:
+        resource = Slide.from_file(path)
+    diff_text = resource.diff()
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @slides.command("push")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")

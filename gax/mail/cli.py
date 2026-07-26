@@ -345,6 +345,18 @@ def draft_list(limit):
     Draft().list(sys.stdout, limit=limit)
 
 
+@draft.command("diff")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@gax_command
+def draft_diff(file):
+    """Show diff between local draft file and Gmail draft."""
+    diff_text = Draft.from_file(file).diff()
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @draft.command("push")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")

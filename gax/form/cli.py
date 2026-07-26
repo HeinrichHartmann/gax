@@ -73,6 +73,18 @@ def form_plan(file, output):
     click.echo(diff_text)
 
 
+@form.command("diff")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@gax_command
+def form_diff(file):
+    """Show diff between local form file and remote Google Form."""
+    diff_text = Form.from_file(file).diff()
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @form.command("apply")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")

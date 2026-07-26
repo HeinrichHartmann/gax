@@ -164,6 +164,20 @@ def sheet_plan(folder):
         )
 
 
+@sheet.command("diff")
+@click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
+@gax_command
+def sheet_diff(folder):
+    """Show diff between local sheet folder and remote Google Sheet."""
+    if folder is None:
+        folder = _find_sheet_folder()
+    diff_text = Sheet(path=folder).diff()
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @sheet.command("apply")
 @click.argument("folder", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option(

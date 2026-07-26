@@ -230,11 +230,11 @@ def confirm_and_push(resource, *, yes=False, **kw):
 
 def confirm_and_pull(resource, *, yes=False, **kw):
     """Standard diff -> confirm -> pull flow."""
+    diff_text = resource.diff(**kw)
+    if diff_text is None:
+        click.echo("No changes to pull.")
+        return
     if not yes:
-        diff_text = resource.diff(**kw)
-        if diff_text is None:
-            click.echo("No changes to pull.")
-            return
         click.echo(diff_text)
         if not click.confirm("Pull these changes?"):
             click.echo("Cancelled.")

@@ -62,6 +62,18 @@ def filter_plan(file):
     click.echo(diff_text)
 
 
+@mail_filter.command("diff")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+@gax_command
+def filter_diff(file):
+    """Show diff between local filter file and Gmail filters."""
+    diff_text = Filter.from_file(file).diff()
+    if diff_text is None:
+        click.echo("No changes.")
+        return
+    click.echo(diff_text)
+
+
 @mail_filter.command("apply")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
