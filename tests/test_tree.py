@@ -2059,3 +2059,96 @@ class TestIsTreeFile:
         )
         doc = _parse_tree_file(f)
         assert doc.get("revision") == "rev-xyz789"
+
+
+class TestPullTreeForce:
+    """Unit tests for _pull_tree --force recovery path (gax-iuf)."""
+
+    def _write_corrupt_yaml(self, path) -> None:
+        """Write a tree YAML file with a known source/tab but invalid body."""
+        path.write_text(
+            "kind: doc-tree/v1\n"
+            "source: https://docs.google.com/document/d/DOCID123/edit\n"
+            "tab: Overview\n"
+            "body:\n"
+            "  - invalid_key_not_in_schema: oops\n"
+            "    nested_garbage: [1, 2, 3]\n",
+            encoding="utf-8",
+        )
+
+    def test_corrupt_file_raises_on_normal_pull(self, tmp_path):
+        """A corrupt .doc.gax.yaml fails validated_parse without --force."""
+        from gax.gdoc.doc import _parse_tree_file
+        from gax.gdoc.tree import SchemaValidationError
+
+        f = tmp_path / "report.doc.gax.yaml"
+        self._write_corrupt_yaml(f)
+        with pytest.raises(SchemaValidationError):
+            _parse_tree_file(f)
+
+    def test_pull_tree_force_reads_source_from_raw_yaml(self, tmp_path, monkeypatch):
+        """_pull_tree(force=True) reads source/tab via yaml.safe_load and calls fetch."""
+        import yaml
+        from unittest.mock import MagicMock, patch
+        from gax.gdoc import doc as doc_mod
+
+        f = tmp_path / "report.doc.gax.yaml"
+        self._write_corrupt_yaml(f)
+
+        # Build a minimal fake API response so _pull_tree can complete.
+        fake_tab_content = {
+            "kind": "doc-tree/v1",
+            "source": "https://docs.google.com/document/d/DOCID123/edit",
+            "tab": "Overview",
+            "body": [{"p": "Hello"}],
+        }
+
+        captured_calls = []
+
+        def fake_fetch_doc(document_id):
+            captured_calls.append(document_id)
+            return {
+                "tabs": [
+                    {
+                        "tabProperties": {"title": "Overview", "tabId": "t0"},
+                        "documentTab": {},
+                    }
+                ]
+            }
+
+        def fake_tab_to_yaml(doc, tab, source_url):
+            import yaml as _yaml
+            return _yaml.dump(fake_tab_content)
+
+        with (
+            patch.object(doc_mod, "_fetch_doc", side_effect=fake_fetch_doc),
+            patch.object(doc_mod, "_tab_content_to_tree_yaml", side_effect=fake_tab_to_yaml),
+            patch.object(doc_mod, "_flatten_tabs", return_value=[
+                ({"documentTab": {}}, MagicMock(title="Overview"))
+            ]),
+        ):
+            resource = doc_mod.Tab(path=f)
+            resource._pull_tree(force=True)
+
+        assert captured_calls == ["DOCID123"], "Expected _fetch_doc called with extracted doc ID"
+        written = yaml.safe_load(f.read_text(encoding="utf-8"))
+        assert written["tab"] == "Overview"
+
+    def test_pull_force_kwarg_forwarded(self, tmp_path, monkeypatch):
+        """Tab.pull(force=True) must call _pull_tree(force=True)."""
+        from unittest.mock import patch
+        from gax.gdoc import doc as doc_mod
+
+        f = tmp_path / "report.doc.gax.yaml"
+        self._write_corrupt_yaml(f)
+
+        called_with = []
+
+        def fake_pull_tree(self_inner, force=False):
+            called_with.append(force)
+
+        with patch.object(doc_mod.Tab, "_pull_tree", fake_pull_tree):
+            resource = doc_mod.Tab(path=f)
+            resource.pull(force=True)
+
+        assert called_with == [True], "_pull_tree should have been called with force=True"

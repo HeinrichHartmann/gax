@@ -314,7 +314,19 @@ def confirm_and_push(resource, *, yes=False, **kw):
 
 
 def confirm_and_pull(resource, *, yes=False, **kw):
-    """Standard diff -> confirm -> pull flow."""
+    """Standard diff -> confirm -> pull flow.
+
+    When ``force=True`` is present in *kw* (e.g. from ``gax pull --force``),
+    the local-file diff is skipped entirely and the remote content is written
+    unconditionally.  This is the recovery path for corrupt local tree YAML
+    files that cannot be parsed for diffing (gax-iuf).
+    """
+    force = kw.get("force", False)
+    if force:
+        resource.pull(**kw)
+        success("Pulled successfully (force).")
+        return
+
     diff_text = resource.diff(**kw)
     if diff_text is None:
         click.echo("No changes to pull.")

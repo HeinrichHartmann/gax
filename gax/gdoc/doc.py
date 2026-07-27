@@ -1381,7 +1381,7 @@ class Tab(Resource):
     def pull(self, **kw) -> None:
         """Refresh a tab file from remote."""
         if _is_tree_file(self.path):
-            return self._pull_tree()
+            return self._pull_tree(force=kw.get("force", False))
 
         with_comments = kw.get("with_comments", False)
 
@@ -1416,11 +1416,22 @@ class Tab(Resource):
 
         self.path.write_text(new_content, encoding="utf-8")
 
-    def _pull_tree(self) -> None:
-        """Pull for tree YAML files — re-serialize remote as tree YAML."""
-        tree_doc = _parse_tree_file(self.path)
-        source_url = tree_doc.get("source", "")
-        tab_name = tree_doc.get("tab", "")
+    def _pull_tree(self, force: bool = False) -> None:
+        """Pull for tree YAML files — re-serialize remote as tree YAML.
+
+        When *force* is True, skip local schema validation and read only the
+        ``source`` and ``tab`` keys from the raw YAML.  This is the recovery
+        path for corrupt/invalid local files (gax-iuf).
+        """
+        if force:
+            # Bypass validated_parse — read raw YAML to get routing keys only.
+            raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+            source_url = raw.get("source", "")
+            tab_name = raw.get("tab", "")
+        else:
+            tree_doc = _parse_tree_file(self.path)
+            source_url = tree_doc.get("source", "")
+            tab_name = tree_doc.get("tab", "")
         if not source_url:
             raise ValueError("No source URL found in tree file")
 

@@ -177,11 +177,13 @@ def _collect_recursive(root: Path) -> list[Path]:
 @click.argument("files", nargs=-1, required=True)
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation, overwrite local state")
 @click.option("-r", "--recursive", is_flag=True, help="Recursively collect .gax.md files and .gax.md.d folders from directory tree(s)")
-def unified_pull(files: tuple[str, ...], yes: bool, recursive: bool):
+@click.option("--force", is_flag=True, help="Skip local validation and overwrite with remote (recovery path for corrupt .gax.yaml files)")
+def unified_pull(files: tuple[str, ...], yes: bool, recursive: bool, force: bool):
     """Pull/update .gax.md file(s) or .gax.md.d folder(s) from their sources.
 
     Shows a diff and asks for confirmation before overwriting local files.
     Use -y to skip confirmation and overwrite directly.
+    Use --force to bypass local schema validation for corrupt tree YAML files.
     Extra flags (e.g. --patch, --with-comments) are forwarded to the
     resource-specific pull method.
 
@@ -193,12 +195,16 @@ def unified_pull(files: tuple[str, ...], yes: bool, recursive: bool):
         gax pull folder.doc.gax.md.d/       # Pull a checkout folder
         gax pull -y .                        # Force-pull everything
         gax pull --patch folder.doc.gax.md.d/ # Broadcast pull to individual files
+        gax pull --force report.doc.gax.yaml  # Recover corrupt tree YAML file
     """
     from .ui import confirm_and_pull
 
     # Separate flags from file paths — nargs=-1 consumes everything,
     # so unknown flags like --patch end up in the files tuple.
     extra_kw, file_args = _split_flags_and_files(files)
+
+    if force:
+        extra_kw["force"] = True
 
     # Expand globs and '.'
     all_paths: list[Path] = []
@@ -338,22 +344,27 @@ def unified_diff(files: tuple[str, ...], quiet: bool):
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
 @click.option("--values", is_flag=True, help="Write as literal strings, no formula interpretation (sheets only)")
 def unified_push(files: tuple[str, ...], yes: bool, values: bool):
-    """Push local .gax.md file(s) or .gax.md.d folder(s) to their sources.
+    """Push local .gax.md / .gax.yaml file(s) or checkout folder(s) to their sources.
 
     Automatically detects file type from YAML header and calls
     the appropriate push command. Shows diff/confirmation unless -y is passed.
 
     \b
     Supported types:
+        .doc.gax.md         Google Doc (markdown)
+        .doc.gax.yaml       Google Doc (tree YAML)
+        .tab.gax.md         Single doc tab (markdown)
+        .tab.gax.yaml       Single doc tab (tree YAML)
         .sheet.gax.md       Single sheet tab
         .sheet.gax.md.d/    Sheet checkout folder
-        .tab.gax.md         Single doc tab
         .draft.gax.md       Gmail draft
         .cal.gax.md         Calendar event
         <file>.gax.md       Drive file tracking
 
     \b
     Examples:
+        gax push file.doc.gax.md            # Push a doc (markdown)
+        gax push file.doc.gax.yaml          # Push a doc (tree YAML)
         gax push file.sheet.gax.md          # Push a single sheet tab
         gax push *.draft.gax.md             # Push all drafts
         gax push Budget.sheet.gax.md.d/     # Push a checkout folder

@@ -102,9 +102,27 @@ class TestTopLevelCommands:
         cmd = get_command(["pull"])
         assert has_option(cmd, "recursive", "-r", "--recursive", is_flag=True)
 
+    def test_pull_has_force_flag(self):
+        """pull must expose --force for corrupt .gax.yaml recovery (gax-iuf)."""
+        cmd = get_command(["pull"])
+        assert has_option(cmd, "force", "--force", is_flag=True), (
+            "gax pull must have a --force flag to bypass local validation on corrupt tree YAML files"
+        )
+
     def test_push_has_yes_flag(self):
         cmd = get_command(["push"])
         assert has_option(cmd, "yes", "-y", "--yes", is_flag=True)
+
+    def test_push_help_mentions_doc_gax_yaml(self):
+        """push --help must document .doc.gax.yaml and .tab.gax.yaml (gax-p8f)."""
+        cmd = get_command(["push"])
+        help_text = cmd.help or ""
+        assert ".doc.gax.yaml" in help_text, (
+            "push help text should mention .doc.gax.yaml (tree YAML is a supported push target)"
+        )
+        assert ".tab.gax.yaml" in help_text, (
+            "push help text should mention .tab.gax.yaml (tree YAML is a supported push target)"
+        )
 
 
 # =============================================================================
