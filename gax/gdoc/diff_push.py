@@ -1239,8 +1239,10 @@ def _build_tree_style_delta(old_style: dict, new_style: dict) -> tuple[dict, str
     if old_url != new_url:
         if new_url:
             api_style["link"] = {"url": new_url}
-        else:
-            api_style["link"] = {}
+        # Omit api_style["link"] when clearing — the Docs API rejects
+        # {"link": {}} with HttpError 400 ("Links must include at least one type").
+        # Including "link" in the fields mask without setting it in textStyle
+        # resets the link to its default (no link), which is the correct clear.
         fields.append("link")
 
     old_bl = old_style.get("baseline")

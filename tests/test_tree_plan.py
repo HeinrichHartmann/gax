@@ -236,6 +236,33 @@ class TestBuildTreeStyleDelta:
         field_set = set(fields.split(","))
         assert {"bold", "italic", "foregroundColor"} == field_set
 
+    def test_url_added(self):
+        api, fields = _build_tree_style_delta({}, {"url": "https://example.com"})
+        assert api == {"link": {"url": "https://example.com"}}
+        assert fields == "link"
+
+    def test_url_cleared_no_empty_link(self):
+        """Clearing a URL must NOT emit link:{} — Docs API rejects it (gax-dcd).
+
+        The correct approach is to include 'link' in the fields mask without
+        setting api_style['link'], which resets the link field to its default.
+        """
+        api, fields = _build_tree_style_delta({"url": "https://example.com"}, {})
+        assert "link" not in api, (
+            "api_style must not contain 'link' when clearing — Docs API rejects "
+            "link:{} with HttpError 400 'Links must include at least one type'"
+        )
+        assert "link" in fields.split(","), (
+            "'link' must be in fields mask to clear the link on the run"
+        )
+
+    def test_url_changed(self):
+        api, fields = _build_tree_style_delta(
+            {"url": "https://old.com"}, {"url": "https://new.com"}
+        )
+        assert api == {"link": {"url": "https://new.com"}}
+        assert fields == "link"
+
 
 # =============================================================================
 # Style diff requests
