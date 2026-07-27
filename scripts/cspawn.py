@@ -3,31 +3,56 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Spawn a profiled claude agent in a new cmux tab of the current workspace.
+"""Spawn a profiled claude agent in a new cmux tab (self-contained).
 
-Wraps scripts/spawn.py with the cmux scaffolding:
-
-1. Opens a new terminal tab (surface) in the current cmux workspace.
-2. Types the spawn.py command into it and presses enter.
-3. Waits for the claude banner, then sends a kickoff message so the
+1. Resolves the profile from .agents/profiles/<name>.md (there is no
+   --profile flag on claude itself; the profile is passed as the system
+   prompt).
+2. Forks the workspace: creates a git worktree ../<repo>-<profile>-<id>
+   on branch <profile>/<id> from main, allows its .envrc, and grants
+   scoped permissions via .claude/settings.local.json.
+3. Opens a new terminal tab (surface) in the current cmux workspace and
+   starts claude inside the worktree.
+4. Waits for the claude banner, then sends a kickoff message so the
    interactive session starts working instead of idling at the prompt.
 
 Usage:
     ./scripts/cspawn.py --model sonnet --profile worker --beads "gax-sy6 gax-qo8"
-    ./scripts/cspawn.py --profile reviewer --extra-prompt "Review bead gax-1gc. Branch: worker/99624."
+    ./scripts/cspawn.py --profile worker --beads "gdoc"   # by label
 """
 
 import argparse
+import json
+import secrets
 import shlex
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+# Permissions granted to forked agent worktrees via .claude/settings.local.json
+# (per-checkout, never committed — dies with the worktree).
+WORKTREE_PERMISSIONS = {
+    "permissions": {
+        "allow": [
+            "Edit",
+            "Write",
+            "Bash(direnv exec:*)",
+            "Bash(git status:*)",
+            "Bash(git diff:*)",
+            "Bash(git log:*)",
+            "Bash(git add:*)",
+            "Bash(git commit:*)",
+            "Bash(git rebase main)",
+            "Bash(bd:*)",
+        ]
+    }
+}
 
-def sh(*cmd: str) -> str:
+
+def sh(*cmd: str, cwd: Path | None = None) -> str:
     return subprocess.run(
-        cmd, check=True, capture_output=True, text=True
+        cmd, cwd=cwd, check=True, capture_output=True, text=True
     ).stdout.strip()
 
 
@@ -38,8 +63,16 @@ def cmux(*args: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--model", default="opus", help="claude model (default: opus)")
-    ap.add_argument("--profile", required=True, help="profile name or path (see spawn.py)")
-    ap.add_argument("--beads", default="", help="bead IDs or label to scope the agent to")
+    ap.add_argument(
+        "--profile",
+        required=True,
+        help="profile name in .agents/profiles/ (worker, architect) or a path",
+    )
+    ap.add_argument(
+        "--beads",
+        default="",
+        help='bead IDs or label to scope the agent to, e.g. "gax-cvi.1 gax-75t" or "gdoc"',
+    )
     ap.add_argument("--extra-prompt", default="", help="appended to the system prompt")
     ap.add_argument(
         "--kickoff",
@@ -59,6 +92,55 @@ def main() -> None:
     args = ap.parse_args()
 
     repo = Path(sh("git", "rev-parse", "--show-toplevel"))
+
+    # Resolve profile
+    profile_path = Path(args.profile)
+    if not profile_path.exists():
+        profile_path = repo / ".agents" / "profiles" / f"{args.profile}.md"
+    if not profile_path.exists():
+        sys.exit(f"error: profile not found: {args.profile} ({profile_path})")
+    profile_name = profile_path.stem
+    system_prompt = profile_path.read_text(encoding="utf-8")
+
+    # Fork workspace: worktree on a fresh branch from main
+    agent_id = secrets.token_hex(3)
+    branch = f"{profile_name}/{agent_id}"
+    worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
+    sh("git", "worktree", "add", str(worktree), "-b", branch, "main", cwd=repo)
+    # Allow the worktree's .envrc — otherwise direnv silently falls back
+    # to a parent .envrc and agents run against the wrong environment.
+    sh("direnv", "allow", str(worktree))
+    # Grant edit/test/git permissions scoped to this worktree only
+    claude_dir = worktree / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    (claude_dir / "settings.local.json").write_text(
+        json.dumps(WORKTREE_PERMISSIONS, indent=2) + "\n", encoding="utf-8"
+    )
+
+    # Compose scope and write the full prompt into the worktree (dies with it).
+    # Passing it via a file avoids shell-quoting a multi-KB argument through
+    # the cmux send pipeline.
+    parts = [
+        system_prompt,
+        "",
+        "## Session scope",
+        f"Your worktree is already created: {worktree} on branch {branch} "
+        f"(forked from main). You are running inside it. Skip any worktree "
+        f"setup steps from the profile. Never modify the main checkout.",
+    ]
+    if args.beads:
+        parts.append(
+            f"Work ONLY on these beads/labels: {args.beads}. "
+            f"Inspect them with `bd show <id>` (or `bd list -l <label>`) before starting."
+        )
+    else:
+        parts.append("Find work with `bd ready`.")
+    if args.extra_prompt:
+        parts.append(args.extra_prompt)
+    prompt_file = claude_dir / "system-prompt.md"
+    prompt_file.write_text("\n".join(parts), encoding="utf-8")
+
+    # Resolve cmux workspace
     if args.workspace:
         workspace = args.workspace
     else:
@@ -71,30 +153,20 @@ def main() -> None:
             sys.exit("error: no selected workspace found; pass --workspace")
         workspace = selected[0].split()[1] if selected[0].startswith("*") else selected[0].split()[0]
 
-    # 1. New tab (surface) in the current workspace
+    # New tab (surface) in the workspace, running claude in the worktree
     out = cmux("new-surface", "--type", "terminal", "--workspace", workspace)
     # "OK surface:39 pane:4 workspace:4" -> surface:39
     surface = next(tok for tok in out.split() if tok.startswith("surface:"))
 
-    # 2. Compose and send the spawn command
-    spawn_cmd = [
-        "cd", str(repo), "&&", "./scripts/spawn.py",
-        "--model", args.model,
-        "--profile", args.profile,
-    ]
-    if args.beads:
-        spawn_cmd += ["--beads", args.beads]
-    if args.extra_prompt:
-        spawn_cmd += ["--extra-prompt", args.extra_prompt]
-    # shlex-quote everything except the shell operators
-    cmd_str = " ".join(
-        tok if tok in ("cd", "&&") else shlex.quote(tok) for tok in spawn_cmd
+    cmd_str = (
+        f"cd {shlex.quote(str(worktree))} && "
+        f"claude --model {shlex.quote(args.model)} "
+        f'--system-prompt "$(cat .claude/system-prompt.md)"'
     )
-
     cmux("send", "--surface", surface, "--workspace", workspace, cmd_str)
     cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
 
-    # 3. Wait for the claude banner, then send the kickoff
+    # Wait for the claude banner, then send the kickoff
     deadline = time.time() + args.timeout
     ready = False
     while time.time() < deadline:
@@ -121,12 +193,13 @@ def main() -> None:
     time.sleep(1)
     cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
 
-    title = f"{Path(args.profile).stem}: {args.beads or 'ready'}"
+    title = f"{profile_name}: {args.beads or 'ready'}"
     cmux("rename-tab", "--surface", surface, "--workspace", workspace, title)
 
-    print(f"spawned:  {surface} in {workspace}")
-    print(f"scope:    {args.beads or 'bd ready'}")
-    print(f"kickoff:  {args.kickoff}")
+    print(f"spawned:   {surface} in {workspace}")
+    print(f"worktree:  {worktree} on {branch}")
+    print(f"scope:     {args.beads or 'bd ready'}")
+    print(f"kickoff:   {args.kickoff}")
 
 
 if __name__ == "__main__":
