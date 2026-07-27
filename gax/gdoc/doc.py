@@ -1531,9 +1531,10 @@ class Tab(Resource):
             body: Path — push this external file's content instead of the
                   tracking file's content; also updates the tracking file so
                   subsequent pull round-trips are consistent.
+            force: for tree files, bypass the revision guard (gax-fuh).
         """
         if _is_tree_file(self.path):
-            return self._push_tree()
+            return self._push_tree(force=kw.get("force", False))
 
         use_patch = kw.get("patch", False)
         body: Path | None = kw.get("body", None)
@@ -1575,14 +1576,34 @@ class Tab(Resource):
         # Refresh baseline after successful push (ADR 034 §1)
         _refresh_baseline_after_push(self.path, document_id, tab_name)
 
-    def _push_tree(self) -> None:
-        """Push for tree YAML files — compute_tree_plan + apply mutations."""
+    def _push_tree(self, *, force: bool = False) -> None:
+        """Push for tree YAML files — compute_tree_plan + apply mutations.
+
+        When *force* is True the revision guard is bypassed by clearing the
+        stored revision before diffing.  This is the recovery path for corrupt
+        remote state (gax-fuh): the plan still diffes remote vs local so only
+        necessary mutations are applied, but a stale stored revision no longer
+        blocks the push.
+        """
         from .diff_push import compute_tree_plan
 
-        tree_doc = _parse_tree_file(self.path)
-        source_url = tree_doc.get("source", "")
-        tab_name = tree_doc.get("tab", "")
-        stored_revision = tree_doc.get("revision", "")
+        if force:
+            # Bypass validated_parse for potentially corrupt local files;
+            # read only the routing keys from raw YAML (same as _pull_tree).
+            import yaml as _yaml
+            raw = _yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+            source_url = raw.get("source", "")
+            tab_name = raw.get("tab", "")
+            stored_revision = ""  # bypass revision guard
+            local_tree_body = raw.get("body", [])
+            local_appendix = raw.get("appendix")
+        else:
+            tree_doc = _parse_tree_file(self.path)
+            source_url = tree_doc.get("source", "")
+            tab_name = tree_doc.get("tab", "")
+            stored_revision = tree_doc.get("revision", "")
+            local_tree_body = tree_doc.get("body", [])
+            local_appendix = tree_doc.get("appendix")
         if not source_url:
             raise ValueError("No source URL found in tree file")
 
@@ -1607,8 +1628,8 @@ class Tab(Resource):
         lists = doc_tab.get("lists") or doc.get("lists")
 
         plan = compute_tree_plan(
-            local_tree_body=tree_doc.get("body", []),
-            local_appendix=tree_doc.get("appendix"),
+            local_tree_body=local_tree_body,
+            local_appendix=local_appendix,
             remote_body=remote_body,
             remote_revision=remote_revision,
             stored_revision=stored_revision,

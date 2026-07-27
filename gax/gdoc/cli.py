@@ -77,7 +77,38 @@ def _do_force_replace_push(
     body: "Path | None",
     yes: bool,
 ) -> None:
-    """Full-replace push for a single tab."""
+    """Full-replace push for a single tab.
+
+    For .doc.gax.yaml / .tab.gax.yaml tree files the push uses
+    compute_tree_plan with the revision guard bypassed (force=True).
+    This is the recovery path when corrupt remote state would otherwise
+    prevent a normal push (gax-fuh).
+    """
+    from .doc import _is_tree_file
+
+    # --- Tree format path ---
+    if _is_tree_file(file):
+        diff_text = t.diff()
+        if diff_text is None:
+            click.echo("No differences to push.")
+            return
+        if not yes:
+            click.echo("Changes to push (tree force-replace):")
+            click.echo("-" * 40)
+            click.echo(diff_text)
+            click.echo("-" * 40)
+            click.echo(
+                "Warning: force-replace bypasses the revision guard. "
+                "Any remote changes since your last pull will be overwritten."
+            )
+            if not click.confirm("Push these changes?"):
+                click.echo("Aborted.")
+                return
+        t.push(force=True)
+        success("Pushed successfully (tree force-replace).")
+        return
+
+    # --- Markdown format path (original behaviour) ---
     from .doc import parse_multipart
     from .ir import from_markdown, check_unsupported
 

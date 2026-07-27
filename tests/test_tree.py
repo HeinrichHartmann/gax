@@ -2152,3 +2152,234 @@ class TestPullTreeForce:
             resource.pull(force=True)
 
         assert called_with == [True], "_pull_tree should have been called with force=True"
+
+
+class TestPushTreeForce:
+    """Unit tests for _push_tree force=True path (gax-fuh).
+
+    AC: _push_tree(force=True) bypasses the revision guard so a push can
+    succeed even when the stored revision is stale (corrupt-state recovery).
+    """
+
+    def _write_tree_yaml(self, path, *, revision: str = "rev1") -> None:
+        """Write a valid tree YAML file with a known source/tab and body."""
+        path.write_text(
+            "kind: doc-tree/v1\n"
+            "source: https://docs.google.com/document/d/DOCID123/edit\n"
+            f"revision: {revision}\n"
+            "tab: Overview\n"
+            "body:\n"
+            "  - p: Hello world\n",
+            encoding="utf-8",
+        )
+
+    def _write_corrupt_yaml(self, path) -> None:
+        """Write a tree YAML file with invalid body (mimics corrupt round-trip)."""
+        path.write_text(
+            "kind: doc-tree/v1\n"
+            "source: https://docs.google.com/document/d/DOCID123/edit\n"
+            "revision: stale-rev\n"
+            "tab: Overview\n"
+            "body:\n"
+            "  - invalid_key_not_in_schema: oops\n",
+            encoding="utf-8",
+        )
+
+    def test_push_force_kwarg_forwarded(self, tmp_path):
+        """Tab.push(force=True) on a tree file must call _push_tree(force=True)."""
+        from unittest.mock import patch
+        from gax.gdoc import doc as doc_mod
+
+        f = tmp_path / "report.doc.gax.yaml"
+        self._write_tree_yaml(f)
+
+        called_with = []
+
+        def fake_push_tree(self_inner, *, force=False):
+            called_with.append(force)
+
+        with patch.object(doc_mod.Tab, "_push_tree", fake_push_tree):
+            resource = doc_mod.Tab(path=f)
+            resource.push(force=True)
+
+        assert called_with == [True], "_push_tree should have been called with force=True"
+
+    def test_push_no_force_uses_stored_revision(self, tmp_path):
+        """Tab.push() without force=True passes the stored revision to compute_tree_plan."""
+        from unittest.mock import patch
+        from gax.gdoc import doc as doc_mod
+        from gax.gdoc import diff_push as dp_mod
+        from gax.gdoc.diff_push import ThreeWayPlan
+
+        f = tmp_path / "report.doc.gax.yaml"
+        self._write_tree_yaml(f, revision="rev-stored")
+
+        captured = []
+
+        def fake_compute_tree_plan(**kw):
+            captured.append(kw.get("stored_revision"))
+            return ThreeWayPlan(ops=[], mutations=[], summary_lines=[])
+
+        fake_doc = {
+            "revisionId": "rev-stored",
+            "tabs": [{
+                "tabProperties": {"title": "Overview", "tabId": "t0"},
+                "documentTab": {"body": {"content": []}},
+            }],
+        }
+
+        with (
+            patch.object(doc_mod, "_fetch_doc", return_value=fake_doc),
+            patch.object(dp_mod, "compute_tree_plan", side_effect=fake_compute_tree_plan),
+        ):
+            resource = doc_mod.Tab(path=f)
+            resource.push()  # no force
+
+        assert captured == ["rev-stored"], "stored revision must be passed to compute_tree_plan"
+
+    def test_push_force_bypasses_revision_guard(self, tmp_path):
+        """_push_tree(force=True) passes stored_revision='' to bypass the guard."""
+        from unittest.mock import patch
+        from gax.gdoc import doc as doc_mod
+        from gax.gdoc import diff_push as dp_mod
+        from gax.gdoc.diff_push import ThreeWayPlan
+
+        f = tmp_path / "report.doc.gax.yaml"
+        # Stale revision that would normally trip the guard
+        self._write_tree_yaml(f, revision="old-rev")
+
+        captured = []
+
+        def fake_compute_tree_plan(**kw):
+            captured.append(kw.get("stored_revision"))
+            return ThreeWayPlan(ops=[], mutations=[], summary_lines=[])
+
+        fake_doc = {
+            "revisionId": "new-rev",   # remote changed — would block without force
+            "tabs": [{
+                "tabProperties": {"title": "Overview", "tabId": "t0"},
+                "documentTab": {"body": {"content": []}},
+            }],
+        }
+
+        with (
+            patch.object(doc_mod, "_fetch_doc", return_value=fake_doc),
+            patch.object(dp_mod, "compute_tree_plan", side_effect=fake_compute_tree_plan),
+        ):
+            resource = doc_mod.Tab(path=f)
+            resource._push_tree(force=True)
+
+        # force=True must have passed "" so revision_changed evaluates to False
+        assert captured == [""], "force=True must clear stored_revision for the guard"
+
+    def test_push_force_reads_corrupt_yaml(self, tmp_path):
+        """_push_tree(force=True) reads routing keys from a corrupt YAML file."""
+        from unittest.mock import patch
+        from gax.gdoc import doc as doc_mod
+        from gax.gdoc import diff_push as dp_mod
+        from gax.gdoc.diff_push import ThreeWayPlan
+
+        f = tmp_path / "report.doc.gax.yaml"
+        self._write_corrupt_yaml(f)
+
+        captured_doc_id = []
+
+        def fake_fetch_doc(document_id):
+            captured_doc_id.append(document_id)
+            return {
+                "revisionId": "new-rev",
+                "tabs": [{
+                    "tabProperties": {"title": "Overview", "tabId": "t0"},
+                    "documentTab": {"body": {"content": []}},
+                }],
+            }
+
+        def fake_compute_tree_plan(**kw):
+            return ThreeWayPlan(ops=[], mutations=[], summary_lines=[])
+
+        with (
+            patch.object(doc_mod, "_fetch_doc", side_effect=fake_fetch_doc),
+            patch.object(dp_mod, "compute_tree_plan", side_effect=fake_compute_tree_plan),
+        ):
+            resource = doc_mod.Tab(path=f)
+            # Should NOT raise SchemaValidationError — routing uses raw yaml.safe_load
+            resource._push_tree(force=True)
+
+        assert captured_doc_id == ["DOCID123"], "Expected fetch with correct doc ID"
+
+
+class TestDoForceReplacePushTree:
+    """Unit tests for _do_force_replace_push with .doc.gax.yaml tree files (gax-fuh).
+
+    AC: _do_force_replace_push must detect tree files and call t.push(force=True)
+    instead of parse_multipart / from_markdown, which would reject YAML with
+    'No valid sections found'.
+    """
+
+    def _write_tree_yaml(self, path) -> None:
+        path.write_text(
+            "kind: doc-tree/v1\n"
+            "source: https://docs.google.com/document/d/DOCID123/edit\n"
+            "revision: old-rev\n"
+            "tab: Overview\n"
+            "body:\n"
+            "  - p: Hello world\n",
+            encoding="utf-8",
+        )
+
+    def test_tree_file_calls_push_with_force(self, tmp_path):
+        """_do_force_replace_push on a .doc.gax.yaml file calls t.push(force=True)."""
+        from unittest.mock import MagicMock
+        from gax.gdoc.cli import _do_force_replace_push
+
+        f = tmp_path / "report.doc.gax.yaml"
+        self._write_tree_yaml(f)
+
+        # Build a Tab mock that records push() calls and returns a diff
+        tab_mock = MagicMock()
+        tab_mock.path = f
+        tab_mock.diff.return_value = "--- remote\n+++ local\n some change"
+
+        _do_force_replace_push(tab_mock, f, None, yes=True)
+
+        tab_mock.push.assert_called_once_with(force=True)
+
+    def test_tree_file_no_diff_skips_push(self, tmp_path):
+        """_do_force_replace_push on a tree file with no diff does not push."""
+        from unittest.mock import MagicMock
+        from gax.gdoc.cli import _do_force_replace_push
+
+        f = tmp_path / "report.doc.gax.yaml"
+        self._write_tree_yaml(f)
+
+        tab_mock = MagicMock()
+        tab_mock.path = f
+        tab_mock.diff.return_value = None  # no differences
+
+        _do_force_replace_push(tab_mock, f, None, yes=True)
+
+        tab_mock.push.assert_not_called()
+
+    def test_markdown_file_uses_original_path(self, tmp_path):
+        """_do_force_replace_push on a .doc.gax.md file uses old code path."""
+        from unittest.mock import MagicMock
+        from gax.gdoc.cli import _do_force_replace_push
+
+        f = tmp_path / "report.doc.gax.md"
+        f.write_text(
+            "---\ntype: gax/doc\ntab: Overview\nsource: "
+            "https://docs.google.com/document/d/X/edit\n---\n\nHello\n",
+            encoding="utf-8",
+        )
+
+        tab_mock = MagicMock()
+        tab_mock.path = f
+        tab_mock.diff.return_value = "--- remote\n+++ local\n change"
+
+        _do_force_replace_push(tab_mock, f, None, yes=True)
+
+        # For markdown path: push is called without force= kwarg
+        call_kwargs = tab_mock.push.call_args[1] if tab_mock.push.call_args else {}
+        assert "force" not in call_kwargs, (
+            "Markdown path must NOT pass force= to push"
+        )
