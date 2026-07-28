@@ -69,7 +69,8 @@ def _split_flags_and_files(
 @click.argument("target")
 @click.option("--tab", help="Specific tab (for multi-tab resources)")
 @click.option("--json", "as_json", is_flag=True, help="Output raw API JSON (docs only)")
-def unified_get(target: str, tab: str | None, as_json: bool):
+@click.option("--all", "get_all", is_flag=True, help="Fetch all tabs to stdout (Google Docs)")
+def unified_get(target: str, tab: str | None, as_json: bool, get_all: bool):
     """Fetch remote content to stdout. Read-only, no local changes.
 
     Reads the source URL from the file's metadata, fetches current remote
@@ -84,6 +85,7 @@ def unified_get(target: str, tab: str | None, as_json: bool):
         gax get Budget.sheet.gax.md.d/ --tab Revenue  # Single tab
         gax get 19f9a81e022b5536            # Print thread by hex ID
         gax get https://mail.google.com/... # Print thread by URL
+        gax get --all https://docs.google.com/document/d/<ID>/edit  # All tabs to stdout
     """
     from .ui import error as ui_error
 
@@ -141,7 +143,27 @@ def unified_get(target: str, tab: str | None, as_json: bool):
             kw["tab"] = tab
         if as_json:
             kw["json"] = True
-        content = resource.get(**kw)
+        if get_all:
+            from .gdoc.doc import extract_doc_id, pull_doc, _parse_tab_file
+            source_url = resource.url
+            if not source_url and hasattr(resource, "path") and resource.path.is_file():
+                source_url = _parse_tab_file(resource.path).source
+            if not source_url:
+                ui_error("--all requires a Google Doc URL or a .doc.gax.md file")
+                sys.exit(1)
+            document_id = extract_doc_id(source_url)
+            sections = pull_doc(document_id, source_url)
+            tab_filter = kw.get("tab")
+            if tab_filter:
+                sections = [s for s in sections if s.section_title == tab_filter]
+            parts = []
+            for section in sections:
+                if len(sections) > 1:
+                    parts.append(f"# {section.section_title}\n")
+                parts.append(section.content)
+            content = "\n\n".join(parts)
+        else:
+            content = resource.get(**kw)
         click.echo(content, nl=False)
     except NotImplementedError:
         ui_error(f"get not supported for: {target}")

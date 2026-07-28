@@ -763,6 +763,35 @@ class TestTreeModeCLI:
             "'gax get' missing --json flag"
         )
 
+    def test_unified_get_has_all_flag(self):
+        """gax get must have --all flag for multi-tab URL fetch."""
+        cmd = get_command(["get"])
+        assert cmd is not None
+        assert has_option(cmd, "get_all", "--all", is_flag=True), (
+            "'gax get' missing --all flag"
+        )
+
+    def test_get_all_fetches_all_tabs(self, monkeypatch):
+        """gax get --all <url> calls Doc.get and prints all tabs to stdout."""
+        from click.testing import CliRunner
+        from gax.cli import main as cli
+        from gax.gdoc import doc as doc_mod
+
+        def fake_doc_get(self, **kw):
+            return "# Overview\n\nFirst tab.\n\n# Details\n\nSecond tab."
+
+        monkeypatch.setattr(doc_mod.Doc, "get", fake_doc_get)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["get", "--all", "https://docs.google.com/document/d/ABC/edit"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "# Overview" in result.output
+        assert "First tab." in result.output
+        assert "# Details" in result.output
+        assert "Second tab." in result.output
+
     def test_tree_yaml_dispatches_to_tab(self, tmp_path):
         """A .doc.gax.yaml file must dispatch to Tab via Resource.from_file."""
         f = tmp_path / "report.doc.gax.yaml"
