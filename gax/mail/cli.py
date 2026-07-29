@@ -300,9 +300,18 @@ def draft_new(output, to_addr, subject):
     """Create a new local draft file.
 
     Creates a .draft.gax.md file that can be edited and pushed to Gmail.
+    The local file stores only the body — the signature is injected on push
+    and stripped on pull, so you never need to edit it in the file.
 
+    \b
+    Signature:
+        Place your signature in ~/.config/gax/signature.md (preferred) or
+        ~/.config/gax/signature.html. It is appended automatically on push
+        using the RFC 3676 "-- " delimiter. If no file exists, no signature
+        is added.
+
+    \b
     Examples:
-
         gax draft new
         gax draft new --to alice@example.com --subject "Hello"
         gax draft new -o my_draft.draft.gax.md

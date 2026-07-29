@@ -772,15 +772,22 @@ class TestTreeModeCLI:
         )
 
     def test_get_all_fetches_all_tabs(self, monkeypatch):
-        """gax get --all <url> calls Doc.get and prints all tabs to stdout."""
+        """gax get --all <url> calls pull_doc and prints all tabs to stdout."""
         from click.testing import CliRunner
         from gax.cli import main as cli
         from gax.gdoc import doc as doc_mod
 
-        def fake_doc_get(self, **kw):
-            return "# Overview\n\nFirst tab.\n\n# Details\n\nSecond tab."
+        class FakeSection:
+            def __init__(self, title, content):
+                self.section_title = title
+                self.content = content
 
-        monkeypatch.setattr(doc_mod.Doc, "get", fake_doc_get)
+        fake_sections = [
+            FakeSection("Overview", "First tab."),
+            FakeSection("Details", "Second tab."),
+        ]
+
+        monkeypatch.setattr(doc_mod, "pull_doc", lambda doc_id, url: fake_sections)
 
         runner = CliRunner()
         result = runner.invoke(
