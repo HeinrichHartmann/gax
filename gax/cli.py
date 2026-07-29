@@ -378,6 +378,7 @@ def unified_push(files: tuple[str, ...], yes: bool, values: bool):
         .tab.gax.md         Single doc tab (markdown)
         .tab.gax.yaml       Single doc tab (tree YAML)
         .sheet.gax.md       Single sheet tab
+        .doc.gax.yaml.d/    Doc tree YAML checkout folder
         .sheet.gax.md.d/    Sheet checkout folder
         .draft.gax.md       Gmail draft
         .cal.gax.md         Calendar event
@@ -390,6 +391,7 @@ def unified_push(files: tuple[str, ...], yes: bool, values: bool):
         gax push file.sheet.gax.md          # Push a single sheet tab
         gax push *.draft.gax.md             # Push all drafts
         gax push Budget.sheet.gax.md.d/     # Push a checkout folder
+        gax push Doc.doc.gax.yaml.d/        # Push a tree YAML checkout folder
         gax push event.cal.gax.md -y        # Push without confirmation
     """
     # Expand globs
@@ -401,7 +403,7 @@ def unified_push(files: tuple[str, ...], yes: bool, values: bool):
             all_paths.append(Path(pattern))
 
     if not all_paths:
-        click.echo("No .gax.md files or .gax.md.d folders found.", err=True)
+        click.echo("No .gax.md/.gax.yaml files or checkout folders found.", err=True)
         sys.exit(1)
 
     success_count = 0
@@ -412,9 +414,9 @@ def unified_push(files: tuple[str, ...], yes: bool, values: bool):
 
         # Check if it's a folder
         if path.is_dir():
-            if not path.name.endswith(".gax.md.d"):
+            if not (path.name.endswith(".gax.md.d") or path.name.endswith(".gax.yaml.d")):
                 click.echo(
-                    f"Skipping directory: {path} (not a .gax.md.d folder)", err=True
+                    f"Skipping directory: {path} (not a .gax.md.d or .gax.yaml.d folder)", err=True
                 )
                 continue
 
