@@ -516,6 +516,14 @@ class SheetTab(Resource):
         file_path.write_text(content, encoding="utf-8")
         return file_path
 
+    def checkout(self, output: Path | None = None, **kw) -> Path:
+        """Checkout all tabs from this spreadsheet URL into a folder.
+
+        Delegates to Sheet.checkout() — tab URLs and spreadsheet URLs are
+        interchangeable for checkout purposes.
+        """
+        return Sheet(url=self.url).checkout(output=output, **kw)
+
     def get(self, **kw) -> str:
         """Fetch current remote content for this tab."""
         config, _ = parse_file(self.path)

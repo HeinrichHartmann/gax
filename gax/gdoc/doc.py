@@ -1318,6 +1318,26 @@ class Tab(Resource):
         """
         as_json = kw.get("json", False)
 
+        # URL-constructed instance (no local file): fetch remote directly.
+        if self.url and not self.path.is_file():
+            document_id = extract_doc_id(self.url)
+            doc = _fetch_doc(document_id)
+            flat = _flatten_tabs(doc.get("tabs", []))
+            if not flat:
+                raise ValueError("Document has no tabs")
+            tab_name = kw.get("tab")
+            if tab_name:
+                matched = [(t, i) for t, i in flat if i.title == tab_name]
+                if not matched:
+                    raise ValueError(f"Tab not found: {tab_name}")
+                target_tab, target_info = matched[0]
+            else:
+                target_tab, target_info = flat[0]
+            if as_json:
+                return self._get_json(document_id, target_info.title)
+            content, _hash = _tab_content_to_markdown(doc, target_tab)
+            return content
+
         if _is_tree_file(self.path):
             return self._get_tree(as_json=as_json)
 
