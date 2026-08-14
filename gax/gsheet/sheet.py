@@ -129,27 +129,55 @@ def pull_all(
         raise ValueError(f"Could not extract spreadsheet ID from source: {source}")
     spreadsheet_id = match.group(1)
 
+    # Re-fetch the remote tab list — the authoritative set of tabs.
+    # Local sections for deleted remote tabs are dropped; new remote
+    # tabs are added.
+    info = client.get_spreadsheet_info(spreadsheet_id)
+    title = info["title"]
+    remote_tabs = [t["title"] for t in info["tabs"]]
+    local_by_tab: dict[str, Section] = {}
+    for s in sections:
+        tab = s.headers.get("tab")
+        if not tab:
+            raise ValueError(f"Section missing 'tab' header in {file_path}")
+        local_by_tab[tab] = s
+
+    for gone in sorted(set(local_by_tab) - set(remote_tabs)):
+        logger.warning(f"Removing (no matching remote tab): {gone}")
+
+    default_fmt = first.headers.get("format", "csv")
+    all_data = client.read_all(spreadsheet_id, remote_tabs)
+
     total_rows = 0
     updated_sections = []
 
-    with operation("Pulling tabs", total=len(sections)) as op:
-        for section in sections:
-            tab_name = section.headers.get("tab")
-            fmt = section.headers.get("format", "csv")
-
-            if not tab_name:
-                raise ValueError(f"Section missing 'tab' header in {file_path}")
-
+    with operation("Pulling tabs", total=len(remote_tabs)) as op:
+        for idx, tab_name in enumerate(remote_tabs, start=1):
             logger.info(f"Pulling tab: {tab_name}")
-            df = client.read(spreadsheet_id, tab_name)
+            df = all_data[tab_name]
+
+            local = local_by_tab.get(tab_name)
+            if local is not None:
+                headers = dict(local.headers)
+                fmt = headers.get("format", default_fmt)
+            else:
+                from ..formats import get_content_type
+
+                fmt = default_fmt
+                headers = {
+                    "type": "gax/sheet",
+                    "title": title,
+                    "source": source,
+                    "tab": tab_name,
+                    "content-type": get_content_type(fmt),
+                }
+            headers["section"] = idx
+            headers = write_sync_header(headers)
+
             formatter = get_format(fmt)
             data = formatter.write(df)
 
-            updated_section = Section(
-                headers=section.headers,
-                content=data,
-            )
-            updated_sections.append(updated_section)
+            updated_sections.append(Section(headers=headers, content=data))
             total_rows += len(df)
             op.advance()
 
@@ -259,26 +287,46 @@ class PushPlan(NamedTuple):
         return "\n".join(lines)
 
 
+def _df_to_csv_lines(df: pd.DataFrame) -> list[str]:
+    """Serialize a DataFrame to a list of CSV lines (header + rows)."""
+    lines = [",".join(str(c) for c in df.columns)]
+    for _, row in df.iterrows():
+        lines.append(",".join(str(v) for v in row.values))
+    return lines
+
+
+def _unified_diff_csv(
+    remote_df: pd.DataFrame,
+    local_df: pd.DataFrame,
+    fromfile: str = "remote",
+    tofile: str = "local",
+) -> str:
+    """Return a unified diff of two DataFrames as CSV text.
+
+    Convention: remote is 'a' (---), local is 'b' (+++), so the diff
+    reads as "what changed locally relative to remote".
+    """
+    remote_lines = _df_to_csv_lines(remote_df)
+    local_lines = _df_to_csv_lines(local_df)
+    return "\n".join(
+        difflib.unified_diff(
+            remote_lines, local_lines, fromfile=fromfile, tofile=tofile, lineterm=""
+        )
+    )
+
+
 def _compare_dataframes(
     local_df: pd.DataFrame, remote_df: pd.DataFrame
 ) -> tuple[int, int]:
     """Compare two dataframes and return (added_lines, removed_lines)."""
-    local_lines = [",".join(str(c) for c in local_df.columns)]
-    remote_lines = [",".join(str(c) for c in remote_df.columns)]
-
-    for _, row in local_df.iterrows():
-        local_lines.append(",".join(str(v) for v in row.values))
-    for _, row in remote_df.iterrows():
-        remote_lines.append(",".join(str(v) for v in row.values))
-
-    diff = list(difflib.unified_diff(remote_lines, local_lines, lineterm=""))
+    diff_text = _unified_diff_csv(remote_df, local_df)
+    diff_lines = diff_text.splitlines()
     added = sum(
-        1 for line in diff if line.startswith("+") and not line.startswith("+++")
+        1 for line in diff_lines if line.startswith("+") and not line.startswith("+++")
     )
     removed = sum(
-        1 for line in diff if line.startswith("-") and not line.startswith("---")
+        1 for line in diff_lines if line.startswith("-") and not line.startswith("---")
     )
-
     return (added, removed)
 
 
@@ -538,14 +586,21 @@ class SheetTab(Resource):
         pull_single_tab(self.path)
 
     def diff(self, **kw) -> str | None:
-        """Preview push — shows row count summary."""
-        from .frontmatter import parse_file
-        from ..formats import get_format as get_fmt
-
+        """Show unified diff between local file and remote tab."""
         config, data = parse_file(self.path)
-        fmt = get_fmt(config.format)
-        df = fmt.read(data)
-        return f"Push {len(df)} rows from {self.path} to {config.tab}"
+        fmt = get_format(config.format)
+        local_df = fmt.read(data)
+
+        client = GSheetClient()
+        remote_df = client.read(config.spreadsheet_id, config.tab, config.range)
+
+        diff_text = _unified_diff_csv(
+            remote_df,
+            local_df,
+            fromfile=f"remote/{config.tab}",
+            tofile=str(self.path),
+        )
+        return diff_text or None
 
     def push(self, **kw) -> None:
         """Push a single-tab file to remote.
@@ -742,11 +797,10 @@ class Sheet(Resource):
             stale.unlink()
 
     def diff(self, **kw) -> str | None:
-        """Preview differences between local folder and remote.
+        """Show unified diff between local folder and remote spreadsheet.
 
-        Direction-neutral: labels tabs as "local only" or "remote only"
-        so the output is accurate for both push and pull contexts.
-        Uses a single client and API call.
+        Direction-neutral: tabs present only locally or only remotely are
+        listed as headers; common tabs show a unified CSV diff.
         """
         metadata_path = self.path / ".gax.yaml"
         if not metadata_path.exists():
@@ -765,42 +819,40 @@ class Sheet(Resource):
 
         # Read local tab files
         tab_files = sorted(self.path.glob("*.tab.sheet.gax.md"))
-        local_tabs: dict[str, pd.DataFrame] = {}
+        local_tabs: dict[str, tuple[pd.DataFrame, Path]] = {}
         for tab_file in tab_files:
             config, data = parse_file(tab_file)
             fmt = get_format(config.format)
-            local_tabs[config.tab] = fmt.read(data)
+            local_tabs[config.tab] = (fmt.read(data), tab_file)
 
         # Fetch remote data for tabs that exist both locally and remotely
         common = sorted(set(local_tabs) & remote_tab_names)
         remote_data = client.read_all(spreadsheet_id, common) if common else {}
 
-        lines = []
+        sections: list[str] = []
 
-        # Modified tabs
+        # Unified diffs for common tabs
         for tab_name in common:
-            added, removed = _compare_dataframes(
-                local_tabs[tab_name], remote_data[tab_name]
+            local_df, tab_file = local_tabs[tab_name]
+            diff_text = _unified_diff_csv(
+                remote_data[tab_name],
+                local_df,
+                fromfile=f"remote/{tab_name}",
+                tofile=str(tab_file),
             )
-            if added > 0 or removed > 0:
-                lines.append(
-                    f"  ~ {tab_name} (+{added}/-{removed} lines)"
-                )
+            if diff_text:
+                sections.append(diff_text)
 
-        # Remote-only tabs
+        # Remote-only tabs (would be added on pull)
         for tab_name in sorted(remote_tab_names - set(local_tabs)):
-            lines.append(f"  + {tab_name} (remote only)")
+            sections.append(f"--- remote/{tab_name}\n+++ (not present locally)")
 
-        # Local-only tabs
+        # Local-only tabs (would be created on push)
         for tab_name in sorted(set(local_tabs) - remote_tab_names):
-            lines.append(
-                f"  - {tab_name} ({len(local_tabs[tab_name])} rows, local only)"
-            )
+            local_df, tab_file = local_tabs[tab_name]
+            sections.append(f"--- (not present remotely)\n+++ {tab_file}")
 
-        if not lines:
-            return None
-
-        return f"Differences in {self.path.name}:\n" + "\n".join(lines)
+        return "\n\n".join(sections) or None
 
     def get(self, **kw) -> str:
         """Fetch all remote tabs and return formatted content."""

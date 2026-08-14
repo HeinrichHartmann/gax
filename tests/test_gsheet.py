@@ -451,6 +451,55 @@ class TestPullAll:
         assert "Old" not in updated[0].content
         assert "8000" in updated[1].content
 
+    def test_pull_all_reconciles_tab_list(self, tmp_path):
+        """Pull adds new remote tabs, drops deleted ones, stamps sync on all."""
+        from gax.gaxfile import Section
+
+        sections = [
+            Section(
+                headers={
+                    "title": "Test Sheet",
+                    "source": "https://docs.google.com/spreadsheets/d/test-id",
+                    "section": 1,
+                    "tab": "Revenue",
+                    "format": "csv",
+                },
+                content="Month,Amount\nOld,0\n",
+            ),
+            Section(
+                headers={
+                    "title": "Test Sheet",
+                    "source": "https://docs.google.com/spreadsheets/d/test-id",
+                    "section": 2,
+                    "tab": "Expenses",
+                    "format": "csv",
+                },
+                content="Month,Amount\nOld,0\n",
+            ),
+        ]
+        file_path = tmp_path / "test.sheet.gax.md"
+        file_path.write_text(format_multipart(sections))
+
+        # Remote: Expenses deleted, Forecast added
+        tabs = {
+            "Revenue": [["Month", "Amount"], ["Jan", "10000"]],
+            "Forecast": [["Month", "Amount"], ["Feb", "12000"]],
+        }
+        gc, _ = make_mock_gc_multi_tab("Test Sheet", tabs)
+        client = GSheetClient(gc=gc)
+
+        pull_all(file_path, client=client)
+
+        updated = parse_multipart(file_path.read_text())
+        assert [s.headers["tab"] for s in updated] == ["Revenue", "Forecast"]
+        assert "12000" in updated[1].content
+        # gaxfile headers round-trip as strings; parse the sync block as YAML
+        import yaml as yaml_mod
+
+        for s in updated:
+            sync = yaml_mod.safe_load(str(s.headers.get("sync", "")))
+            assert sync and sync.get("time")
+
     def test_pull_all_roundtrip(self, tmp_path):
         """Test clone -> modify -> pull round-trip."""
         # Clone initial

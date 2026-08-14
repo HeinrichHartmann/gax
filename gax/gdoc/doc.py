@@ -157,8 +157,7 @@ def _doc_section_to_multipart(section: DocSection) -> gaxfile.Section:
         headers["baseline"] = section.baseline
     if section.revision:
         headers["revision"] = section.revision
-    if section.section == 1:
-        headers = write_sync_header(headers, rev=section.revision)
+    headers = write_sync_header(headers, rev=section.revision)
     return gaxfile.Section(headers=headers, content=section.content)
 
 
@@ -1076,6 +1075,24 @@ def _safe_filename(name: str) -> str:
     return re.sub(r"\s+", "_", safe)
 
 
+def _text_diff(
+    remote: str, local: str, fromfile: str = "remote", tofile: str = "local"
+) -> str | None:
+    """Return a unified diff of two text strings, or None if identical."""
+    diff_lines = list(
+        difflib.unified_diff(
+            remote.splitlines(keepends=True),
+            local.splitlines(keepends=True),
+            fromfile=fromfile,
+            tofile=tofile,
+            lineterm="",
+        )
+    )
+    if not diff_lines:
+        return None
+    return "\n".join(line.rstrip("\n") for line in diff_lines)
+
+
 def _parse_tab_file(path: Path) -> DocSection:
     """Read a .doc.gax.md or .tab.gax.md file and return its first section."""
     content = path.read_text(encoding="utf-8")
@@ -1177,6 +1194,15 @@ def _read_checkout_metadata(path: Path) -> dict:
         raise ValueError("No document_id or url in .gax.yaml")
 
     return metadata
+
+
+def _tab_name_from_filename(path: Path) -> str:
+    """Derive a tab name from a filename, stripping gax suffixes."""
+    name = path.name
+    for suffix in (".tab.gax.md", ".doc.gax.md", ".md"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
 
 
 def _known_tab_files(path: Path, metadata: dict) -> list[Path]:
@@ -1469,45 +1495,57 @@ class Tab(Resource):
         raise ValueError(f"Tab '{tab_name}' not found in document")
 
     def diff(self, **kw) -> str | None:
-        """Preview changes between local tab and remote.
+        """Preview changes between local tab(s) and remote.
 
-        Returns unified diff string, or None if no changes.
-        Accepts ``body`` kwarg (Path) to use an external file as the local content
-        instead of the tracking file's content.
+        Handles both single-tab files and multipart files (multiple tabs in
+        one .doc.gax.md). Returns unified diff string, or None if no changes.
+        Accepts ``body`` kwarg (Path) to use an external file as the local
+        content instead of the tracking file's content (single-tab only).
         """
         if _is_tree_file(self.path):
             return self._diff_tree()
 
-        body: Path | None = kw.get("body", None)
+        content = self.path.read_text(encoding="utf-8")
+        local_sections = parse_multipart(content)
+        if not local_sections:
+            raise ValueError(f"No sections found in {self.path}")
 
-        section = _parse_tab_file(self.path)
-        source_url = section.source
-        tab_name = section.section_title
-
+        source_url = local_sections[0].source
         if not source_url:
             raise ValueError("No source URL found in file")
 
         document_id = extract_doc_id(source_url)
-        remote_section = pull_single_tab(document_id, tab_name, source_url)
 
-        local_content = body.read_text(encoding="utf-8") if body else section.content
-        local_lines = local_content.splitlines(keepends=True)
-        remote_lines = remote_section.content.splitlines(keepends=True)
-
-        diff_lines = list(
-            difflib.unified_diff(
-                remote_lines,
-                local_lines,
-                fromfile="remote",
-                tofile="local",
-                lineterm="",
+        if len(local_sections) == 1:
+            # Single-tab file
+            body: Path | None = kw.get("body", None)
+            remote_section = pull_single_tab(document_id, local_sections[0].section_title, source_url)
+            local_content = body.read_text(encoding="utf-8") if body else local_sections[0].content
+            return _text_diff(
+                remote_section.content,
+                local_content,
+                fromfile=f"remote/{local_sections[0].section_title}",
+                tofile=str(self.path),
             )
-        )
-
-        if not diff_lines:
-            return None
-
-        return "\n".join(line.rstrip("\n") for line in diff_lines)
+        else:
+            # Multipart file — diff each tab by name
+            remote_sections = pull_doc(document_id, source_url)
+            remote_by_name = {s.section_title: s for s in remote_sections}
+            parts = []
+            for local_s in local_sections:
+                remote_s = remote_by_name.get(local_s.section_title)
+                if remote_s is None:
+                    parts.append(f"--- (not present remotely)\n+++ {self.path} [{local_s.section_title}]")
+                    continue
+                diff = _text_diff(
+                    remote_s.content,
+                    local_s.content,
+                    fromfile=f"remote/{local_s.section_title}",
+                    tofile=f"{self.path} [{local_s.section_title}]",
+                )
+                if diff:
+                    parts.append(diff)
+            return "\n\n".join(parts) or None
 
     def _diff_tree(self) -> str | None:
         """Diff for tree YAML files — text diff of tree YAML."""
@@ -1525,21 +1563,12 @@ class Tab(Resource):
             if info.title == tab_name:
                 remote_yaml = _tab_content_to_tree_yaml(doc, tab, source_url)
                 local_yaml = self.path.read_text(encoding="utf-8")
-                local_lines = local_yaml.splitlines(keepends=True)
-                remote_lines = remote_yaml.splitlines(keepends=True)
-
-                diff_lines = list(
-                    difflib.unified_diff(
-                        remote_lines,
-                        local_lines,
-                        fromfile="remote",
-                        tofile="local",
-                        lineterm="",
-                    )
+                return _text_diff(
+                    remote_yaml,
+                    local_yaml,
+                    fromfile=f"remote/{tab_name}",
+                    tofile=str(self.path),
                 )
-                if not diff_lines:
-                    return None
-                return "\n".join(line.rstrip("\n") for line in diff_lines)
 
         raise ValueError(f"Tab '{tab_name}' not found in document")
 
@@ -1978,7 +2007,6 @@ class Doc(Resource):
         for tab_file in _known_tab_files(self.path, metadata):
             tab_diff = Tab.from_file(tab_file).diff()
             if tab_diff:
-                all_diffs.append(f"--- {tab_file.relative_to(self.path)} ---")
                 all_diffs.append(tab_diff)
 
         # Check for stale local files
@@ -1990,15 +2018,20 @@ class Doc(Resource):
             if f not in known:
                 stale.append(f)
         if stale:
-            lines = ["Stale local files (would be removed on pull):"]
+            lines = ["Local-only files (new remote tabs on push; removed on pull):"]
             for f in stale:
                 lines.append(f"  - {f.relative_to(self.path)}")
             all_diffs.append("\n".join(lines))
 
-        return "\n".join(all_diffs) if all_diffs else None
+        return "\n\n".join(all_diffs) if all_diffs else None
 
     def push(self, **kw) -> None:
-        """Push all changed tabs in a checkout folder."""
+        """Push all changed tabs in a checkout folder.
+
+        Local files not listed in the checkout metadata are created as
+        new remote tabs (mirroring sheet push). The next pull rewrites
+        them in canonical tracking-file form.
+        """
         metadata = _read_checkout_metadata(self.path)
 
         for tab_file in _known_tab_files(self.path, metadata):
@@ -2006,6 +2039,27 @@ class Doc(Resource):
             if t.diff() is not None:
                 logger.info(f"Pushing: {tab_file.relative_to(self.path)}")
                 t.push(**kw)
+
+        # Create remote tabs for new local files
+        document_id = metadata["document_id"]
+        known = set(_known_tab_files(self.path, metadata))
+        for f in sorted(self.path.rglob("*")):
+            if f.is_dir() or f.name == ".gax.yaml" or f in known:
+                continue
+            content = f.read_text(encoding="utf-8")
+            if content.startswith("---"):
+                section = _parse_tab_file(f)
+                tab_name = section.section_title or _tab_name_from_filename(f)
+                body = section.content
+            else:
+                tab_name = _tab_name_from_filename(f)
+                body = content
+            logger.info(
+                f"Creating new tab '{tab_name}' from {f.relative_to(self.path)}"
+            )
+            _tab_id, warnings = create_tab_with_content(document_id, tab_name, body)
+            for w in warnings:
+                logger.info(f"Warning: {w.feature}: {w.detail}")
 
     # Non-standard operations
 

@@ -378,7 +378,8 @@ class TestGdocSyncHeader:
         content = format_section(section)
         assert _has_sync_time(content)
 
-    def test_section2_no_sync_block(self):
+    def test_section2_has_sync_block(self):
+        """Every section carries a sync block — proof each tab matches upstream."""
         from gax.gdoc.doc import DocSection, format_section
 
         section = DocSection(
@@ -390,8 +391,7 @@ class TestGdocSyncHeader:
             content="## Appendix\n",
         )
         content = format_section(section)
-        headers = _extract_first_header(content)
-        assert "sync" not in headers
+        assert _has_sync_time(content)
 
 
 # ---------------------------------------------------------------------------

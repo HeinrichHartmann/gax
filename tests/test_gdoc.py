@@ -1324,6 +1324,65 @@ class TestDocCloneNested:
             doc_module._fetch_doc = original_fetch
 
 
+class TestDocPushNewTabs:
+    """Doc.push creates remote tabs for local files not in checkout metadata."""
+
+    def test_push_creates_remote_tabs_for_unknown_files(self, tmp_path, monkeypatch):
+        import yaml
+        from gax.gdoc.doc import Doc, DocSection
+
+        folder = tmp_path / "MyDoc.doc.gax.md.d"
+        folder.mkdir()
+        (folder / ".gax.yaml").write_text(
+            yaml.dump(
+                {
+                    "type": "gax/doc-checkout",
+                    "document_id": "doc-123",
+                    "url": "https://docs.google.com/document/d/doc-123/edit",
+                    "title": "MyDoc",
+                    # Non-empty tabs list (avoids legacy glob fallback);
+                    # the listed file does not exist locally.
+                    "tabs": [
+                        {
+                            "id": "t1",
+                            "title": "Known",
+                            "path": "Known.doc.gax.md",
+                            "depth": 0,
+                        }
+                    ],
+                }
+            )
+        )
+        # Plain markdown file — tab name from filename
+        (folder / "Notes.md").write_text("# Notes\nhello\n")
+        # Tracking-format file — tab name from frontmatter
+        extra = DocSection(
+            title="MyDoc",
+            source="https://docs.google.com/document/d/doc-123/edit",
+            time="2026-07-01T10:00:00Z",
+            section=1,
+            section_title="Extra",
+            content="extra body\n",
+        )
+        (folder / "Extra.doc.gax.md").write_text(format_section(extra))
+
+        created = []
+
+        def fake_create(document_id, tab_name, content):
+            created.append((document_id, tab_name, content))
+            return f"tab-{len(created)}", []
+
+        monkeypatch.setattr(
+            "gax.gdoc.doc.create_tab_with_content", fake_create
+        )
+
+        Doc(path=folder).push()
+
+        assert ("doc-123", "Extra", "extra body\n") in created
+        assert ("doc-123", "Notes", "# Notes\nhello\n") in created
+        assert len(created) == 2
+
+
 # =============================================================================
 # Pull guard: _has_unpushed_edits (ADR 037)
 # =============================================================================
@@ -1472,17 +1531,17 @@ class TestRefreshRevisionInFile:
         section = parse_multipart(f.read_text())[0]
         assert section.baseline == "sha256:abc"
 
-    def test_no_sync_header_on_non_first_section(self, tmp_path):
-        """Non-first sections should not gain a sync header."""
+    def test_sync_header_on_non_first_section(self, tmp_path):
+        """Non-first sections also carry a sync header (proof of pull)."""
         from gax import gaxfile
 
         f = tmp_path / "tab.doc.gax.md"
         self._write_tab(f, section_num=2, revision="rev-old")
 
         raw_before = gaxfile.parse_multipart(f.read_text())
-        assert "sync" not in raw_before[0].headers
+        assert "sync" in raw_before[0].headers
 
         _refresh_revision_in_file(f, "rev-new")
 
         raw_after = gaxfile.parse_multipart(f.read_text())
-        assert "sync" not in raw_after[0].headers
+        assert "sync" in raw_after[0].headers
